@@ -8,10 +8,9 @@ const qualityOptions = [
   { label: 'medium', value: 'medium' },
   { label: 'high', value: 'high' },
 ];
-const styleOptions = ['auto', 'vivid', 'natural'];
-const responseFormatOptions = ['url', 'b64_json'];
 const outputFormatOptions = ['png', 'jpeg', 'webp'];
-const moderationOptions = ['auto', 'low', 'off'];
+const backgroundOptions = ['auto', 'opaque'];
+const moderationOptions = ['auto', 'low'];
 const boardFilterOptions = [
   { label: '全部状态', value: 'all' },
   { label: '已上墙', value: 'on-wall' },
@@ -40,14 +39,14 @@ const ratioOptions = [
 
 const ratioToSize = {
   '1k': {
-    '1:1': '1024x1024',
-    '3:2': '1152x768',
-    '2:3': '768x1152',
-    '16:9': '1280x720',
-    '9:16': '720x1280',
-    '4:3': '1024x768',
-    '3:4': '768x1024',
-    '21:9': '1280x544',
+    '1:1': '768x768',
+    '3:2': '960x640',
+    '2:3': '640x960',
+    '16:9': '1024x576',
+    '9:16': '576x1024',
+    '4:3': '960x720',
+    '3:4': '720x960',
+    '21:9': '1008x432',
   },
   '2k': {
     '1:1': '2048x2048',
@@ -86,20 +85,19 @@ const resolutionMaxEdges = {
 };
 
 const defaultForm = {
-  model: 'gpt-image-1',
+  model: 'gpt-image-2',
   prompt: '',
-  negative_prompt: '',
-  size: '1024x1024',
+  size: '',
   n: 1,
-  quality: 'medium',
-  style: 'auto',
-  response_format: 'url',
+  quality: 'auto',
+  background: 'auto',
   output_format: 'png',
+  output_compression: 100,
   moderation: 'auto',
 };
 
 const defaultSizeDraft = {
-  mode: 'ratio',
+  mode: 'auto',
   resolution: '1k',
   ratio: '1:1',
   customRatioWidth: 1,
@@ -126,18 +124,31 @@ const emptyPasswordForm = {
 const defaultApiConfigForm = {
   apiName: 'OpenAI Compatible',
   apiBaseUrl: '',
+  requestTimeout: 600,
   streamEnabled: false,
 };
 
-const normalizeQuality = (value) => (qualityOptions.some((item) => item.value === value) ? value : 'medium');
+const normalizeQuality = (value) => (qualityOptions.some((item) => item.value === value) ? value : 'auto');
+const normalizeBackground = (value) => (backgroundOptions.includes(value) ? value : 'auto');
+const normalizeOutputFormat = (value) => (outputFormatOptions.includes(value) ? value : 'png');
+const normalizeModeration = (value) => (moderationOptions.includes(value) ? value : 'auto');
+const normalizeCompression = (value) => clampNumber(Number(value) || 0, 0, 100);
 const getQualityLabel = (value) => qualityOptions.find((item) => item.value === value)?.label || '自动';
 const normalizeForm = (value = {}) => {
   const nextForm = { ...defaultForm, ...value };
-  delete nextForm.output_compression;
+  delete nextForm.negative_prompt;
+  delete nextForm.style;
+  delete nextForm.response_format;
+  delete nextForm.input_fidelity;
 
   return {
     ...nextForm,
+    model: nextForm.model || defaultForm.model,
     quality: normalizeQuality(nextForm.quality),
+    background: normalizeBackground(nextForm.background),
+    output_format: normalizeOutputFormat(nextForm.output_format),
+    output_compression: normalizeCompression(nextForm.output_compression ?? defaultForm.output_compression),
+    moderation: normalizeModeration(nextForm.moderation),
   };
 };
 
@@ -168,6 +179,21 @@ const parseSize = (size) => {
 const formatDate = (value) => {
   if (!value) return '刚刚';
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
+};
+
+const canRenderBoardItem = (image) => image?.status === 'pending' || image?.status === 'failed' || Boolean(createImageSrc(image));
+
+const formatDuration = (seconds) => {
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const rest = safeSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+};
+
+const getSourceLabel = (image) => {
+  if (image?.source === 'edit') return '图生图';
+  if (image?.source === 'wall') return '作品墙';
+  return '文生图';
 };
 
 const getAvailableRatios = (resolution) => ratioOptions.filter((item) => item.value === 'custom-ratio' || Boolean(ratioToSize[resolution]?.[item.value]));
@@ -273,7 +299,9 @@ const readApiResponse = async (response) => {
 const toApiUrl = (input) => {
   const value = String(input || '');
   if (!value.startsWith('/api/')) return value;
-  return `/api/index.php?route=${encodeURIComponent(value.slice(4))}`;
+  const [path, query = ''] = value.slice(4).split('?');
+  const route = `/api/index.php?route=${encodeURIComponent(path)}`;
+  return query ? `${route}&${query}` : route;
 };
 
 const requestJson = async (input, init) => {
@@ -282,6 +310,29 @@ const requestJson = async (input, init) => {
 
   if (!response.ok) throw new Error(data.error || data.message || '请求失败');
   return data;
+};
+
+const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const isPendingJob = (data) => {
+  const status = data?.job?.status;
+  return Boolean(data?.job?.id && !Array.isArray(data?.data) && ['pending', 'running'].includes(status));
+};
+
+const pollImageJob = async (jobId, timeoutSeconds = defaultApiConfigForm.requestTimeout + 30) => {
+  const deadline = Date.now() + Math.max(30, Number(timeoutSeconds) || defaultApiConfigForm.requestTimeout) * 1000;
+
+  while (Date.now() < deadline) {
+    await sleep(2500);
+    const data = await requestJson(`/api/health?job=${encodeURIComponent(jobId)}`);
+    const status = data?.job?.status;
+
+    if (Array.isArray(data?.data)) return data;
+    if (status === 'failed') throw new Error(data.job.error || '生成失败');
+    if (status && !['pending', 'running'].includes(status)) throw new Error(data.job.error || '生成状态异常');
+  }
+
+  throw new Error('生成仍在处理中，请稍后刷新或重试。');
 };
 
 function App() {
@@ -309,12 +360,13 @@ function App() {
   const [boardSearch, setBoardSearch] = useState('');
   const [boardFilter, setBoardFilter] = useState('all');
   const [openSelect, setOpenSelect] = useState('');
+  const [nowTick, setNowTick] = useState(Date.now());
 
   const availableRatios = getAvailableRatios(sizeDraft.resolution);
   const activeSize = getDraftSize(sizeDraft);
   const displaySize = activeSize || '自动';
   const userDisplayName = user?.displayName || user?.username || '';
-  const visibleImages = useMemo(() => images.filter(createImageSrc), [images]);
+  const visibleImages = useMemo(() => images.filter(canRenderBoardItem), [images]);
   const sourceBoardItems = view === 'wall' ? wallItems : visibleImages;
   const statusText = status.configured ? (status.apiName || status.message || defaultApiConfigForm.apiName) : status.message;
 
@@ -367,15 +419,21 @@ function App() {
   };
 
   const buildPayload = (prompt) => {
+    const normalized = normalizeForm({ ...form, prompt, n: Number(form.n || 1) });
+    const outputFormat = normalizeOutputFormat(normalized.output_format);
     const payload = {
-      ...form,
+      model: normalized.model || defaultForm.model,
       prompt,
-      n: Number(form.n || 1),
+      n: clampNumber(Number(normalized.n || 1), 1, 10),
+      output_format: outputFormat,
+      moderation: normalizeModeration(normalized.moderation),
     };
 
-    if (!payload.size) delete payload.size;
-    payload.quality = normalizeQuality(payload.quality);
-    if (payload.quality === 'auto') delete payload.quality;
+    if (normalized.size) payload.size = normalized.size;
+    if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
+    if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
+    if (['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
+
     return payload;
   };
 
@@ -393,6 +451,7 @@ function App() {
     setApiConfigForm({
       apiName,
       apiBaseUrl: settings.apiBaseUrl || '',
+      requestTimeout: settings.requestTimeout || defaultApiConfigForm.requestTimeout,
       streamEnabled: Boolean(settings.streamEnabled),
     });
     setForm((current) => ({
@@ -400,10 +459,10 @@ function App() {
       model: settings.model || current.model,
       size: settings.size !== undefined ? settings.size : current.size,
       quality: normalizeQuality(settings.quality || current.quality),
-      style: settings.style || current.style,
-      response_format: settings.response_format || current.response_format,
-      output_format: settings.output_format || current.output_format,
-      moderation: settings.moderation || current.moderation,
+      background: normalizeBackground(settings.background || current.background),
+      output_format: normalizeOutputFormat(settings.output_format || current.output_format),
+      output_compression: normalizeCompression(settings.output_compression ?? current.output_compression),
+      moderation: normalizeModeration(settings.moderation || current.moderation),
       n: settings.n || current.n,
     }));
   };
@@ -449,6 +508,11 @@ function App() {
   }, [user]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!error) return undefined;
 
     const timer = window.setTimeout(() => setError(''), 5000);
@@ -490,6 +554,8 @@ function App() {
       image.form?.output_format,
       image.authorName,
       image.referenceName,
+      image.status,
+      image.error,
     ]
       .filter(Boolean)
       .join(' ')
@@ -499,7 +565,7 @@ function App() {
     if (keyword && !text.includes(keyword)) return false;
     if (boardFilter === 'on-wall') return Boolean(wallItem);
     if (boardFilter === 'off-wall') return !wallItem;
-    if (boardFilter === 'generation') return image.source !== 'edit' && image.source !== 'wall';
+    if (boardFilter === 'generation') return image.source === 'generated' || (!image.source || image.source === 'image');
     if (boardFilter === 'edit') return image.source === 'edit';
     return true;
   });
@@ -567,6 +633,8 @@ function App() {
     setOpenSelect('');
   };
 
+  const getElapsedSeconds = (item) => Math.max(0, Math.floor(((item?.finishedAt ? new Date(item.finishedAt).getTime() : nowTick) - new Date(item?.startedAt || item?.createdAt || Date.now()).getTime()) / 1000));
+
   const handleReferenceChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -592,38 +660,66 @@ function App() {
 
     setError('');
     setStatus((current) => ({ ...current, loading: true, message: referenceImage ? 'Editing' : 'Generating' }));
+    setView('generate');
+
+    const requestId = `request-${Date.now()}`;
+    const startedAt = new Date().toISOString();
+    const imageForm = normalizeForm({ ...form, prompt, n: Number(form.n || 1) });
+    const pendingItem = {
+      id: requestId,
+      requestId,
+      status: 'pending',
+      form: imageForm,
+      prompt,
+      startedAt,
+      createdAt: startedAt,
+      source: referenceImage ? 'edit' : 'generated',
+      referenceName: referenceImage?.name || '',
+    };
+    setImages((items) => [pendingItem, ...items]);
 
     try {
       const payload = buildPayload(prompt);
-      const imageForm = normalizeForm({ ...form, prompt, n: Number(form.n || 1) });
-      const data = referenceImage
+      const initialData = referenceImage
         ? await submitImageEdit(payload)
         : await requestJson('/api/images/generations', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
+      const data = isPendingJob(initialData)
+        ? await pollImageJob(initialData.job.id, Number(apiConfigForm.requestTimeout || defaultApiConfigForm.requestTimeout) + 30)
+        : initialData;
 
-      const createdAt = new Date().toISOString();
+      const finishedAt = new Date().toISOString();
       const nextImages = Array.isArray(data.data)
-        ? data.data.map((image) => ({
+        ? data.data.map((image, index) => ({
             ...image,
+            id: image.id || `${requestId}-${index}`,
+            requestId,
+            status: 'completed',
             form: imageForm,
             prompt,
-            createdAt,
+            startedAt,
+            finishedAt,
+            createdAt: finishedAt,
             source: referenceImage ? 'edit' : 'generated',
             referenceName: referenceImage?.name || '',
           }))
         : [];
 
-      setImages(nextImages);
+      setImages((items) => [
+        ...nextImages,
+        ...items.filter((item) => item.requestId !== requestId && item.id !== requestId),
+      ]);
+      setSelectedImage((current) => (current?.requestId === requestId || current?.id === requestId ? nextImages[0] || current : current));
       setView('generate');
 
       const record = {
-        id: `${Date.now()}`,
+        id: requestId,
         form: imageForm,
         images: nextImages,
-        createdAt,
+        createdAt: finishedAt,
       };
 
       const nextHistory = [record, ...history].slice(0, 30);
@@ -631,7 +727,15 @@ function App() {
       saveHistory(nextHistory);
       setStatus((current) => ({ ...current, loading: false, message: `Done · ${nextImages.length}` }));
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '生成失败');
+      const failedAt = new Date().toISOString();
+      const message = requestError instanceof Error ? requestError.message : '生成失败';
+      setError(message);
+      setImages((items) => items.map((item) => (
+        item.requestId === requestId || item.id === requestId
+          ? { ...item, status: 'failed', error: message, finishedAt: failedAt }
+          : item
+      )));
+      setSelectedImage((current) => (current?.requestId === requestId || current?.id === requestId ? { ...current, status: 'failed', error: message, finishedAt: failedAt } : current));
       setStatus((current) => ({ ...current, loading: false, message: current.configured ? 'Failed' : current.message }));
     }
   };
@@ -740,9 +844,10 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           settings: {
-            ...form,
+            ...normalizeForm(form),
             apiName: apiConfigForm.apiName,
             apiBaseUrl: apiConfigForm.apiBaseUrl.replace(/\s+/g, ''),
+            requestTimeout: Number(apiConfigForm.requestTimeout || defaultApiConfigForm.requestTimeout),
             streamEnabled: apiConfigForm.streamEnabled,
           },
           apiKey,
@@ -798,40 +903,59 @@ function App() {
 
   const detailParams = selectedImage?.form || form;
   const detailSrc = createImageSrc(selectedImage);
-  const selectedWallItem = findWallItem(selectedImage);
+  const detailElapsed = selectedImage ? formatDuration(getElapsedSeconds(selectedImage)) : '00:00';
+  const selectedWallItem = detailSrc ? findWallItem(selectedImage) : null;
   const selectedOnWall = Boolean(selectedWallItem);
-  const busySelected = selectedImage && wallBusyId === String(selectedImage.jobId || selectedImage.wallItemId || selectedImage.id || createImageSrc(selectedImage));
+  const busySelected = selectedImage && wallBusyId === String(selectedImage.jobId || selectedImage.wallItemId || selectedImage.id || detailSrc);
 
   const renderImageCard = (image) => {
     const src = createImageSrc(image);
-    const wallItem = findWallItem(image);
+    const isPending = image.status === 'pending';
+    const isFailed = image.status === 'failed';
+    const wallItem = src ? findWallItem(image) : null;
     const onWall = Boolean(wallItem);
     const busyId = String(image.jobId || image.wallItemId || image.id || src);
+    const elapsed = formatDuration(getElapsedSeconds(image));
+    const title = image.revised_prompt || image.prompt || image.form?.prompt || 'Generated image';
 
     return (
-      <figure className={onWall ? 'result-card is-on-wall' : 'result-card'} key={`${image.source || 'image'}-${image.id || image.wallItemId || image.jobId || src}`} onClick={() => openDetail(image)}>
+      <figure className={`${onWall ? 'result-card is-on-wall' : 'result-card'} ${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`.trim()} key={`${image.source || 'image'}-${image.id || image.wallItemId || image.jobId || src}`} onClick={() => openDetail(image)}>
         <div className="result-image-wrap">
-          <img src={src} alt={image.revised_prompt || image.prompt || image.form?.prompt || '生成图片'} />
-          <button
-            type="button"
-            className={onWall ? 'wall-icon is-active' : 'wall-icon'}
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleWall(image);
-            }}
-            disabled={wallBusyId === busyId}
-            aria-label={onWall ? '取消上墙' : '上墙'}
-          >
-            {onWall ? '★' : '☆'}
-          </button>
+          <span className="timer-badge">◷ {elapsed}</span>
+          {src ? (
+            <img src={src} alt={title || '生成图片'} />
+          ) : (
+            <div className="pending-preview">
+              <span className="loading-ring" aria-hidden="true" />
+              <strong>{isFailed ? '生成失败' : '生成中...'}</strong>
+            </div>
+          )}
+          {src ? (
+            <button
+              type="button"
+              className={onWall ? 'wall-icon is-active' : 'wall-icon'}
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleWall(image);
+              }}
+              disabled={wallBusyId === busyId}
+              aria-label={onWall ? '取消上墙' : '上墙'}
+            >
+              {onWall ? '★' : '☆'}
+            </button>
+          ) : null}
         </div>
         <figcaption>
-          <span>{image.revised_prompt || image.prompt || image.form?.prompt || 'Generated image'}</span>
-          <a href={src} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-            下载
-          </a>
+          <span>{title}</span>
+          {src ? (
+            <a href={src} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+              下载
+            </a>
+          ) : (
+            <small>{image.form?.size || '自动'} · {getQualityLabel(image.form?.quality)}</small>
+          )}
         </figcaption>
-        {image.authorName ? <small className="author-line">{image.authorName}</small> : null}
+        {image.error ? <small className="author-line error-line">{image.error}</small> : image.authorName ? <small className="author-line">{image.authorName}</small> : null}
       </figure>
     );
   };
@@ -909,7 +1033,7 @@ function App() {
 
         <div className={boardItems.length ? 'image-board has-images' : 'image-board'}>
           {boardItems.length ? (
-            boardItems.filter(createImageSrc).map(renderImageCard)
+            boardItems.filter(canRenderBoardItem).map(renderImageCard)
           ) : (
             <div className="empty-canvas">
               <span className="empty-mark" aria-hidden="true">
@@ -936,13 +1060,6 @@ function App() {
               placeholder="描述你想生成的图片，可输入 @ 来指定参考图..."
               rows={2}
             />
-            <textarea
-              className="negative-prompt-input"
-              value={form.negative_prompt}
-              onChange={(event) => updateForm('negative_prompt', event.target.value)}
-              placeholder="反向提示词：不想出现的元素，可留空"
-              rows={1}
-            />
 
             <div className="workbench-actions">
               <div className="control-field size-control">
@@ -962,11 +1079,11 @@ function App() {
               })}
 
               {renderSelect({
-                id: 'workbench-response-format',
-                label: '返回格式',
-                value: form.response_format,
-                options: responseFormatOptions,
-                onChange: (value) => updateForm('response_format', value),
+                id: 'workbench-background',
+                label: '背景',
+                value: form.background,
+                options: backgroundOptions,
+                onChange: (value) => updateForm('background', value),
                 className: 'control-field',
               })}
 
@@ -976,9 +1093,15 @@ function App() {
                 value: form.output_format,
                 options: outputFormatOptions.map((format) => ({ label: format.toUpperCase(), value: format })),
                 onChange: (value) => updateForm('output_format', value),
-                disabled: form.response_format === 'b64_json',
                 className: 'control-field',
               })}
+
+              {['jpeg', 'webp'].includes(form.output_format) ? (
+                <label className="control-field count-field">
+                  <span>压缩</span>
+                  <input min="0" max="100" type="number" value={form.output_compression} onChange={(event) => updateForm('output_compression', event.target.value)} />
+                </label>
+              ) : null}
 
               {renderSelect({
                 id: 'workbench-moderation',
@@ -986,15 +1109,6 @@ function App() {
                 value: form.moderation,
                 options: moderationOptions,
                 onChange: (value) => updateForm('moderation', value),
-                className: 'control-field',
-              })}
-
-              {renderSelect({
-                id: 'workbench-style',
-                label: '风格',
-                value: form.style,
-                options: styleOptions,
-                onChange: (value) => updateForm('style', value),
                 className: 'control-field',
               })}
 
@@ -1037,17 +1151,26 @@ function App() {
             <section className="modal-card image-detail-modal" role="dialog" aria-modal="true" aria-label="图片详情">
               <div className="detail-preview">
                 <div className="detail-badges">
+                  <span>◷ {detailElapsed}</span>
                   <span>{detailParams.size || '自动'}</span>
-                  <span>{detailParams.output_format || detailParams.response_format || 'png'}</span>
+                  <span>{detailParams.output_format || 'png'}</span>
                 </div>
-                <img src={detailSrc} alt={selectedImage.revised_prompt || selectedImage.prompt || '图片详情'} />
+                {detailSrc ? (
+                  <img src={detailSrc} alt={selectedImage.revised_prompt || selectedImage.prompt || '图片详情'} />
+                ) : (
+                  <div className="pending-preview detail-pending-preview">
+                    <span className="loading-ring" aria-hidden="true" />
+                    <strong>{selectedImage.status === 'failed' ? '生成失败' : '生成中...'}</strong>
+                    {selectedImage.error ? <p>{selectedImage.error}</p> : null}
+                  </div>
+                )}
               </div>
 
               <div className="detail-panel">
                 <div className="modal-head">
                   <div>
-                    <h2>图片详情</h2>
-                    <p>{selectedImage.authorName || (selectedOnWall ? '已上墙' : '本地生成')}</p>
+                    <h2>{selectedImage.status === 'pending' ? '请求详情' : selectedImage.status === 'failed' ? '失败详情' : '图片详情'}</h2>
+                    <p>{selectedImage.status === 'pending' ? '生成中' : selectedImage.status === 'failed' ? '请求失败' : selectedImage.authorName || (selectedOnWall ? '已上墙' : '本地生成')}</p>
                   </div>
                   <button type="button" className="close-button" onClick={closeDialog}>×</button>
                 </div>
@@ -1058,22 +1181,25 @@ function App() {
                 </div>
 
                 <div className="detail-meta-grid">
-                  <div><span>来源</span><strong>{selectedImage.source === 'edit' ? '图生图' : selectedImage.source === 'wall' ? '作品墙' : '文生图'}</strong></div>
+                  <div><span>来源</span><strong>{getSourceLabel(selectedImage)}</strong></div>
                   <div><span>尺寸</span><strong>{detailParams.size || '自动'}</strong></div>
                   <div><span>质量</span><strong>{getQualityLabel(detailParams.quality)}</strong></div>
-                  <div><span>格式</span><strong>{detailParams.output_format || detailParams.response_format || 'png'}</strong></div>
+                  <div><span>格式</span><strong>{detailParams.output_format || 'png'}</strong></div>
+                  <div><span>背景</span><strong>{detailParams.background || 'auto'}</strong></div>
                   <div><span>审核</span><strong>{detailParams.moderation || 'auto'}</strong></div>
                   <div><span>数量</span><strong>{detailParams.n || 1}</strong></div>
                 </div>
 
-                <p className="created-line">创建于 {formatDate(selectedImage.createdAt)}</p>
+                <p className="created-line">创建于 {formatDate(selectedImage.createdAt)} · 耗时 {detailElapsed}</p>
 
                 <div className="detail-actions">
-                  <a className="secondary-action" href={detailSrc} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer">下载</a>
+                  {detailSrc ? <a className="secondary-action" href={detailSrc} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer">下载</a> : null}
                   <button type="button" className="secondary-action" onClick={() => reuseConfig(selectedImage)}>复用配置</button>
-                  <button type="button" className={selectedOnWall ? 'primary-action wall-button is-active' : 'primary-action wall-button'} onClick={() => toggleWall(selectedImage)} disabled={busySelected}>
-                    {selectedOnWall ? '★ 取消上墙' : '☆ 上墙'}
-                  </button>
+                  {detailSrc ? (
+                    <button type="button" className={selectedOnWall ? 'primary-action wall-button is-active' : 'primary-action wall-button'} onClick={() => toggleWall(selectedImage)} disabled={busySelected}>
+                      {selectedOnWall ? '★ 取消上墙' : '☆ 上墙'}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </section>
@@ -1133,7 +1259,11 @@ function App() {
                       </label>
                       <label>
                         <span>模型 ID</span>
-                        <input value={form.model} onChange={(event) => updateForm('model', event.target.value)} placeholder="gpt-image-1" />
+                        <input value={form.model} onChange={(event) => updateForm('model', event.target.value)} placeholder="gpt-image-2" />
+                      </label>
+                      <label>
+                        <span>请求超时（秒）</span>
+                        <input min="10" max="600" type="number" value={apiConfigForm.requestTimeout} onChange={(event) => setApiConfigForm((current) => ({ ...current, requestTimeout: event.target.value }))} placeholder="600" />
                       </label>
                       <label className="is-disabled">
                         <span>流式传输</span>
@@ -1145,10 +1275,9 @@ function App() {
                         <span>密钥</span>
                         <input value={settingsApiKey} onChange={(event) => setSettingsApiKey(event.target.value)} placeholder={settingsMeta?.hasApiKey ? `已保存：${settingsMeta.apiKeyHint}` : '可选，保存前会再次确认'} />
                       </label>
-                      <div className="modal-actions three-actions full-field">
+                      <div className="modal-actions full-field">
                         <button type="button" className="secondary-action" onClick={() => setForm(defaultForm)}>重置</button>
-                        <button type="button" className="secondary-action" onClick={saveAccountSettings}>保存配置</button>
-                        <button type="button" className="primary-action" onClick={closeDialog}>完成</button>
+                        <button type="button" className="primary-action" onClick={saveAccountSettings}>保存配置</button>
                       </div>
                     </div>
                   ) : null}

@@ -13,16 +13,21 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
 
+const DEFAULT_REQUEST_TIMEOUT = 600;
+const MAX_REQUEST_TIMEOUT = 600;
 const app = express();
 const port = Number(process.env.PORT || 3030);
 const baseUrl = (process.env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/$/, '');
-const defaultImageModel = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
+const defaultImageModel = process.env.OPENAI_IMAGE_MODEL && process.env.OPENAI_IMAGE_MODEL !== 'gpt-image-1' ? process.env.OPENAI_IMAGE_MODEL : 'gpt-image-2';
 const systemApiKey = process.env.OPENAI_API_KEY || '';
 const sessionSecret = process.env.SESSION_SECRET || 'dev-session-secret-change-me';
 const apiKeySecret = process.env.USER_API_KEY_SECRET || process.env.SESSION_SECRET || '';
 const mysqlConfigured = Boolean(process.env.MYSQL_HOST && process.env.MYSQL_USER && process.env.MYSQL_DATABASE);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 18 * 1024 * 1024 } });
 const allowedImageQualities = new Set(['low', 'medium', 'high']);
+const allowedOutputFormats = new Set(['png', 'jpeg', 'webp']);
+const allowedBackgrounds = new Set(['auto', 'opaque']);
+const allowedModerations = new Set(['auto', 'low']);
 
 const pool = mysqlConfigured
   ? mysql.createPool({
@@ -41,6 +46,32 @@ let schemaReady = false;
 
 app.use(express.json({ limit: '30mb' }));
 app.use(cookieParser(sessionSecret));
+app.use((req, res, next) => {
+  if (req.path !== '/api/index.php') {
+    next();
+    return;
+  }
+
+  const route = String(req.query.route || '').replace(/^\/+/, '');
+  if (!route) {
+    res.status(404).json({ error: '接口不存在', route: '/' });
+    return;
+  }
+
+  const query = new URLSearchParams();
+  Object.entries(req.query).forEach(([key, value]) => {
+    if (key === 'route' || value === undefined) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => query.append(key, String(item)));
+      return;
+    }
+    query.set(key, String(value));
+  });
+
+  const queryString = query.toString();
+  req.url = `/api/${route}${queryString ? `?${queryString}` : ''}`;
+  next();
+});
 
 const authCookieOptions = {
   httpOnly: true,
@@ -69,11 +100,13 @@ const ensureSchema = async () => {
       model VARCHAR(128) DEFAULT NULL,
       api_name VARCHAR(128) DEFAULT NULL,
       api_base_url VARCHAR(255) DEFAULT NULL,
+      request_timeout INT UNSIGNED NOT NULL DEFAULT 600,
       stream_enabled TINYINT(1) NOT NULL DEFAULT 0,
       size VARCHAR(64) DEFAULT NULL,
       quality VARCHAR(64) DEFAULT NULL,
       style VARCHAR(64) DEFAULT NULL,
       response_format VARCHAR(64) DEFAULT NULL,
+      background VARCHAR(64) DEFAULT NULL,
       output_format VARCHAR(64) DEFAULT NULL,
       output_compression VARCHAR(16) DEFAULT NULL,
       moderation VARCHAR(64) DEFAULT NULL,
@@ -137,7 +170,13 @@ const ensureSchema = async () => {
   await ensureColumn('users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
   await ensureColumn('user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
   await ensureColumn('user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
-  await ensureColumn('user_settings', 'stream_enabled', 'stream_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER api_base_url');
+  await ensureColumn('user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 600 AFTER api_base_url');
+  await ensureColumn('user_settings', 'stream_enabled', 'stream_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER request_timeout');
+  await ensureColumn('user_settings', 'background', 'background VARCHAR(64) DEFAULT NULL AFTER response_format');
+  await ensureColumn('user_settings', 'output_compression', 'output_compression VARCHAR(16) DEFAULT NULL AFTER output_format');
+  await pool.query('UPDATE user_settings SET request_timeout = 600 WHERE request_timeout = 180');
+  await pool.query("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");
+  await pool.query("UPDATE user_settings SET size = '768x768' WHERE size = '1024x1024'");
 
   schemaReady = true;
 };
@@ -167,6 +206,18 @@ const parseJsonText = (text) => {
 };
 
 const upstreamErrorMessage = (data, fallback) => data?.error?.message || data?.message || fallback;
+
+const upstreamErrorPayload = (data, fallback, status) => {
+  const message = upstreamErrorMessage(data, fallback);
+  if (status === 504 && message.toLowerCase().includes('stream disconnected before completion')) {
+    return {
+      error: '上游 API 中转 504：生图流在完成前断开。请把中转后台的请求超时、read timeout、proxy_read_timeout 调到 600 秒以上，或降低尺寸/质量后重试。',
+      detail: data,
+    };
+  }
+
+  return { error: message, detail: data };
+};
 
 const assertImageResponse = (data, fallback) => {
   if (Array.isArray(data?.data)) return null;
@@ -288,39 +339,52 @@ const decryptApiKey = (settings) => {
   }
 };
 
+const clampNumber = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
+
 const toOpenAIImagePayload = (body = {}) => {
+  const outputFormat = allowedOutputFormats.has(body.output_format) ? body.output_format : 'png';
   const payload = {
     model: body.model || defaultImageModel,
     prompt: body.prompt,
-    n: Number(body.n || 1),
-    response_format: body.response_format || 'url',
+    n: clampNumber(body.n || 1, 1, 10),
+    output_format: outputFormat,
   };
 
-  if (body.size) payload.size = body.size;
+  if (body.size) payload.size = String(body.size);
   if (allowedImageQualities.has(body.quality)) payload.quality = body.quality;
-
-  ['style', 'background', 'moderation', 'output_format'].forEach((key) => {
-    if (body[key] !== undefined && body[key] !== '' && body[key] !== 'auto') payload[key] = body[key];
-  });
-
-  if (body.negative_prompt) payload.negative_prompt = body.negative_prompt;
-  if (body.user) payload.user = body.user;
+  if (allowedBackgrounds.has(body.background) && body.background !== 'auto') payload.background = body.background;
+  if (allowedModerations.has(body.moderation)) payload.moderation = body.moderation;
+  if (['jpeg', 'webp'].includes(outputFormat) && body.output_compression !== undefined && body.output_compression !== '') {
+    payload.output_compression = clampNumber(body.output_compression, 0, 100);
+  }
+  if (body.user) payload.user = String(body.user);
 
   return payload;
 };
 
-const normalizeImageData = (data) => ({
-  created: data?.created || Math.floor(Date.now() / 1000),
-  data: Array.isArray(data?.data)
-    ? data.data.map((item, index) => ({
-        id: `${Date.now()}-${index}`,
-        url: item.url || '',
-        b64_json: item.b64_json || '',
-        revised_prompt: item.revised_prompt || '',
-      }))
-    : [],
-  raw: data,
-});
+const imageMimeForOutputFormat = (format) => {
+  const value = String(format || '').toLowerCase();
+  if (value === 'jpeg') return 'image/jpeg';
+  if (value === 'webp') return 'image/webp';
+  return 'image/png';
+};
+
+const normalizeImageData = (data) => {
+  const imageMime = imageMimeForOutputFormat(data?.output_format || 'png');
+  return {
+    created: data?.created || Math.floor(Date.now() / 1000),
+    data: Array.isArray(data?.data)
+      ? data.data.map((item, index) => ({
+          id: `${Date.now()}-${index}`,
+          url: item.url || '',
+          b64_json: item.b64_json || '',
+          imageMime,
+          revised_prompt: item.revised_prompt || '',
+        }))
+      : [],
+    raw: data,
+  };
+};
 
 const getSettingsForUser = async (userId) => {
   if (!pool || !userId) return null;
@@ -334,13 +398,14 @@ const getSettingsForUser = async (userId) => {
     model: settings.model || '',
     apiName: settings.api_name || 'OpenAI Compatible',
     apiBaseUrl: settings.api_base_url || '',
+    requestTimeout: Number(settings.request_timeout || DEFAULT_REQUEST_TIMEOUT),
     streamEnabled: Boolean(settings.stream_enabled),
     size: settings.size || '',
     quality: settings.quality || '',
-    style: settings.style || '',
-    response_format: settings.response_format || '',
+    background: settings.background || '',
     output_format: settings.output_format || '',
-    moderation: settings.moderation || '',
+    output_compression: settings.output_compression || '',
+    moderation: allowedModerations.has(settings.moderation) ? settings.moderation : 'auto',
     n: settings.n || 1,
     hasApiKey: Boolean(settings.api_key_ciphertext),
     apiKeyHint: settings.api_key_hint || '',
@@ -364,6 +429,12 @@ const getStoredUserApiKey = async (req) => {
 const getEffectiveApiBaseUrl = async (req) => {
   const settings = await getStoredUserSettings(req);
   return String(settings?.api_base_url || baseUrl).replace(/\s+/g, '').replace(/\/$/, '');
+};
+
+const getEffectiveRequestTimeout = async (req) => {
+  const settings = await getStoredUserSettings(req);
+  const timeout = Number(settings?.request_timeout || DEFAULT_REQUEST_TIMEOUT);
+  return Math.max(10, Math.min(MAX_REQUEST_TIMEOUT, Number.isFinite(timeout) ? timeout : DEFAULT_REQUEST_TIMEOUT));
 };
 
 const getEffectiveApiKey = async (req) => (await getStoredUserApiKey(req)) || systemApiKey;
@@ -579,6 +650,11 @@ app.post('/api/settings', async (req, res) => {
       };
 
   const apiBaseUrl = String(settings.apiBaseUrl || settings.api_base_url || '').replace(/\s+/g, '');
+  const requestTimeout = Math.max(10, Math.min(MAX_REQUEST_TIMEOUT, Number(settings.requestTimeout || settings.request_timeout || DEFAULT_REQUEST_TIMEOUT)));
+  const moderation = allowedModerations.has(settings.moderation) ? settings.moderation : 'auto';
+  const background = allowedBackgrounds.has(settings.background) ? settings.background : 'auto';
+  const outputFormat = allowedOutputFormats.has(settings.output_format) ? settings.output_format : 'png';
+  const outputCompression = clampNumber(settings.output_compression ?? 100, 0, 100);
   if (!isValidApiBaseUrl(apiBaseUrl)) {
     res.status(400).json({ error: 'API 地址必须是 http 或 https 地址' });
     return;
@@ -586,19 +662,22 @@ app.post('/api/settings', async (req, res) => {
 
   await pool.query(
     `INSERT INTO user_settings (
-      user_id, model, api_name, api_base_url, stream_enabled, size, quality, style, response_format, output_format, moderation, n,
+      user_id, model, api_name, api_base_url, request_timeout, stream_enabled, size, quality, style, response_format, background, output_format, output_compression, moderation, n,
       api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       model = VALUES(model),
       api_name = VALUES(api_name),
       api_base_url = VALUES(api_base_url),
+      request_timeout = VALUES(request_timeout),
       stream_enabled = VALUES(stream_enabled),
       size = VALUES(size),
       quality = VALUES(quality),
       style = VALUES(style),
       response_format = VALUES(response_format),
+      background = VALUES(background),
       output_format = VALUES(output_format),
+      output_compression = VALUES(output_compression),
       moderation = VALUES(moderation),
       n = VALUES(n),
       api_key_ciphertext = VALUES(api_key_ciphertext),
@@ -610,13 +689,16 @@ app.post('/api/settings', async (req, res) => {
       settings.model || defaultImageModel,
       String(settings.apiName || settings.api_name || 'OpenAI Compatible').trim(),
       apiBaseUrl,
+      requestTimeout,
       settings.streamEnabled || settings.stream_enabled ? 1 : 0,
       settings.size || '',
       ['auto', ...allowedImageQualities].includes(settings.quality) ? settings.quality : 'auto',
       settings.style || 'auto',
-      settings.response_format || 'url',
-      settings.output_format || 'png',
-      settings.moderation || 'auto',
+      settings.response_format || '',
+      background,
+      outputFormat,
+      String(outputCompression),
+      moderation,
       Number(settings.n || 1),
       apiFields.api_key_ciphertext,
       apiFields.api_key_iv,
@@ -713,6 +795,7 @@ app.post('/api/images/generations', async (req, res) => {
 
   const payload = toOpenAIImagePayload(req.body);
   const effectiveBaseUrl = await getEffectiveApiBaseUrl(req);
+  const requestTimeout = await getEffectiveRequestTimeout(req);
 
   try {
     const response = await fetch(buildUpstreamUrl(effectiveBaseUrl, '/v1/images/generations'), {
@@ -722,16 +805,14 @@ app.post('/api/images/generations', async (req, res) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(requestTimeout * 1000),
     });
 
     const text = await response.text();
     const data = parseJsonText(text);
 
     if (!response.ok) {
-      res.status(response.status).json({
-        error: upstreamErrorMessage(data, '生图接口请求失败'),
-        detail: data,
-      });
+      res.status(response.status).json(upstreamErrorPayload(data, '生图接口请求失败', response.status));
       return;
     }
 
@@ -772,6 +853,7 @@ app.post('/api/images/edits', upload.single('image'), async (req, res) => {
 
   const payload = toOpenAIImagePayload(req.body);
   const effectiveBaseUrl = await getEffectiveApiBaseUrl(req);
+  const requestTimeout = await getEffectiveRequestTimeout(req);
   const formData = new FormData();
   const imageBlob = new Blob([req.file.buffer], { type: req.file.mimetype || 'image/png' });
   formData.append('image', imageBlob, req.file.originalname || 'reference.png');
@@ -787,16 +869,14 @@ app.post('/api/images/edits', upload.single('image'), async (req, res) => {
         Authorization: `Bearer ${effectiveApiKey}`,
       },
       body: formData,
+      signal: AbortSignal.timeout(requestTimeout * 1000),
     });
 
     const text = await response.text();
     const data = parseJsonText(text);
 
     if (!response.ok) {
-      res.status(response.status).json({
-        error: upstreamErrorMessage(data, '图生图接口请求失败'),
-        detail: data,
-      });
+      res.status(response.status).json(upstreamErrorPayload(data, '图生图接口请求失败', response.status));
       return;
     }
 

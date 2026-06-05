@@ -7,6 +7,13 @@ ini_set('display_errors', '0');
 ini_set('log_errors', '1');
 ob_start();
 
+define('DEFAULT_REQUEST_TIMEOUT', 600);
+define('MAX_REQUEST_TIMEOUT', 600);
+define('REQUEST_TIMEOUT_BUFFER', 20);
+
+@ini_set('max_execution_time', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
+@set_time_limit(MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER);
+
 $configCandidates = [
     __DIR__ . '/.php-api-config.php',
     dirname(__DIR__) . '/.php-api-config.php',
@@ -79,7 +86,11 @@ function ensure_column(PDO $db, string $table, string $column, string $definitio
     $stmt->execute([$table, $column]);
     if ((int) $stmt->fetchColumn() > 0) return;
 
-    $db->exec("ALTER TABLE `{$table}` ADD COLUMN {$definition}");
+    try {
+        $db->exec("ALTER TABLE `{$table}` ADD COLUMN {$definition}");
+    } catch (PDOException $error) {
+        if (($error->errorInfo[1] ?? null) !== 1060) throw $error;
+    }
 }
 
 function normalize_display_name(string $value, string $fallback): string
@@ -130,11 +141,13 @@ function ensure_schema(): void
       model VARCHAR(128) DEFAULT NULL,
       api_name VARCHAR(128) DEFAULT NULL,
       api_base_url VARCHAR(255) DEFAULT NULL,
+      request_timeout INT UNSIGNED NOT NULL DEFAULT 600,
       stream_enabled TINYINT(1) NOT NULL DEFAULT 0,
       size VARCHAR(64) DEFAULT NULL,
       quality VARCHAR(64) DEFAULT NULL,
       style VARCHAR(64) DEFAULT NULL,
       response_format VARCHAR(64) DEFAULT NULL,
+      background VARCHAR(64) DEFAULT NULL,
       output_format VARCHAR(64) DEFAULT NULL,
       output_compression VARCHAR(16) DEFAULT NULL,
       moderation VARCHAR(64) DEFAULT NULL,
@@ -150,13 +163,18 @@ function ensure_schema(): void
     $db->exec("CREATE TABLE IF NOT EXISTS image_jobs (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       user_id BIGINT UNSIGNED DEFAULT NULL,
+      request_id VARCHAR(80) DEFAULT NULL,
       mode VARCHAR(32) NOT NULL DEFAULT 'generation',
+      status VARCHAR(32) NOT NULL DEFAULT 'completed',
       prompt TEXT NOT NULL,
       revised_prompt TEXT DEFAULT NULL,
+      error_message TEXT DEFAULT NULL,
       image_url TEXT DEFAULT NULL,
       image_b64 LONGTEXT DEFAULT NULL,
       params_json JSON DEFAULT NULL,
+      result_json JSON DEFAULT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at TIMESTAMP NULL DEFAULT NULL,
       INDEX idx_image_jobs_user_created (user_id, created_at),
       CONSTRAINT fk_image_jobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
@@ -184,7 +202,18 @@ function ensure_schema(): void
     ensure_column($db, 'users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
     ensure_column($db, 'user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
     ensure_column($db, 'user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
-    ensure_column($db, 'user_settings', 'stream_enabled', 'stream_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER api_base_url');
+    ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 600 AFTER api_base_url');
+    ensure_column($db, 'user_settings', 'stream_enabled', 'stream_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER request_timeout');
+    ensure_column($db, 'user_settings', 'background', 'background VARCHAR(64) DEFAULT NULL AFTER response_format');
+    ensure_column($db, 'user_settings', 'output_compression', 'output_compression VARCHAR(16) DEFAULT NULL AFTER output_format');
+    ensure_column($db, 'image_jobs', 'request_id', 'request_id VARCHAR(80) DEFAULT NULL AFTER user_id');
+    ensure_column($db, 'image_jobs', 'status', "status VARCHAR(32) NOT NULL DEFAULT 'completed' AFTER mode");
+    ensure_column($db, 'image_jobs', 'error_message', 'error_message TEXT DEFAULT NULL AFTER revised_prompt');
+    ensure_column($db, 'image_jobs', 'result_json', 'result_json JSON DEFAULT NULL AFTER params_json');
+    ensure_column($db, 'image_jobs', 'completed_at', 'completed_at TIMESTAMP NULL DEFAULT NULL AFTER created_at');
+    $db->exec('UPDATE user_settings SET request_timeout = 600 WHERE request_timeout = 180');
+    $db->exec("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");
+    $db->exec("UPDATE user_settings SET size = '768x768' WHERE size = '1024x1024'");
 
     $state['schemaReady'] = true;
 }
@@ -290,12 +319,13 @@ function settings_for_user(int $userId): ?array
         'model' => $settings['model'] ?: '',
         'apiName' => $settings['api_name'] ?: 'OpenAI Compatible',
         'apiBaseUrl' => $settings['api_base_url'] ?: '',
+        'requestTimeout' => (int) ($settings['request_timeout'] ?: DEFAULT_REQUEST_TIMEOUT),
         'streamEnabled' => !empty($settings['stream_enabled']),
         'size' => $settings['size'] ?: '',
         'quality' => $settings['quality'] ?: '',
-        'style' => $settings['style'] ?: '',
-        'response_format' => $settings['response_format'] ?: '',
+        'background' => $settings['background'] ?: '',
         'output_format' => $settings['output_format'] ?: '',
+        'output_compression' => $settings['output_compression'] ?: '',
         'moderation' => $settings['moderation'] ?: '',
         'n' => (int) ($settings['n'] ?: 1),
         'hasApiKey' => !empty($settings['api_key_ciphertext']),
@@ -373,6 +403,17 @@ function effective_api_base_url(): string
     return rtrim($baseUrl ?: (string) cfg('openai_base_url', 'https://api.openai.com'), '/');
 }
 
+function effective_request_timeout(): int
+{
+    try {
+        $settings = stored_user_settings();
+        $timeout = (int) ($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT);
+    } catch (Throwable $error) {
+        $timeout = DEFAULT_REQUEST_TIMEOUT;
+    }
+    return max(10, min(MAX_REQUEST_TIMEOUT, $timeout ?: DEFAULT_REQUEST_TIMEOUT));
+}
+
 function effective_api_key(): string
 {
     try {
@@ -393,24 +434,44 @@ function allowed_settings_quality($value): bool
     return in_array($value, ['auto', 'low', 'medium', 'high'], true);
 }
 
+function allowed_output_format($value): bool
+{
+    return in_array($value, ['png', 'jpeg', 'webp'], true);
+}
+
+function allowed_background($value): bool
+{
+    return in_array($value, ['opaque', 'auto'], true);
+}
+
+function allowed_moderation($value): bool
+{
+    return in_array($value, ['auto', 'low'], true);
+}
+
+function clamp_int($value, int $min, int $max): int
+{
+    return max($min, min($max, (int) $value));
+}
+
 function openai_payload(array $body): array
 {
+    $outputFormat = allowed_output_format($body['output_format'] ?? null) ? $body['output_format'] : 'png';
     $payload = [
-        'model' => $body['model'] ?? cfg('openai_image_model', 'gpt-image-1'),
+        'model' => $body['model'] ?? cfg('openai_image_model', 'gpt-image-2'),
         'prompt' => $body['prompt'] ?? '',
-        'n' => (int) ($body['n'] ?? 1),
-        'response_format' => $body['response_format'] ?? 'url',
+        'n' => clamp_int($body['n'] ?? 1, 1, 10),
+        'output_format' => $outputFormat,
     ];
 
-    if (!empty($body['size'])) $payload['size'] = $body['size'];
+    if (!empty($body['size'])) $payload['size'] = (string) $body['size'];
     if (allowed_quality($body['quality'] ?? null)) $payload['quality'] = $body['quality'];
-
-    foreach (['style', 'background', 'moderation', 'output_format'] as $key) {
-        if (isset($body[$key]) && $body[$key] !== '' && $body[$key] !== 'auto') $payload[$key] = $body[$key];
+    if (allowed_background($body['background'] ?? null) && $body['background'] !== 'auto') $payload['background'] = $body['background'];
+    if (allowed_moderation($body['moderation'] ?? null)) $payload['moderation'] = $body['moderation'];
+    if (in_array($outputFormat, ['jpeg', 'webp'], true) && isset($body['output_compression']) && $body['output_compression'] !== '') {
+        $payload['output_compression'] = clamp_int($body['output_compression'], 0, 100);
     }
-
-    if (!empty($body['negative_prompt'])) $payload['negative_prompt'] = $body['negative_prompt'];
-    if (!empty($body['user'])) $payload['user'] = $body['user'];
+    if (!empty($body['user'])) $payload['user'] = (string) $body['user'];
 
     return $payload;
 }
@@ -434,20 +495,43 @@ function upstream_error_message(array $data, string $fallback): string
     return $data['error']['message'] ?? $data['message'] ?? $fallback;
 }
 
+function upstream_error_payload(array $data, string $fallback, int $status): array
+{
+    $message = upstream_error_message($data, $fallback);
+    if ($status === 504 && stripos($message, 'stream disconnected before completion') !== false) {
+        return [
+            'error' => '上游 API 中转 504：生图流在完成前断开。请把中转后台的请求超时、read timeout、proxy_read_timeout 调到 600 秒以上，或降低尺寸/质量后重试。',
+            'detail' => $data,
+        ];
+    }
+
+    return ['error' => $message, 'detail' => $data];
+}
+
 function assert_image_response(array $data, string $fallback): void
 {
     if (isset($data['data']) && is_array($data['data'])) return;
     json_response(['error' => upstream_error_message($data, $fallback), 'detail' => $data], 502);
 }
 
+function image_mime_for_output_format($format): string
+{
+    $value = strtolower((string) $format);
+    if ($value === 'jpeg') return 'image/jpeg';
+    if ($value === 'webp') return 'image/webp';
+    return 'image/png';
+}
+
 function normalize_image_data(array $data): array
 {
     $items = [];
+    $mime = image_mime_for_output_format($data['output_format'] ?? 'png');
     foreach (($data['data'] ?? []) as $index => $item) {
         $items[] = [
             'id' => (int) (microtime(true) * 1000) . '-' . $index,
             'url' => $item['url'] ?? '',
             'b64_json' => $item['b64_json'] ?? '',
+            'imageMime' => $mime,
             'revised_prompt' => $item['revised_prompt'] ?? '',
         ];
     }
@@ -455,22 +539,199 @@ function normalize_image_data(array $data): array
     return ['created' => $data['created'] ?? time(), 'data' => $items, 'raw' => $data];
 }
 
+function respond_json_and_continue(array $payload, int $status = 202): void
+{
+    while (ob_get_level() > 0) ob_end_clean();
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($json === false) $json = '{"error":"JSON 编码失败"}';
+
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Length: ' . strlen($json));
+    header('Connection: close');
+    echo $json;
+
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+        return;
+    }
+
+    flush();
+}
+
+function image_job_owner_values(): array
+{
+    $userId = session_user_id();
+    if ($userId) return [$userId, null];
+    return [null, visitor_id()];
+}
+
+function create_pending_image_job(array $params, string $mode): int
+{
+    [$userId, $requestId] = image_job_owner_values();
+    $stmt = pdo()->prepare('INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, params_json) VALUES (?, ?, ?, ?, ?, ?)');
+    $stmt->execute([
+        $userId,
+        $requestId,
+        $mode,
+        'running',
+        $params['prompt'] ?? '',
+        json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    return (int) pdo()->lastInsertId();
+}
+
+function client_image_job(array $row): array
+{
+    $params = [];
+    if (!empty($row['params_json'])) {
+        $decoded = is_string($row['params_json']) ? json_decode($row['params_json'], true) : $row['params_json'];
+        $params = is_array($decoded) ? $decoded : [];
+    }
+
+    $status = $row['status'] ?: ((($row['image_url'] ?? '') || ($row['image_b64'] ?? '')) ? 'completed' : 'running');
+    return [
+        'id' => (int) $row['id'],
+        'jobId' => (int) $row['id'],
+        'status' => $status,
+        'mode' => $row['mode'] ?: 'generation',
+        'prompt' => $row['prompt'] ?: ($params['prompt'] ?? ''),
+        'revised_prompt' => $row['revised_prompt'] ?: '',
+        'error' => $row['error_message'] ?: '',
+        'form' => $params,
+        'createdAt' => $row['created_at'] ?? null,
+        'finishedAt' => $row['completed_at'] ?? null,
+    ];
+}
+
+function completed_job_payload(array $row): array
+{
+    $job = client_image_job($row);
+    $images = [];
+    $mime = image_mime_for_output_format($job['form']['output_format'] ?? 'png');
+    if (!empty($row['result_json'])) {
+        $decoded = is_string($row['result_json']) ? json_decode($row['result_json'], true) : $row['result_json'];
+        if (is_array($decoded) && isset($decoded['data']) && is_array($decoded['data'])) {
+            $images = array_map(static fn($image) => is_array($image) ? $image : [], $decoded['data']);
+        }
+    }
+
+    if (!$images) {
+        $images = [[
+            'id' => (int) $row['id'],
+            'jobId' => (int) $row['id'],
+            'url' => $row['image_url'] ?: '',
+            'b64_json' => $row['image_b64'] ?: '',
+            'imageMime' => $mime,
+            'revised_prompt' => $row['revised_prompt'] ?: '',
+        ]];
+    }
+    $images[0]['id'] = $images[0]['id'] ?? (int) $row['id'];
+    $images[0]['jobId'] = $images[0]['jobId'] ?? (int) $row['id'];
+    foreach ($images as &$image) {
+        $image['imageMime'] = $image['imageMime'] ?? $mime;
+    }
+    unset($image);
+
+    return [
+        'created' => $row['completed_at'] ? strtotime((string) $row['completed_at']) : time(),
+        'data' => $images,
+        'job' => $job,
+    ];
+}
+
+function image_job_response(array $row): array
+{
+    $job = client_image_job($row);
+    if ($job['status'] === 'completed' && (($row['image_url'] ?? '') || ($row['image_b64'] ?? ''))) {
+        return completed_job_payload($row);
+    }
+
+    return ['job' => $job];
+}
+
+function fetch_owned_image_job(int $jobId): ?array
+{
+    $userId = session_user_id();
+    $visitor = unsign_value($_COOKIE['visitor_id'] ?? '');
+    $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? LIMIT 1');
+    $stmt->execute([$jobId]);
+    $row = $stmt->fetch();
+    if (!$row) return null;
+
+    if (!empty($row['user_id'])) {
+        return ((int) $row['user_id'] === (int) $userId) ? $row : null;
+    }
+
+    if (!empty($row['request_id'])) {
+        return ($visitor !== '' && hash_equals((string) $row['request_id'], $visitor)) ? $row : null;
+    }
+
+    return $userId ? $row : null;
+}
+
+function update_image_job_failed(int $jobId, string $message): void
+{
+    try {
+        $stmt = pdo()->prepare('UPDATE image_jobs SET status = ?, error_message = ?, completed_at = NOW() WHERE id = ?');
+        $stmt->execute(['failed', $message, $jobId]);
+    } catch (Throwable $error) {
+        error_log('image job failed update error: ' . $error->getMessage());
+    }
+}
+
+function complete_image_job(int $jobId, array $normalized, array $params, string $mode): array
+{
+    $images = is_array($normalized['data'] ?? null) ? $normalized['data'] : [];
+    if (!$images) throw new RuntimeException('生图接口没有返回图片数据');
+
+    $first = $images[0];
+    $stmt = pdo()->prepare('UPDATE image_jobs SET status = ?, revised_prompt = ?, image_url = ?, image_b64 = ?, params_json = ?, result_json = ?, completed_at = NOW() WHERE id = ?');
+    $stmt->execute([
+        'completed',
+        $first['revised_prompt'] ?? '',
+        ($first['url'] ?? '') ?: null,
+        ($first['b64_json'] ?? '') ?: null,
+        json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        json_encode($normalized['raw'] ?? $normalized, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        $jobId,
+    ]);
+    $images[0]['jobId'] = $jobId;
+    $resultImages = $images;
+
+    if (count($images) > 1) {
+        $extraImages = array_slice($images, 1);
+        $saved = persist_image_jobs($extraImages, $params, $mode);
+        array_splice($images, 1, count($extraImages), $saved);
+        $resultImages = $images;
+        $stmt = pdo()->prepare('UPDATE image_jobs SET result_json = ? WHERE id = ?');
+        $stmt->execute([json_encode(['data' => $resultImages], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $jobId]);
+    }
+
+    $normalized['data'] = $images;
+    return $normalized;
+}
+
 function persist_image_jobs(array $images, array $params, string $mode): array
 {
     if (!$images) return $images;
 
     try {
-        $stmt = pdo()->prepare('INSERT INTO image_jobs (user_id, mode, prompt, revised_prompt, image_url, image_b64, params_json) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        $stmt = pdo()->prepare('INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, revised_prompt, image_url, image_b64, params_json, result_json, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
         $result = [];
         foreach ($images as $image) {
+            [$userId, $requestId] = image_job_owner_values();
             $stmt->execute([
-                session_user_id(),
+                $userId,
+                $requestId,
                 $mode,
+                'completed',
                 $params['prompt'] ?? '',
                 $image['revised_prompt'] ?? '',
                 $image['url'] ?: null,
                 $image['b64_json'] ?: null,
                 json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                json_encode(['data' => [$image]], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             ]);
             $image['jobId'] = (int) pdo()->lastInsertId();
             $result[] = $image;
@@ -508,7 +769,7 @@ function client_wall_item(array $item): array
 
 function curl_json(string $url, array $headers, string $body): array
 {
-    if (!function_exists('curl_init')) json_response(['error' => 'PHP 未启用 cURL 扩展'], 500);
+    if (!function_exists('curl_init')) throw new RuntimeException('PHP 未启用 cURL 扩展');
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
@@ -516,20 +777,20 @@ function curl_json(string $url, array $headers, string $body): array
         CURLOPT_POST => true,
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_POSTFIELDS => $body,
-        CURLOPT_TIMEOUT => 180,
+        CURLOPT_TIMEOUT => effective_request_timeout(),
     ]);
     $text = curl_exec($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $error = curl_error($ch);
     curl_close($ch);
 
-    if ($text === false) json_response(['error' => '代理请求异常', 'detail' => $error], 500);
+    if ($text === false) throw new RuntimeException('代理请求异常：' . $error);
     return [$status, (string) $text];
 }
 
 function curl_multipart(string $url, array $headers, array $fields): array
 {
-    if (!function_exists('curl_init')) json_response(['error' => 'PHP 未启用 cURL 扩展'], 500);
+    if (!function_exists('curl_init')) throw new RuntimeException('PHP 未启用 cURL 扩展');
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
@@ -537,14 +798,14 @@ function curl_multipart(string $url, array $headers, array $fields): array
         CURLOPT_POST => true,
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_POSTFIELDS => $fields,
-        CURLOPT_TIMEOUT => 180,
+        CURLOPT_TIMEOUT => effective_request_timeout(),
     ]);
     $text = curl_exec($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $error = curl_error($ch);
     curl_close($ch);
 
-    if ($text === false) json_response(['error' => '图生图代理请求异常', 'detail' => $error], 500);
+    if ($text === false) throw new RuntimeException('图生图代理请求异常：' . $error);
     return [$status, (string) $text];
 }
 
@@ -564,6 +825,15 @@ try {
     $body = in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true) ? read_json_body() : [];
 
     if ($method === 'GET' && $route === '/health') {
+        if (isset($_GET['job'])) {
+            require_database();
+            $jobId = (int) $_GET['job'];
+            if ($jobId <= 0) json_response(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'failed', 'error' => '任务不存在或无权访问']]);
+            $row = fetch_owned_image_job($jobId);
+            if (!$row) json_response(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'failed', 'error' => '任务不存在或无权访问']]);
+            json_response(image_job_response($row));
+        }
+
         $configured = false;
         $apiName = 'OpenAI Compatible';
         try {
@@ -581,7 +851,7 @@ try {
             'mysqlConfigured' => true,
             'apiName' => $apiName,
             'baseUrl' => rtrim((string) cfg('openai_base_url', 'https://api.openai.com'), '/'),
-            'defaultImageModel' => cfg('openai_image_model', 'gpt-image-1'),
+            'defaultImageModel' => cfg('openai_image_model', 'gpt-image-2'),
         ]);
     }
 
@@ -681,23 +951,34 @@ try {
             $encrypted['api_key_hint'] ?? ($existing['api_key_hint'] ?? null),
         ];
 
-        $stmt = pdo()->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, stream_enabled, size, quality, style, response_format, output_format, moderation, n, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE model = VALUES(model), api_name = VALUES(api_name), api_base_url = VALUES(api_base_url), stream_enabled = VALUES(stream_enabled), size = VALUES(size), quality = VALUES(quality), style = VALUES(style), response_format = VALUES(response_format), output_format = VALUES(output_format), moderation = VALUES(moderation), n = VALUES(n), api_key_ciphertext = VALUES(api_key_ciphertext), api_key_iv = VALUES(api_key_iv), api_key_tag = VALUES(api_key_tag), api_key_hint = VALUES(api_key_hint)');
+        $stmt = pdo()->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream_enabled, size, quality, style, response_format, background, output_format, output_compression, moderation, n, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE model = VALUES(model), api_name = VALUES(api_name), api_base_url = VALUES(api_base_url), request_timeout = VALUES(request_timeout), stream_enabled = VALUES(stream_enabled), size = VALUES(size), quality = VALUES(quality), style = VALUES(style), response_format = VALUES(response_format), background = VALUES(background), output_format = VALUES(output_format), output_compression = VALUES(output_compression), moderation = VALUES(moderation), n = VALUES(n), api_key_ciphertext = VALUES(api_key_ciphertext), api_key_iv = VALUES(api_key_iv), api_key_tag = VALUES(api_key_tag), api_key_hint = VALUES(api_key_hint)');
         $apiBaseUrl = preg_replace('/\s+/', '', (string) ($settings['apiBaseUrl'] ?? ($settings['api_base_url'] ?? '')));
+        $requestTimeout = max(10, min(MAX_REQUEST_TIMEOUT, (int) ($settings['requestTimeout'] ?? ($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT))));
+        $moderationValue = $settings['moderation'] ?? 'auto';
+        $backgroundValue = $settings['background'] ?? 'auto';
+        $outputFormatValue = $settings['output_format'] ?? 'png';
+        $moderation = allowed_moderation($moderationValue) ? $moderationValue : 'auto';
+        $background = allowed_background($backgroundValue) ? $backgroundValue : 'auto';
+        $outputFormat = allowed_output_format($outputFormatValue) ? $outputFormatValue : 'png';
+        $outputCompression = clamp_int($settings['output_compression'] ?? 100, 0, 100);
         if (!valid_api_base_url($apiBaseUrl)) json_response(['error' => 'API 地址必须是 http 或 https 地址'], 400);
         $stmt->execute([
             $user['id'],
-            $settings['model'] ?? cfg('openai_image_model', 'gpt-image-1'),
+            $settings['model'] ?? cfg('openai_image_model', 'gpt-image-2'),
             trim((string) ($settings['apiName'] ?? ($settings['api_name'] ?? 'OpenAI Compatible'))),
             $apiBaseUrl,
+            $requestTimeout,
             !empty($settings['streamEnabled']) || !empty($settings['stream_enabled']) ? 1 : 0,
             $settings['size'] ?? '',
             allowed_settings_quality($settings['quality'] ?? null) ? $settings['quality'] : 'auto',
             $settings['style'] ?? 'auto',
-            $settings['response_format'] ?? 'url',
-            $settings['output_format'] ?? 'png',
-            $settings['moderation'] ?? 'auto',
+            $settings['response_format'] ?? '',
+            $background,
+            $outputFormat,
+            (string) $outputCompression,
+            $moderation,
             (int) ($settings['n'] ?? 1),
             $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3],
         ]);
@@ -755,33 +1036,58 @@ try {
         json_response(['ok' => true]);
     }
 
+    if ($method === 'GET' && ($route === '/image-job' || $route === '/image-jobs')) {
+        require_database();
+        $jobId = (int) ($_GET['id'] ?? 0);
+        if ($jobId <= 0) json_response(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'failed', 'error' => '任务不存在或无权访问']]);
+        $row = fetch_owned_image_job($jobId);
+        if (!$row) json_response(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'failed', 'error' => '任务不存在或无权访问']]);
+        json_response(image_job_response($row));
+    }
+
+    if ($method === 'GET' && preg_match('#^/image-jobs/(\d+)$#', $route, $matches)) {
+        require_database();
+        $jobId = (int) $matches[1];
+        $row = fetch_owned_image_job($jobId);
+        if (!$row) json_response(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'failed', 'error' => '任务不存在或无权访问']]);
+        json_response(image_job_response($row));
+    }
+
     if ($method === 'POST' && $route === '/images/generations') {
-        try {
-            ensure_schema();
-        } catch (Throwable $error) {
-        }
+        require_database();
         $apiKey = effective_api_key();
         if ($apiKey === '') json_response(['error' => '服务端未配置 OPENAI_API_KEY，且当前用户未保存 API Key'], 500);
         if (trim((string) ($body['prompt'] ?? '')) === '') json_response(['error' => '提示词不能为空'], 400);
 
         $payload = openai_payload($body);
-        [$status, $text] = curl_json(upstream_url('/v1/images/generations'), [
-            'Authorization: Bearer ' . $apiKey,
-            'Content-Type: application/json',
-        ], json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        $data = parse_json_text($text);
-        if ($status < 200 || $status >= 300) json_response(['error' => upstream_error_message($data, '生图接口请求失败'), 'detail' => $data], $status ?: 500);
-        assert_image_response($data, '生图接口没有返回图片数据');
-        $normalized = normalize_image_data($data);
-        $normalized['data'] = persist_image_jobs($normalized['data'], $payload, 'generation');
-        json_response($normalized);
+        $jobId = create_pending_image_job($payload, 'generation');
+        respond_json_and_continue(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'running', 'mode' => 'generation']], 202);
+
+        try {
+            [$status, $text] = curl_json(upstream_url('/v1/images/generations'), [
+                'Authorization: Bearer ' . $apiKey,
+                'Content-Type: application/json',
+            ], json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            $data = parse_json_text($text);
+            if ($status < 200 || $status >= 300) {
+                $errorPayload = upstream_error_payload($data, '生图接口请求失败', $status);
+                update_image_job_failed($jobId, (string) ($errorPayload['error'] ?? '生图接口请求失败'));
+                exit;
+            }
+            if (!isset($data['data']) || !is_array($data['data'])) {
+                update_image_job_failed($jobId, upstream_error_message($data, '生图接口没有返回图片数据'));
+                exit;
+            }
+            $normalized = normalize_image_data($data);
+            complete_image_job($jobId, $normalized, $payload, 'generation');
+        } catch (Throwable $error) {
+            update_image_job_failed($jobId, $error->getMessage());
+        }
+        exit;
     }
 
     if ($method === 'POST' && $route === '/images/edits') {
-        try {
-            ensure_schema();
-        } catch (Throwable $error) {
-        }
+        require_database();
         $apiKey = effective_api_key();
         if ($apiKey === '') json_response(['error' => '服务端未配置 OPENAI_API_KEY，且当前用户未保存 API Key'], 500);
         $postBody = $_POST;
@@ -789,18 +1095,32 @@ try {
         if (empty($_FILES['image']['tmp_name'])) json_response(['error' => '请上传参考图'], 400);
 
         $payload = openai_payload($postBody);
-        $fields = [];
-        foreach ($payload as $key => $value) {
-            if ($value !== null && $value !== '') $fields[$key] = (string) $value;
+        $jobId = create_pending_image_job($payload, 'edit');
+        respond_json_and_continue(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'running', 'mode' => 'edit']], 202);
+
+        try {
+            $fields = [];
+            foreach ($payload as $key => $value) {
+                if ($value !== null && $value !== '') $fields[$key] = (string) $value;
+            }
+            $fields['image'] = new CURLFile($_FILES['image']['tmp_name'], $_FILES['image']['type'] ?: 'image/png', $_FILES['image']['name'] ?: 'reference.png');
+            [$status, $text] = curl_multipart(upstream_url('/v1/images/edits'), ['Authorization: Bearer ' . $apiKey], $fields);
+            $data = parse_json_text($text);
+            if ($status < 200 || $status >= 300) {
+                $errorPayload = upstream_error_payload($data, '图生图接口请求失败', $status);
+                update_image_job_failed($jobId, (string) ($errorPayload['error'] ?? '图生图接口请求失败'));
+                exit;
+            }
+            if (!isset($data['data']) || !is_array($data['data'])) {
+                update_image_job_failed($jobId, upstream_error_message($data, '图生图接口没有返回图片数据'));
+                exit;
+            }
+            $normalized = normalize_image_data($data);
+            complete_image_job($jobId, $normalized, $payload, 'edit');
+        } catch (Throwable $error) {
+            update_image_job_failed($jobId, $error->getMessage());
         }
-        $fields['image'] = new CURLFile($_FILES['image']['tmp_name'], $_FILES['image']['type'] ?: 'image/png', $_FILES['image']['name'] ?: 'reference.png');
-        [$status, $text] = curl_multipart(upstream_url('/v1/images/edits'), ['Authorization: Bearer ' . $apiKey], $fields);
-        $data = parse_json_text($text);
-        if ($status < 200 || $status >= 300) json_response(['error' => upstream_error_message($data, '图生图接口请求失败'), 'detail' => $data], $status ?: 500);
-        assert_image_response($data, '图生图接口没有返回图片数据');
-        $normalized = normalize_image_data($data);
-        $normalized['data'] = persist_image_jobs($normalized['data'], $payload, 'edit');
-        json_response($normalized);
+        exit;
     }
 
     json_response(['error' => '接口不存在', 'route' => $route], 404);
