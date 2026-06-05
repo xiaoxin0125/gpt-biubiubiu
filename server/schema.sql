@@ -1,0 +1,59 @@
+CREATE TABLE IF NOT EXISTS users (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(64) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  model VARCHAR(128) DEFAULT NULL,
+  size VARCHAR(64) DEFAULT NULL,
+  quality VARCHAR(64) DEFAULT NULL,
+  style VARCHAR(64) DEFAULT NULL,
+  response_format VARCHAR(64) DEFAULT NULL,
+  output_format VARCHAR(64) DEFAULT NULL,
+  output_compression VARCHAR(16) DEFAULT NULL,
+  moderation VARCHAR(64) DEFAULT NULL,
+  n INT UNSIGNED DEFAULT 1,
+  api_key_ciphertext TEXT DEFAULT NULL,
+  api_key_iv VARCHAR(64) DEFAULT NULL,
+  api_key_tag VARCHAR(64) DEFAULT NULL,
+  api_key_hint VARCHAR(24) DEFAULT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_user_settings_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS image_jobs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED DEFAULT NULL,
+  mode VARCHAR(32) NOT NULL DEFAULT 'generation',
+  prompt TEXT NOT NULL,
+  revised_prompt TEXT DEFAULT NULL,
+  image_url TEXT DEFAULT NULL,
+  image_b64 LONGTEXT DEFAULT NULL,
+  params_json JSON DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_image_jobs_user_created (user_id, created_at),
+  CONSTRAINT fk_image_jobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS wall_items (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED DEFAULT NULL,
+  client_id VARCHAR(80) DEFAULT NULL,
+  author_name VARCHAR(96) NOT NULL DEFAULT '未知艺术家',
+  prompt TEXT NOT NULL,
+  revised_prompt TEXT DEFAULT NULL,
+  image_url TEXT DEFAULT NULL,
+  image_b64 LONGTEXT DEFAULT NULL,
+  image_mime VARCHAR(80) DEFAULT 'image/png',
+  params_json JSON DEFAULT NULL,
+  source_job_id BIGINT UNSIGNED DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_wall_items_created (created_at),
+  INDEX idx_wall_items_user (user_id),
+  INDEX idx_wall_items_client (client_id),
+  CONSTRAINT fk_wall_items_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_wall_items_job FOREIGN KEY (source_job_id) REFERENCES image_jobs(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
