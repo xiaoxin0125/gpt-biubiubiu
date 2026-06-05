@@ -615,15 +615,15 @@ input::placeholder {
 }
 
 .workbench-actions {
-  display: grid;
-  grid-template-columns: minmax(108px, 1.05fr) repeat(6, minmax(92px, 1fr)) 52px 44px;
+  display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 8px;
 }
 
 .tool-pill,
 .control-field,
-.reference-uploader {
+.file-control {
   min-height: 40px;
   border-radius: var(--radius);
 }
@@ -635,12 +635,10 @@ input::placeholder {
   width: 100%;
   min-height: 32px;
   padding: 0 10px;
-  overflow: hidden;
   border-radius: var(--radius-sm);
   font-size: 0.84rem;
   font-weight: 950;
   text-align: left;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -652,13 +650,28 @@ input::placeholder {
 
 .control-field {
   display: grid;
+  flex: 1 0 auto;
+  min-width: max-content;
   gap: 4px;
+}
+
+.size-control {
+  flex-basis: 118px;
+}
+
+.count-field {
+  flex-basis: 78px;
+}
+
+.file-control {
+  flex-basis: 92px;
 }
 
 .control-field input,
 .control-field select,
 .custom-select-trigger,
-.disabled-select-like {
+.disabled-select-like,
+.toggle-select-like {
   min-height: 32px;
   padding: 0 10px;
   border-radius: var(--radius-sm);
@@ -669,15 +682,17 @@ input::placeholder {
   position: relative;
   display: grid;
   gap: 4px;
-  min-width: 0;
+  min-width: max-content;
 }
 
 .custom-select-trigger,
-.disabled-select-like {
+.disabled-select-like,
+.toggle-select-like {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(max-content, 1fr) auto;
   align-items: center;
   width: 100%;
+  min-width: max-content;
   border: 2px solid var(--line);
   background: var(--white);
   color: var(--black);
@@ -687,11 +702,10 @@ input::placeholder {
 }
 
 .custom-select-trigger strong,
-.disabled-select-like {
-  overflow: hidden;
+.disabled-select-like,
+.toggle-select-like {
   font-size: 0.84rem;
   font-weight: 900;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -752,11 +766,18 @@ input::placeholder {
 }
 
 .custom-select-field.is-disabled .custom-select-trigger,
+.control-field.is-disabled input,
+.file-control.is-disabled strong,
 .disabled-select-like {
   border-color: rgba(17, 17, 17, 0.36);
   background: #e2e2db;
   color: #77766f;
   cursor: not-allowed;
+}
+
+.toggle-select-like.is-active {
+  background: var(--black);
+  color: var(--white);
 }
 
 .toolbar-filter.custom-select-field {
@@ -769,32 +790,36 @@ input::placeholder {
   font-size: 0.78rem;
 }
 
-.reference-uploader {
-  display: grid;
-  width: 52px;
-  min-height: 40px;
-  place-items: center;
-  padding: 0;
-  font-weight: 950;
-}
-
-.reference-uploader svg {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2.2;
-}
-
-.reference-uploader input {
+.file-control input {
   display: none;
+}
+
+.file-control strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--black);
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.file-control.has-file strong,
+.mask-control:not(.is-disabled) strong {
+  background: var(--black);
+  color: var(--white);
 }
 
 .send-button {
   display: inline-grid;
-  width: 44px;
+  flex: 0 0 52px;
+  min-width: 52px;
   height: 40px;
   place-items: center;
   border-radius: var(--radius);
@@ -806,27 +831,67 @@ input::placeholder {
 
 .reference-preview {
   display: grid;
-  grid-template-columns: 42px 1fr auto;
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding-top: 2px;
 }
 
+.reference-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reference-preview figure {
+  position: relative;
+  display: grid;
+  width: 48px;
+  gap: 2px;
+  margin: 0;
+}
+
 .reference-preview img {
-  width: 42px;
+  width: 48px;
   height: 42px;
   border: 2px solid var(--line);
   border-radius: var(--radius-sm);
   object-fit: cover;
 }
 
+.reference-preview figcaption {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.mini-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--black);
+  color: var(--white);
+  font-size: 0.72rem;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.mask-preview-card img {
+  border-style: dashed;
+}
+
 .reference-preview span {
-  overflow: hidden;
+  overflow: visible;
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 820;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .error-toast {
@@ -1452,7 +1517,15 @@ select option {
 
 @media (max-width: 980px) {
   .workbench-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) 52px 44px;
+    gap: 7px;
+  }
+
+  .control-field {
+    flex: 1 1 112px;
+  }
+
+  .send-button {
+    flex-basis: 56px;
   }
 
   .image-board.has-images {
@@ -1533,19 +1606,26 @@ select option {
   }
 
   .workbench-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) 52px 44px;
+    gap: 7px;
+  }
+
+  .control-field,
+  .file-control {
+    flex: 1 1 128px;
   }
 
   .tool-pill {
     justify-content: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
   }
 
-  .reference-uploader,
   .send-button {
-    height: 100%;
+    flex: 1 1 72px;
+    height: 40px;
+  }
+
+  .reference-preview {
+    grid-template-columns: 1fr;
   }
 
   .ratio-grid {
@@ -1601,12 +1681,22 @@ select option {
   }
 
   .workbench-actions {
-    grid-template-columns: 1fr 1fr;
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
-  .reference-uploader,
+  .control-field,
+  .file-control,
   .send-button {
     width: 100%;
+    min-width: 0;
+  }
+
+  .custom-select-field,
+  .custom-select-trigger,
+  .disabled-select-like,
+  .toggle-select-like {
+    min-width: 0;
   }
 }
 

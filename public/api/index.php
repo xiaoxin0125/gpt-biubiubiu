@@ -7,12 +7,16 @@ ini_set('display_errors', '0');
 ini_set('log_errors', '1');
 ob_start();
 
-define('DEFAULT_REQUEST_TIMEOUT', 600);
-define('MAX_REQUEST_TIMEOUT', 600);
-define('REQUEST_TIMEOUT_BUFFER', 20);
+define('DEFAULT_REQUEST_TIMEOUT', 999);
+define('MAX_REQUEST_TIMEOUT', 999);
+define('REQUEST_TIMEOUT_BUFFER', 60);
+define('MAX_EDIT_IMAGES', 16);
+define('MAX_MASK_SIZE_BYTES', 4 * 1024 * 1024);
 
 @ini_set('max_execution_time', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
+@ini_set('default_socket_timeout', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
 @set_time_limit(MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER);
+@ignore_user_abort(true);
 
 $configCandidates = [
     __DIR__ . '/.php-api-config.php',
@@ -141,7 +145,7 @@ function ensure_schema(): void
       model VARCHAR(128) DEFAULT NULL,
       api_name VARCHAR(128) DEFAULT NULL,
       api_base_url VARCHAR(255) DEFAULT NULL,
-      request_timeout INT UNSIGNED NOT NULL DEFAULT 600,
+      request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
       stream_enabled TINYINT(1) NOT NULL DEFAULT 0,
       size VARCHAR(64) DEFAULT NULL,
       quality VARCHAR(64) DEFAULT NULL,
@@ -202,7 +206,7 @@ function ensure_schema(): void
     ensure_column($db, 'users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
     ensure_column($db, 'user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
     ensure_column($db, 'user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
-    ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 600 AFTER api_base_url');
+    ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');
     ensure_column($db, 'user_settings', 'stream_enabled', 'stream_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER request_timeout');
     ensure_column($db, 'user_settings', 'background', 'background VARCHAR(64) DEFAULT NULL AFTER response_format');
     ensure_column($db, 'user_settings', 'output_compression', 'output_compression VARCHAR(16) DEFAULT NULL AFTER output_format');
@@ -211,7 +215,7 @@ function ensure_schema(): void
     ensure_column($db, 'image_jobs', 'error_message', 'error_message TEXT DEFAULT NULL AFTER revised_prompt');
     ensure_column($db, 'image_jobs', 'result_json', 'result_json JSON DEFAULT NULL AFTER params_json');
     ensure_column($db, 'image_jobs', 'completed_at', 'completed_at TIMESTAMP NULL DEFAULT NULL AFTER created_at');
-    $db->exec('UPDATE user_settings SET request_timeout = 600 WHERE request_timeout = 180');
+    $db->exec('UPDATE user_settings SET request_timeout = 999 WHERE request_timeout IN (180, 600)');
     $db->exec("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");
     $db->exec("UPDATE user_settings SET size = '768x768' WHERE size = '1024x1024'");
 
@@ -454,13 +458,13 @@ function clamp_int($value, int $min, int $max): int
     return max($min, min($max, (int) $value));
 }
 
-function openai_payload(array $body): array
+function generation_payload(array $body): array
 {
     $outputFormat = allowed_output_format($body['output_format'] ?? null) ? $body['output_format'] : 'png';
     $payload = [
         'model' => $body['model'] ?? cfg('openai_image_model', 'gpt-image-2'),
         'prompt' => $body['prompt'] ?? '',
-        'n' => clamp_int($body['n'] ?? 1, 1, 10),
+        'n' => 1,
         'output_format' => $outputFormat,
     ];
 
@@ -472,6 +476,28 @@ function openai_payload(array $body): array
         $payload['output_compression'] = clamp_int($body['output_compression'], 0, 100);
     }
     if (!empty($body['user'])) $payload['user'] = (string) $body['user'];
+    if (($body['stream'] ?? null) === true || ($body['stream'] ?? null) === 'true' || ($body['stream'] ?? null) === 1 || ($body['stream'] ?? null) === '1') $payload['stream'] = true;
+
+    return $payload;
+}
+
+function edit_payload(array $body): array
+{
+    $outputFormat = allowed_output_format($body['output_format'] ?? null) ? $body['output_format'] : 'png';
+    $payload = [
+        'model' => $body['model'] ?? cfg('openai_image_model', 'gpt-image-2'),
+        'prompt' => $body['prompt'] ?? '',
+        'output_format' => $outputFormat,
+    ];
+
+    if (!empty($body['size'])) $payload['size'] = (string) $body['size'];
+    if (allowed_quality($body['quality'] ?? null)) $payload['quality'] = $body['quality'];
+    if (allowed_background($body['background'] ?? null) && $body['background'] !== 'auto') $payload['background'] = $body['background'];
+    if (in_array($outputFormat, ['jpeg', 'webp'], true) && isset($body['output_compression']) && $body['output_compression'] !== '') {
+        $payload['output_compression'] = clamp_int($body['output_compression'], 0, 100);
+    }
+    if (!empty($body['user'])) $payload['user'] = (string) $body['user'];
+    if (($body['stream'] ?? null) === true || ($body['stream'] ?? null) === 'true' || ($body['stream'] ?? null) === 1 || ($body['stream'] ?? null) === '1') $payload['stream'] = true;
 
     return $payload;
 }
@@ -479,6 +505,22 @@ function openai_payload(array $body): array
 function parse_json_text(string $text): array
 {
     if ($text === '') return [];
+
+    $trimmed = trim($text);
+    if (array_filter(preg_split('/\r?\n/', $trimmed) ?: [], static fn($line) => strpos(trim((string) $line), 'data:') === 0)) {
+        $lastJson = null;
+        foreach (preg_split('/\r?\n/', $trimmed) ?: [] as $line) {
+            $value = trim($line);
+            if (strpos($value, 'data:') !== 0) continue;
+            $payload = trim(substr($value, 5));
+            if ($payload === '' || $payload === '[DONE]') continue;
+            $decoded = json_decode($payload, true);
+            if (is_array($decoded) && isset($decoded['data']) && is_array($decoded['data'])) return $decoded;
+            if (is_array($decoded)) $lastJson = $decoded;
+        }
+        if (is_array($lastJson)) return $lastJson;
+    }
+
     $decoded = json_decode($text, true);
     if (is_array($decoded)) return $decoded;
 
@@ -500,7 +542,7 @@ function upstream_error_payload(array $data, string $fallback, int $status): arr
     $message = upstream_error_message($data, $fallback);
     if ($status === 504 && stripos($message, 'stream disconnected before completion') !== false) {
         return [
-            'error' => '上游 API 中转 504：生图流在完成前断开。请把中转后台的请求超时、read timeout、proxy_read_timeout 调到 600 秒以上，或降低尺寸/质量后重试。',
+            'error' => '上游 API 中转 504：生图流在完成前断开。应用层超时已支持最高 999 秒；仍失败时请把宝塔/Nginx 的 request timeout、read timeout、proxy_read_timeout 或 fastcgi_read_timeout 调到 999 秒以上，或降低尺寸/质量后重试。',
             'detail' => $data,
         ];
     }
@@ -522,10 +564,10 @@ function image_mime_for_output_format($format): string
     return 'image/png';
 }
 
-function normalize_image_data(array $data): array
+function normalize_image_data(array $data, $outputFormat = 'png'): array
 {
     $items = [];
-    $mime = image_mime_for_output_format($data['output_format'] ?? 'png');
+    $mime = image_mime_for_output_format($outputFormat);
     foreach (($data['data'] ?? []) as $index => $item) {
         $items[] = [
             'id' => (int) (microtime(true) * 1000) . '-' . $index,
@@ -777,7 +819,10 @@ function curl_json(string $url, array $headers, string $body): array
         CURLOPT_POST => true,
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_POSTFIELDS => $body,
+        CURLOPT_CONNECTTIMEOUT => 30,
         CURLOPT_TIMEOUT => effective_request_timeout(),
+        CURLOPT_LOW_SPEED_LIMIT => 1,
+        CURLOPT_LOW_SPEED_TIME => effective_request_timeout(),
     ]);
     $text = curl_exec($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -788,7 +833,96 @@ function curl_json(string $url, array $headers, string $body): array
     return [$status, (string) $text];
 }
 
-function curl_multipart(string $url, array $headers, array $fields): array
+function uploaded_file_items(string $field): array
+{
+    if (empty($_FILES[$field])) return [];
+    $files = $_FILES[$field];
+    $items = [];
+
+    if (is_array($files['tmp_name'] ?? null)) {
+        foreach ($files['tmp_name'] as $index => $tmpName) {
+            if (!$tmpName || (($files['error'][$index] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK)) continue;
+            $items[] = [
+                'tmp_name' => $tmpName,
+                'type' => $files['type'][$index] ?? 'image/png',
+                'name' => $files['name'][$index] ?? ('image-' . ($index + 1) . '.png'),
+                'size' => (int) ($files['size'][$index] ?? 0),
+            ];
+        }
+        return $items;
+    }
+
+    if (($files['tmp_name'] ?? '') && (($files['error'] ?? UPLOAD_ERR_OK) === UPLOAD_ERR_OK)) {
+        $items[] = [
+            'tmp_name' => $files['tmp_name'],
+            'type' => $files['type'] ?? 'image/png',
+            'name' => $files['name'] ?? 'image.png',
+            'size' => (int) ($files['size'] ?? 0),
+        ];
+    }
+
+    return $items;
+}
+
+function uploaded_edit_images(): array
+{
+    $items = array_merge(uploaded_file_items('image'), uploaded_file_items('image[]'));
+    $items = array_slice($items, 0, MAX_EDIT_IMAGES);
+    foreach ($items as $item) {
+        $mime = strtolower((string) ($item['type'] ?? ''));
+        if (!in_array($mime, ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'], true)) {
+            json_response(['error' => '参考图仅支持 png / jpg / webp'], 400);
+        }
+    }
+    return $items;
+}
+
+function uploaded_mask_file(): ?array
+{
+    $items = uploaded_file_items('mask');
+    if (!$items) return null;
+    $mask = $items[0];
+    $mime = strtolower((string) ($mask['type'] ?? ''));
+    if ($mime !== 'image/png') json_response(['error' => 'mask 必须是 PNG 图片'], 400);
+    if (($mask['size'] ?? 0) > MAX_MASK_SIZE_BYTES) json_response(['error' => 'mask 文件必须小于 4MB'], 400);
+    return $mask;
+}
+
+function multipart_header_value(string $value): string
+{
+    return str_replace(["\r", "\n", '"'], ['', '', '\\"'], $value);
+}
+
+function build_multipart_body(array $parts): array
+{
+    $boundary = '----gpt-biubiubiu-' . bin2hex(random_bytes(12));
+    $body = '';
+
+    foreach ($parts as $part) {
+        $name = multipart_header_value((string) ($part['name'] ?? ''));
+        if ($name === '') continue;
+
+        $body .= "--{$boundary}\r\n";
+        if (!empty($part['file'])) {
+            $filename = multipart_header_value((string) ($part['filename'] ?? 'file'));
+            $mime = multipart_header_value((string) ($part['type'] ?? 'application/octet-stream'));
+            $contents = file_get_contents((string) $part['file']);
+            if ($contents === false) throw new RuntimeException('读取上传文件失败：' . $filename);
+            $body .= "Content-Disposition: form-data; name=\"{$name}\"; filename=\"{$filename}\"\r\n";
+            $body .= "Content-Type: {$mime}\r\n\r\n";
+            $body .= $contents . "\r\n";
+            continue;
+        }
+
+        $body .= "Content-Disposition: form-data; name=\"{$name}\"\r\n\r\n";
+        $body .= (string) ($part['value'] ?? '') . "\r\n";
+    }
+
+    $body .= "--{$boundary}--\r\n";
+    return [$body, 'Content-Type: multipart/form-data; boundary=' . $boundary];
+}
+
+function curl_multipart(string $url, array $headers, $fields): array
 {
     if (!function_exists('curl_init')) throw new RuntimeException('PHP 未启用 cURL 扩展');
 
@@ -798,7 +932,10 @@ function curl_multipart(string $url, array $headers, array $fields): array
         CURLOPT_POST => true,
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_POSTFIELDS => $fields,
+        CURLOPT_CONNECTTIMEOUT => 30,
         CURLOPT_TIMEOUT => effective_request_timeout(),
+        CURLOPT_LOW_SPEED_LIMIT => 1,
+        CURLOPT_LOW_SPEED_TIME => effective_request_timeout(),
     ]);
     $text = curl_exec($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -979,7 +1116,7 @@ try {
             $outputFormat,
             (string) $outputCompression,
             $moderation,
-            (int) ($settings['n'] ?? 1),
+            1,
             $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3],
         ]);
         json_response(['settings' => settings_for_user((int) $user['id'])]);
@@ -1059,7 +1196,7 @@ try {
         if ($apiKey === '') json_response(['error' => '服务端未配置 OPENAI_API_KEY，且当前用户未保存 API Key'], 500);
         if (trim((string) ($body['prompt'] ?? '')) === '') json_response(['error' => '提示词不能为空'], 400);
 
-        $payload = openai_payload($body);
+        $payload = generation_payload($body);
         $jobId = create_pending_image_job($payload, 'generation');
         respond_json_and_continue(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'running', 'mode' => 'generation']], 202);
 
@@ -1078,7 +1215,7 @@ try {
                 update_image_job_failed($jobId, upstream_error_message($data, '生图接口没有返回图片数据'));
                 exit;
             }
-            $normalized = normalize_image_data($data);
+            $normalized = normalize_image_data($data, $payload['output_format'] ?? 'png');
             complete_image_job($jobId, $normalized, $payload, 'generation');
         } catch (Throwable $error) {
             update_image_job_failed($jobId, $error->getMessage());
@@ -1092,19 +1229,37 @@ try {
         if ($apiKey === '') json_response(['error' => '服务端未配置 OPENAI_API_KEY，且当前用户未保存 API Key'], 500);
         $postBody = $_POST;
         if (trim((string) ($postBody['prompt'] ?? '')) === '') json_response(['error' => '提示词不能为空'], 400);
-        if (empty($_FILES['image']['tmp_name'])) json_response(['error' => '请上传参考图'], 400);
+        $editImages = uploaded_edit_images();
+        if (!$editImages) json_response(['error' => '请上传参考图'], 400);
+        $maskFile = uploaded_mask_file();
 
-        $payload = openai_payload($postBody);
+        $payload = edit_payload($postBody);
         $jobId = create_pending_image_job($payload, 'edit');
         respond_json_and_continue(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'running', 'mode' => 'edit']], 202);
 
         try {
-            $fields = [];
+            $parts = [];
             foreach ($payload as $key => $value) {
-                if ($value !== null && $value !== '') $fields[$key] = (string) $value;
+                if ($value !== null && $value !== '') $parts[] = ['name' => $key, 'value' => (string) $value];
             }
-            $fields['image'] = new CURLFile($_FILES['image']['tmp_name'], $_FILES['image']['type'] ?: 'image/png', $_FILES['image']['name'] ?: 'reference.png');
-            [$status, $text] = curl_multipart(upstream_url('/v1/images/edits'), ['Authorization: Bearer ' . $apiKey], $fields);
+            foreach ($editImages as $imageFile) {
+                $parts[] = [
+                    'name' => 'image[]',
+                    'file' => $imageFile['tmp_name'],
+                    'type' => $imageFile['type'] ?: 'image/png',
+                    'filename' => $imageFile['name'] ?: 'image.png',
+                ];
+            }
+            if ($maskFile) {
+                $parts[] = [
+                    'name' => 'mask',
+                    'file' => $maskFile['tmp_name'],
+                    'type' => $maskFile['type'] ?: 'image/png',
+                    'filename' => $maskFile['name'] ?: 'mask.png',
+                ];
+            }
+            [$multipartBody, $multipartHeader] = build_multipart_body($parts);
+            [$status, $text] = curl_multipart(upstream_url('/v1/images/edits'), ['Authorization: Bearer ' . $apiKey, $multipartHeader], $multipartBody);
             $data = parse_json_text($text);
             if ($status < 200 || $status >= 300) {
                 $errorPayload = upstream_error_payload($data, '图生图接口请求失败', $status);
@@ -1115,7 +1270,7 @@ try {
                 update_image_job_failed($jobId, upstream_error_message($data, '图生图接口没有返回图片数据'));
                 exit;
             }
-            $normalized = normalize_image_data($data);
+            $normalized = normalize_image_data($data, $payload['output_format'] ?? 'png');
             complete_image_job($jobId, $normalized, $payload, 'edit');
         } catch (Throwable $error) {
             update_image_job_failed($jobId, $error->getMessage());

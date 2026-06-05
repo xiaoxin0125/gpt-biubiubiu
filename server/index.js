@@ -13,8 +13,11 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
 
-const DEFAULT_REQUEST_TIMEOUT = 600;
-const MAX_REQUEST_TIMEOUT = 600;
+const DEFAULT_REQUEST_TIMEOUT = 999;
+const MAX_REQUEST_TIMEOUT = 999;
+const MAX_EDIT_IMAGES = 16;
+const MAX_EDIT_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
+const MAX_MASK_SIZE_BYTES = 4 * 1024 * 1024;
 const app = express();
 const port = Number(process.env.PORT || 3030);
 const baseUrl = (process.env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/$/, '');
@@ -23,7 +26,7 @@ const systemApiKey = process.env.OPENAI_API_KEY || '';
 const sessionSecret = process.env.SESSION_SECRET || 'dev-session-secret-change-me';
 const apiKeySecret = process.env.USER_API_KEY_SECRET || process.env.SESSION_SECRET || '';
 const mysqlConfigured = Boolean(process.env.MYSQL_HOST && process.env.MYSQL_USER && process.env.MYSQL_DATABASE);
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 18 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_EDIT_IMAGE_SIZE_BYTES, files: MAX_EDIT_IMAGES + 1 } });
 const allowedImageQualities = new Set(['low', 'medium', 'high']);
 const allowedOutputFormats = new Set(['png', 'jpeg', 'webp']);
 const allowedBackgrounds = new Set(['auto', 'opaque']);
@@ -100,7 +103,7 @@ const ensureSchema = async () => {
       model VARCHAR(128) DEFAULT NULL,
       api_name VARCHAR(128) DEFAULT NULL,
       api_base_url VARCHAR(255) DEFAULT NULL,
-      request_timeout INT UNSIGNED NOT NULL DEFAULT 600,
+      request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
       stream_enabled TINYINT(1) NOT NULL DEFAULT 0,
       size VARCHAR(64) DEFAULT NULL,
       quality VARCHAR(64) DEFAULT NULL,
@@ -124,13 +127,18 @@ const ensureSchema = async () => {
     CREATE TABLE IF NOT EXISTS image_jobs (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       user_id BIGINT UNSIGNED DEFAULT NULL,
+      request_id VARCHAR(80) DEFAULT NULL,
       mode VARCHAR(32) NOT NULL DEFAULT 'generation',
+      status VARCHAR(32) NOT NULL DEFAULT 'completed',
       prompt TEXT NOT NULL,
       revised_prompt TEXT DEFAULT NULL,
+      error_message TEXT DEFAULT NULL,
       image_url TEXT DEFAULT NULL,
       image_b64 LONGTEXT DEFAULT NULL,
       params_json JSON DEFAULT NULL,
+      result_json JSON DEFAULT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at TIMESTAMP NULL DEFAULT NULL,
       INDEX idx_image_jobs_user_created (user_id, created_at),
       CONSTRAINT fk_image_jobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -170,11 +178,16 @@ const ensureSchema = async () => {
   await ensureColumn('users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
   await ensureColumn('user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
   await ensureColumn('user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
-  await ensureColumn('user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 600 AFTER api_base_url');
+  await ensureColumn('user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');
   await ensureColumn('user_settings', 'stream_enabled', 'stream_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER request_timeout');
   await ensureColumn('user_settings', 'background', 'background VARCHAR(64) DEFAULT NULL AFTER response_format');
   await ensureColumn('user_settings', 'output_compression', 'output_compression VARCHAR(16) DEFAULT NULL AFTER output_format');
-  await pool.query('UPDATE user_settings SET request_timeout = 600 WHERE request_timeout = 180');
+  await ensureColumn('image_jobs', 'request_id', 'request_id VARCHAR(80) DEFAULT NULL AFTER user_id');
+  await ensureColumn('image_jobs', 'status', "status VARCHAR(32) NOT NULL DEFAULT 'completed' AFTER mode");
+  await ensureColumn('image_jobs', 'error_message', 'error_message TEXT DEFAULT NULL AFTER revised_prompt');
+  await ensureColumn('image_jobs', 'result_json', 'result_json JSON DEFAULT NULL AFTER params_json');
+  await ensureColumn('image_jobs', 'completed_at', 'completed_at TIMESTAMP NULL DEFAULT NULL AFTER created_at');
+  await pool.query('UPDATE user_settings SET request_timeout = 999 WHERE request_timeout IN (180, 600)');
   await pool.query("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");
   await pool.query("UPDATE user_settings SET size = '768x768' WHERE size = '1024x1024'");
 
@@ -194,6 +207,26 @@ const requireDatabase = async (res) => {
 const parseJsonText = (text) => {
   if (!text) return {};
 
+  const trimmed = String(text).trim();
+  if (trimmed.split(/\r?\n/).some((line) => line.trim().startsWith('data:'))) {
+    let lastJson = null;
+    for (const line of trimmed.split(/\r?\n/)) {
+      const value = line.trim();
+      if (!value.startsWith('data:')) continue;
+      const payload = value.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+
+      try {
+        const decoded = JSON.parse(payload);
+        if (Array.isArray(decoded?.data)) return decoded;
+        lastJson = decoded;
+      } catch {
+        // 忽略非 JSON 的流式心跳片段
+      }
+    }
+    if (lastJson) return lastJson;
+  }
+
   try {
     return JSON.parse(text);
   } catch {
@@ -211,7 +244,7 @@ const upstreamErrorPayload = (data, fallback, status) => {
   const message = upstreamErrorMessage(data, fallback);
   if (status === 504 && message.toLowerCase().includes('stream disconnected before completion')) {
     return {
-      error: '上游 API 中转 504：生图流在完成前断开。请把中转后台的请求超时、read timeout、proxy_read_timeout 调到 600 秒以上，或降低尺寸/质量后重试。',
+      error: '上游 API 中转 504：生图流在完成前断开。应用层超时已支持最高 999 秒；仍失败时请把宝塔/Nginx 的 request timeout、read timeout、proxy_read_timeout 或 fastcgi_read_timeout 调到 999 秒以上，或降低尺寸/质量后重试。',
       detail: data,
     };
   }
@@ -341,12 +374,12 @@ const decryptApiKey = (settings) => {
 
 const clampNumber = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
 
-const toOpenAIImagePayload = (body = {}) => {
+const toGenerationImagePayload = (body = {}) => {
   const outputFormat = allowedOutputFormats.has(body.output_format) ? body.output_format : 'png';
   const payload = {
     model: body.model || defaultImageModel,
     prompt: body.prompt,
-    n: clampNumber(body.n || 1, 1, 10),
+    n: 1,
     output_format: outputFormat,
   };
 
@@ -358,6 +391,27 @@ const toOpenAIImagePayload = (body = {}) => {
     payload.output_compression = clampNumber(body.output_compression, 0, 100);
   }
   if (body.user) payload.user = String(body.user);
+  if (body.stream === true || body.stream === 'true' || body.stream === 1 || body.stream === '1') payload.stream = true;
+
+  return payload;
+};
+
+const toEditImagePayload = (body = {}) => {
+  const outputFormat = allowedOutputFormats.has(body.output_format) ? body.output_format : 'png';
+  const payload = {
+    model: body.model || defaultImageModel,
+    prompt: body.prompt,
+    output_format: outputFormat,
+  };
+
+  if (body.size) payload.size = String(body.size);
+  if (allowedImageQualities.has(body.quality)) payload.quality = body.quality;
+  if (allowedBackgrounds.has(body.background) && body.background !== 'auto') payload.background = body.background;
+  if (['jpeg', 'webp'].includes(outputFormat) && body.output_compression !== undefined && body.output_compression !== '') {
+    payload.output_compression = clampNumber(body.output_compression, 0, 100);
+  }
+  if (body.user) payload.user = String(body.user);
+  if (body.stream === true || body.stream === 'true' || body.stream === 1 || body.stream === '1') payload.stream = true;
 
   return payload;
 };
@@ -369,8 +423,8 @@ const imageMimeForOutputFormat = (format) => {
   return 'image/png';
 };
 
-const normalizeImageData = (data) => {
-  const imageMime = imageMimeForOutputFormat(data?.output_format || 'png');
+const normalizeImageData = (data, outputFormat = 'png') => {
+  const imageMime = imageMimeForOutputFormat(outputFormat);
   return {
     created: data?.created || Math.floor(Date.now() / 1000),
     data: Array.isArray(data?.data)
@@ -439,19 +493,156 @@ const getEffectiveRequestTimeout = async (req) => {
 
 const getEffectiveApiKey = async (req) => (await getStoredUserApiKey(req)) || systemApiKey;
 
+const imageJobOwnerValues = (req, res) => {
+  const userId = getSessionUserId(req);
+  if (userId) return [userId, null];
+  return [null, res ? getVisitorId(req, res) : req.signedCookies?.visitor_id || null];
+};
+
+const parseParamsJson = (value) => {
+  if (!value) return {};
+  if (typeof value === 'string') return parseJsonText(value);
+  return typeof value === 'object' ? value : {};
+};
+
+const createPendingImageJob = async (req, res, params, mode) => {
+  if (!pool) return null;
+
+  await ensureSchema();
+  const [userId, requestId] = imageJobOwnerValues(req, res);
+  const [result] = await pool.query(
+    'INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, params_json) VALUES (?, ?, ?, ?, ?, ?)',
+    [userId, requestId, mode, 'running', params.prompt || '', JSON.stringify(params)]
+  );
+  return result.insertId;
+};
+
+const toClientImageJob = (row) => {
+  const params = parseParamsJson(row.params_json);
+  const status = row.status || (row.image_url || row.image_b64 ? 'completed' : 'running');
+
+  return {
+    id: row.id,
+    jobId: row.id,
+    status,
+    mode: row.mode || 'generation',
+    prompt: row.prompt || params.prompt || '',
+    revised_prompt: row.revised_prompt || '',
+    error: row.error_message || '',
+    form: params,
+    createdAt: row.created_at || null,
+    finishedAt: row.completed_at || null,
+  };
+};
+
+const completedJobPayload = (row) => {
+  const job = toClientImageJob(row);
+  const params = job.form || {};
+  const imageMime = imageMimeForOutputFormat(params.output_format || 'png');
+  const resultJson = parseParamsJson(row.result_json);
+  const savedImages = Array.isArray(resultJson.data) ? resultJson.data : [];
+  const images = savedImages.length
+    ? savedImages.map((image) => ({ ...image, imageMime: image.imageMime || imageMime }))
+    : [
+        {
+          id: row.id,
+          jobId: row.id,
+          url: row.image_url || '',
+          b64_json: row.image_b64 || '',
+          imageMime,
+          revised_prompt: row.revised_prompt || '',
+        },
+      ];
+
+  images[0].id = images[0].id || row.id;
+  images[0].jobId = images[0].jobId || row.id;
+
+  return {
+    created: row.completed_at ? Math.floor(new Date(row.completed_at).getTime() / 1000) : Math.floor(Date.now() / 1000),
+    data: images,
+    job,
+  };
+};
+
+const imageJobResponse = (row) => {
+  const job = toClientImageJob(row);
+  if (job.status === 'completed' && (row.image_url || row.image_b64)) return completedJobPayload(row);
+  return { job };
+};
+
+const fetchOwnedImageJob = async (req, jobId) => {
+  if (!pool) return null;
+
+  await ensureSchema();
+  const [rows] = await pool.query('SELECT * FROM image_jobs WHERE id = ? LIMIT 1', [jobId]);
+  const row = rows[0];
+  if (!row) return null;
+
+  const userId = getSessionUserId(req);
+  const visitorId = req.signedCookies?.visitor_id || '';
+  if (row.user_id) return Number(row.user_id) === Number(userId) ? row : null;
+  if (row.request_id) return visitorId && String(row.request_id) === String(visitorId) ? row : null;
+  return userId ? row : null;
+};
+
+const updateImageJobFailed = async (jobId, message) => {
+  if (!pool || !jobId) return;
+
+  try {
+    await pool.query('UPDATE image_jobs SET status = ?, error_message = ?, completed_at = NOW() WHERE id = ?', ['failed', message, jobId]);
+  } catch {
+    // ignore persistence failure for the dev fallback path
+  }
+};
+
+const completeImageJob = async (jobId, normalized, params) => {
+  if (!pool || !jobId) return normalized;
+
+  const images = Array.isArray(normalized.data) ? normalized.data : [];
+  if (!images.length) throw new Error('生图接口没有返回图片数据');
+
+  const first = images[0];
+  await pool.query(
+    'UPDATE image_jobs SET status = ?, revised_prompt = ?, image_url = ?, image_b64 = ?, params_json = ?, result_json = ?, completed_at = NOW() WHERE id = ?',
+    [
+      'completed',
+      first.revised_prompt || '',
+      first.url || null,
+      first.b64_json || null,
+      JSON.stringify(params),
+      JSON.stringify({ data: images }),
+      jobId,
+    ]
+  );
+
+  images[0].jobId = jobId;
+  return { ...normalized, data: images };
+};
+
 const persistImageJobs = async (req, images, params, mode) => {
   if (!pool || !images.length) return images;
 
   try {
     await ensureSchema();
-    const userId = getSessionUserId(req);
+    const [userId, requestId] = imageJobOwnerValues(req);
     const result = [];
 
     for (const image of images) {
       const [insertResult] = await pool.query(
-        `INSERT INTO image_jobs (user_id, mode, prompt, revised_prompt, image_url, image_b64, params_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [userId, mode, params.prompt || '', image.revised_prompt || '', image.url || null, image.b64_json || null, JSON.stringify(params)]
+        `INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, revised_prompt, image_url, image_b64, params_json, result_json, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          userId,
+          requestId,
+          mode,
+          'completed',
+          params.prompt || '',
+          image.revised_prompt || '',
+          image.url || null,
+          image.b64_json || null,
+          JSON.stringify(params),
+          JSON.stringify({ data: [image] }),
+        ]
       );
       result.push({ ...image, jobId: insertResult.insertId });
     }
@@ -460,6 +651,43 @@ const persistImageJobs = async (req, images, params, mode) => {
   } catch {
     return images;
   }
+};
+
+const normalizeUploadedEditImages = (files = {}) => {
+  const items = [
+    ...(Array.isArray(files.image) ? files.image : []),
+    ...(Array.isArray(files['image[]']) ? files['image[]'] : []),
+    ...(Array.isArray(files.referenceImage) ? files.referenceImage : []),
+  ].slice(0, MAX_EDIT_IMAGES);
+
+  for (const file of items) {
+    const mime = String(file.mimetype || '').toLowerCase();
+    if (!['image/png', 'image/jpeg', 'image/jpg', 'image/webp'].includes(mime)) {
+      const error = new Error('参考图仅支持 png / jpg / webp');
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  return items;
+};
+
+const normalizeUploadedMask = (files = {}) => {
+  const mask = Array.isArray(files.mask) ? files.mask[0] : null;
+  if (!mask) return null;
+
+  if (String(mask.mimetype || '').toLowerCase() !== 'image/png') {
+    const error = new Error('mask 必须是 PNG 图片');
+    error.status = 400;
+    throw error;
+  }
+  if (Number(mask.size || 0) > MAX_MASK_SIZE_BYTES) {
+    const error = new Error('mask 文件必须小于 4MB');
+    error.status = 400;
+    throw error;
+  }
+
+  return mask;
 };
 
 const toClientWallItem = (item) => ({
@@ -480,6 +708,24 @@ const toClientWallItem = (item) => ({
 
 app.get('/api/health', async (req, res) => {
   try {
+    if (req.query.job !== undefined) {
+      if (!(await requireDatabase(res))) return;
+      const jobId = Number(req.query.job || 0);
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        res.json({ job: { id: jobId, jobId, status: 'failed', error: '任务不存在或无权访问' } });
+        return;
+      }
+
+      const row = await fetchOwnedImageJob(req, jobId);
+      if (!row) {
+        res.json({ job: { id: jobId, jobId, status: 'failed', error: '任务不存在或无权访问' } });
+        return;
+      }
+
+      res.json(imageJobResponse(row));
+      return;
+    }
+
     const settings = await getStoredUserSettings(req);
     const apiName = settings?.api_name || 'OpenAI Compatible';
     const configured = Boolean(await getEffectiveApiKey(req));
@@ -699,7 +945,7 @@ app.post('/api/settings', async (req, res) => {
       outputFormat,
       String(outputCompression),
       moderation,
-      Number(settings.n || 1),
+      1,
       apiFields.api_key_ciphertext,
       apiFields.api_key_iv,
       apiFields.api_key_tag,
@@ -780,6 +1026,24 @@ app.delete('/api/wall/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get(['/api/image-job', '/api/image-jobs', '/api/image-jobs/:id'], async (req, res) => {
+  if (!(await requireDatabase(res))) return;
+
+  const jobId = Number(req.params.id || req.query.id || 0);
+  if (!Number.isFinite(jobId) || jobId <= 0) {
+    res.json({ job: { id: jobId, jobId, status: 'failed', error: '任务不存在或无权访问' } });
+    return;
+  }
+
+  const row = await fetchOwnedImageJob(req, jobId);
+  if (!row) {
+    res.json({ job: { id: jobId, jobId, status: 'failed', error: '任务不存在或无权访问' } });
+    return;
+  }
+
+  res.json(imageJobResponse(row));
+});
+
 app.post('/api/images/generations', async (req, res) => {
   const effectiveApiKey = await getEffectiveApiKey(req);
 
@@ -793,11 +1057,10 @@ app.post('/api/images/generations', async (req, res) => {
     return;
   }
 
-  const payload = toOpenAIImagePayload(req.body);
+  const payload = toGenerationImagePayload(req.body);
   const effectiveBaseUrl = await getEffectiveApiBaseUrl(req);
   const requestTimeout = await getEffectiveRequestTimeout(req);
-
-  try {
+  const runGeneration = async () => {
     const response = await fetch(buildUpstreamUrl(effectiveBaseUrl, '/v1/images/generations'), {
       method: 'POST',
       headers: {
@@ -812,28 +1075,53 @@ app.post('/api/images/generations', async (req, res) => {
     const data = parseJsonText(text);
 
     if (!response.ok) {
-      res.status(response.status).json(upstreamErrorPayload(data, '生图接口请求失败', response.status));
-      return;
+      const payloadError = upstreamErrorPayload(data, '生图接口请求失败', response.status);
+      const error = new Error(payloadError.error || '生图接口请求失败');
+      error.status = response.status;
+      error.detail = payloadError;
+      throw error;
     }
 
     const invalidResponse = assertImageResponse(data, '生图接口没有返回图片数据');
     if (invalidResponse) {
-      res.status(502).json(invalidResponse);
-      return;
+      const error = new Error(invalidResponse.error || '生图接口没有返回图片数据');
+      error.status = 502;
+      error.detail = invalidResponse;
+      throw error;
     }
 
-    const normalized = normalizeImageData(data);
+    return normalizeImageData(data, payload.output_format);
+  };
+
+  if (pool) {
+    if (!(await requireDatabase(res))) return;
+    const jobId = await createPendingImageJob(req, res, payload, 'generation');
+    res.status(202).json({ job: { id: jobId, jobId, status: 'running', mode: 'generation' } });
+
+    runGeneration()
+      .then((normalized) => completeImageJob(jobId, normalized, payload))
+      .catch((error) => updateImageJobFailed(jobId, error instanceof Error ? error.message : String(error)));
+    return;
+  }
+
+  try {
+    const normalized = await runGeneration();
     normalized.data = await persistImageJobs(req, normalized.data, payload, 'generation');
     res.json(normalized);
   } catch (error) {
-    res.status(500).json({
+    res.status(error.status || 500).json(error.detail || {
       error: '代理请求异常',
       detail: error instanceof Error ? error.message : String(error),
     });
   }
 });
 
-app.post('/api/images/edits', upload.single('image'), async (req, res) => {
+app.post('/api/images/edits', upload.fields([
+  { name: 'image', maxCount: MAX_EDIT_IMAGES },
+  { name: 'image[]', maxCount: MAX_EDIT_IMAGES },
+  { name: 'referenceImage', maxCount: MAX_EDIT_IMAGES },
+  { name: 'mask', maxCount: 1 },
+]), async (req, res) => {
   const effectiveApiKey = await getEffectiveApiKey(req);
 
   if (!effectiveApiKey) {
@@ -846,23 +1134,41 @@ app.post('/api/images/edits', upload.single('image'), async (req, res) => {
     return;
   }
 
-  if (!req.file?.buffer) {
+  let editImages = [];
+  let maskFile = null;
+  try {
+    editImages = normalizeUploadedEditImages(req.files || {});
+    maskFile = normalizeUploadedMask(req.files || {});
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || '上传文件不符合要求' });
+    return;
+  }
+
+  if (!editImages.length) {
     res.status(400).json({ error: '请上传参考图' });
     return;
   }
 
-  const payload = toOpenAIImagePayload(req.body);
+  const payload = toEditImagePayload(req.body);
   const effectiveBaseUrl = await getEffectiveApiBaseUrl(req);
   const requestTimeout = await getEffectiveRequestTimeout(req);
-  const formData = new FormData();
-  const imageBlob = new Blob([req.file.buffer], { type: req.file.mimetype || 'image/png' });
-  formData.append('image', imageBlob, req.file.originalname || 'reference.png');
+  const runEdit = async () => {
+    const formData = new FormData();
 
-  Object.entries(payload).forEach(([key, value]) => {
-    if (value !== undefined && value !== '') formData.append(key, String(value));
-  });
+    Object.entries(payload).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') formData.append(key, String(value));
+    });
 
-  try {
+    editImages.forEach((image, index) => {
+      const imageBlob = new Blob([image.buffer], { type: image.mimetype || 'image/png' });
+      formData.append('image[]', imageBlob, image.originalname || `image-${index + 1}.png`);
+    });
+
+    if (maskFile) {
+      const maskBlob = new Blob([maskFile.buffer], { type: maskFile.mimetype || 'image/png' });
+      formData.append('mask', maskBlob, maskFile.originalname || 'mask.png');
+    }
+
     const response = await fetch(buildUpstreamUrl(effectiveBaseUrl, '/v1/images/edits'), {
       method: 'POST',
       headers: {
@@ -876,21 +1182,41 @@ app.post('/api/images/edits', upload.single('image'), async (req, res) => {
     const data = parseJsonText(text);
 
     if (!response.ok) {
-      res.status(response.status).json(upstreamErrorPayload(data, '图生图接口请求失败', response.status));
-      return;
+      const payloadError = upstreamErrorPayload(data, '图生图接口请求失败', response.status);
+      const error = new Error(payloadError.error || '图生图接口请求失败');
+      error.status = response.status;
+      error.detail = payloadError;
+      throw error;
     }
 
     const invalidResponse = assertImageResponse(data, '图生图接口没有返回图片数据');
     if (invalidResponse) {
-      res.status(502).json(invalidResponse);
-      return;
+      const error = new Error(invalidResponse.error || '图生图接口没有返回图片数据');
+      error.status = 502;
+      error.detail = invalidResponse;
+      throw error;
     }
 
-    const normalized = normalizeImageData(data);
+    return normalizeImageData(data, payload.output_format);
+  };
+
+  if (pool) {
+    if (!(await requireDatabase(res))) return;
+    const jobId = await createPendingImageJob(req, res, payload, 'edit');
+    res.status(202).json({ job: { id: jobId, jobId, status: 'running', mode: 'edit' } });
+
+    runEdit()
+      .then((normalized) => completeImageJob(jobId, normalized, payload))
+      .catch((error) => updateImageJobFailed(jobId, error instanceof Error ? error.message : String(error)));
+    return;
+  }
+
+  try {
+    const normalized = await runEdit();
     normalized.data = await persistImageJobs(req, normalized.data, payload, 'edit');
     res.json(normalized);
   } catch (error) {
-    res.status(500).json({
+    res.status(error.status || 500).json(error.detail || {
       error: '图生图代理请求异常',
       detail: error instanceof Error ? error.message : String(error),
     });

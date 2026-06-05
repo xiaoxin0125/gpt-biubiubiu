@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const HISTORY_KEY = 'gpt-biubiubiu:image-history';
+const MAX_REFERENCE_IMAGES = 16;
+const MAX_REQUEST_TIMEOUT_SECONDS = 999;
+const MAX_MASK_SIZE_BYTES = 4 * 1024 * 1024;
 
 const qualityOptions = [
   { label: 'auto', value: 'auto' },
@@ -92,7 +95,7 @@ const defaultForm = {
   quality: 'auto',
   background: 'auto',
   output_format: 'png',
-  output_compression: 100,
+  output_compression: 85,
   moderation: 'auto',
 };
 
@@ -124,7 +127,7 @@ const emptyPasswordForm = {
 const defaultApiConfigForm = {
   apiName: 'OpenAI Compatible',
   apiBaseUrl: '',
-  requestTimeout: 600,
+  requestTimeout: MAX_REQUEST_TIMEOUT_SECONDS,
   streamEnabled: false,
 };
 
@@ -149,6 +152,7 @@ const normalizeForm = (value = {}) => {
     output_format: normalizeOutputFormat(nextForm.output_format),
     output_compression: normalizeCompression(nextForm.output_compression ?? defaultForm.output_compression),
     moderation: normalizeModeration(nextForm.moderation),
+    n: 1,
   };
 };
 
@@ -341,7 +345,8 @@ function App() {
   const [history, setHistory] = useState([]);
   const [images, setImages] = useState([]);
   const [wallItems, setWallItems] = useState([]);
-  const [referenceImage, setReferenceImage] = useState(null);
+  const [referenceImages, setReferenceImages] = useState([]);
+  const [maskImage, setMaskImage] = useState(null);
   const [user, setUser] = useState(null);
   const [settingsMeta, setSettingsMeta] = useState(null);
   const [authMode, setAuthMode] = useState('login');
@@ -362,6 +367,9 @@ function App() {
   const [openSelect, setOpenSelect] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
 
+  const hasReferenceImages = referenceImages.length > 0;
+  const canCompressOutput = ['jpeg', 'webp'].includes(normalizeOutputFormat(form.output_format));
+  const referenceNames = referenceImages.map((image, index) => `图${index + 1}:${image.name}`).join('，');
   const availableRatios = getAvailableRatios(sizeDraft.resolution);
   const activeSize = getDraftSize(sizeDraft);
   const displaySize = activeSize || '自动';
@@ -418,13 +426,13 @@ function App() {
     );
   };
 
-  const buildPayload = (prompt) => {
-    const normalized = normalizeForm({ ...form, prompt, n: Number(form.n || 1) });
+  const buildGenerationPayload = (prompt) => {
+    const normalized = normalizeForm({ ...form, prompt, n: 1 });
     const outputFormat = normalizeOutputFormat(normalized.output_format);
     const payload = {
       model: normalized.model || defaultForm.model,
       prompt,
-      n: clampNumber(Number(normalized.n || 1), 1, 10),
+      n: 1,
       output_format: outputFormat,
       moderation: normalizeModeration(normalized.moderation),
     };
@@ -433,6 +441,25 @@ function App() {
     if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
     if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
     if (['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
+    if (apiConfigForm.streamEnabled) payload.stream = true;
+
+    return payload;
+  };
+
+  const buildEditPayload = (prompt) => {
+    const normalized = normalizeForm({ ...form, prompt, n: 1 });
+    const outputFormat = normalizeOutputFormat(normalized.output_format);
+    const payload = {
+      model: normalized.model || defaultForm.model,
+      prompt,
+      output_format: outputFormat,
+    };
+
+    if (normalized.size) payload.size = normalized.size;
+    if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
+    if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
+    if (['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
+    if (apiConfigForm.streamEnabled) payload.stream = true;
 
     return payload;
   };
@@ -636,17 +663,70 @@ function App() {
   const getElapsedSeconds = (item) => Math.max(0, Math.floor(((item?.finishedAt ? new Date(item.finishedAt).getTime() : nowTick) - new Date(item?.startedAt || item?.createdAt || Date.now()).getTime()) / 1000));
 
   const handleReferenceChange = (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
+    if (!files.length) return;
 
-    if (referenceImage?.previewUrl) URL.revokeObjectURL(referenceImage.previewUrl);
-    setReferenceImage({ file, name: file.name, previewUrl: URL.createObjectURL(file) });
+    setReferenceImages((current) => {
+      const remaining = Math.max(0, MAX_REFERENCE_IMAGES - current.length);
+      const nextFiles = files.slice(0, remaining).map((file) => ({
+        id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+        file,
+        name: file.name,
+        previewUrl: URL.createObjectURL(file),
+      }));
+
+      if (files.length > remaining) setError(`参考图最多支持 ${MAX_REFERENCE_IMAGES} 张，已保留前 ${MAX_REFERENCE_IMAGES} 张。`);
+      return [...current, ...nextFiles];
+    });
     event.target.value = '';
   };
 
+  const handleMaskChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'image/png') {
+      setError('mask 必须是 PNG 图片。');
+      event.target.value = '';
+      return;
+    }
+
+    if (file.size > MAX_MASK_SIZE_BYTES) {
+      setError('mask 文件必须小于 4MB。');
+      event.target.value = '';
+      return;
+    }
+
+    if (maskImage?.previewUrl) URL.revokeObjectURL(maskImage.previewUrl);
+    setMaskImage({ file, name: file.name, previewUrl: URL.createObjectURL(file) });
+    event.target.value = '';
+  };
+
+  const removeReference = (id) => {
+    const willClearMask = referenceImages.length === 1 && referenceImages[0]?.id === id;
+    setReferenceImages((current) => {
+      const target = current.find((item) => item.id === id);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return current.filter((item) => item.id !== id);
+    });
+    if (willClearMask && maskImage?.previewUrl) {
+      URL.revokeObjectURL(maskImage.previewUrl);
+      setMaskImage(null);
+    }
+  };
+
   const clearReference = () => {
-    if (referenceImage?.previewUrl) URL.revokeObjectURL(referenceImage.previewUrl);
-    setReferenceImage(null);
+    referenceImages.forEach((image) => {
+      if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+    });
+    if (maskImage?.previewUrl) URL.revokeObjectURL(maskImage.previewUrl);
+    setReferenceImages([]);
+    setMaskImage(null);
+  };
+
+  const clearMask = () => {
+    if (maskImage?.previewUrl) URL.revokeObjectURL(maskImage.previewUrl);
+    setMaskImage(null);
   };
 
   const generate = async (event) => {
@@ -659,12 +739,12 @@ function App() {
     }
 
     setError('');
-    setStatus((current) => ({ ...current, loading: true, message: referenceImage ? 'Editing' : 'Generating' }));
+    setStatus((current) => ({ ...current, loading: true, message: hasReferenceImages ? 'Editing' : 'Generating' }));
     setView('generate');
 
     const requestId = `request-${Date.now()}`;
     const startedAt = new Date().toISOString();
-    const imageForm = normalizeForm({ ...form, prompt, n: Number(form.n || 1) });
+    const imageForm = normalizeForm({ ...form, prompt, n: 1 });
     const pendingItem = {
       id: requestId,
       requestId,
@@ -673,14 +753,14 @@ function App() {
       prompt,
       startedAt,
       createdAt: startedAt,
-      source: referenceImage ? 'edit' : 'generated',
-      referenceName: referenceImage?.name || '',
+      source: hasReferenceImages ? 'edit' : 'generated',
+      referenceName: referenceNames,
     };
     setImages((items) => [pendingItem, ...items]);
 
     try {
-      const payload = buildPayload(prompt);
-      const initialData = referenceImage
+      const payload = hasReferenceImages ? buildEditPayload(prompt) : buildGenerationPayload(prompt);
+      const initialData = hasReferenceImages
         ? await submitImageEdit(payload)
         : await requestJson('/api/images/generations', {
             method: 'POST',
@@ -703,8 +783,8 @@ function App() {
             startedAt,
             finishedAt,
             createdAt: finishedAt,
-            source: referenceImage ? 'edit' : 'generated',
-            referenceName: referenceImage?.name || '',
+            source: hasReferenceImages ? 'edit' : 'generated',
+            referenceName: referenceNames,
           }))
         : [];
 
@@ -742,7 +822,10 @@ function App() {
 
   const submitImageEdit = (payload) => {
     const formData = new FormData();
-    formData.append('image', referenceImage.file);
+    referenceImages.forEach((image) => {
+      formData.append('image[]', image.file, image.name);
+    });
+    if (maskImage?.file) formData.append('mask', maskImage.file, maskImage.name);
     Object.entries(payload).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== '') formData.append(key, String(value));
     });
@@ -847,7 +930,7 @@ function App() {
             ...normalizeForm(form),
             apiName: apiConfigForm.apiName,
             apiBaseUrl: apiConfigForm.apiBaseUrl.replace(/\s+/g, ''),
-            requestTimeout: Number(apiConfigForm.requestTimeout || defaultApiConfigForm.requestTimeout),
+            requestTimeout: clampNumber(Number(apiConfigForm.requestTimeout || defaultApiConfigForm.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
             streamEnabled: apiConfigForm.streamEnabled,
           },
           apiKey,
@@ -1096,12 +1179,10 @@ function App() {
                 className: 'control-field',
               })}
 
-              {['jpeg', 'webp'].includes(form.output_format) ? (
-                <label className="control-field count-field">
-                  <span>压缩</span>
-                  <input min="0" max="100" type="number" value={form.output_compression} onChange={(event) => updateForm('output_compression', event.target.value)} />
-                </label>
-              ) : null}
+              <label className={canCompressOutput ? 'control-field count-field' : 'control-field count-field is-disabled'}>
+                <span>压缩</span>
+                <input min="0" max="100" type="number" value={form.output_compression} disabled={!canCompressOutput} onChange={(event) => updateForm('output_compression', event.target.value)} />
+              </label>
 
               {renderSelect({
                 id: 'workbench-moderation',
@@ -1109,21 +1190,25 @@ function App() {
                 value: form.moderation,
                 options: moderationOptions,
                 onChange: (value) => updateForm('moderation', value),
+                disabled: hasReferenceImages,
                 className: 'control-field',
               })}
 
-              <label className="control-field count-field">
+              <label className="control-field count-field is-disabled">
                 <span>数量</span>
-                <input min="1" max="4" type="number" value={form.n} onChange={(event) => updateForm('n', event.target.value)} />
+                <input min="1" max="1" type="number" value="1" disabled readOnly />
               </label>
 
-              <label className={referenceImage ? 'reference-uploader has-file' : 'reference-uploader'} title={referenceImage?.name || '上传参考图'} aria-label="上传参考图">
-                <input type="file" accept="image/*" onChange={handleReferenceChange} />
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M9 7.5 7.2 5.7A4.2 4.2 0 0 0 1.3 11.6l3.6 3.6a4.2 4.2 0 0 0 5.9 0l1.4-1.4" />
-                  <path d="m15 16.5 1.8 1.8a4.2 4.2 0 0 0 5.9-5.9l-3.6-3.6a4.2 4.2 0 0 0-5.9 0l-1.4 1.4" />
-                  <path d="m8.8 15.2 6.4-6.4" />
-                </svg>
+              <label className={hasReferenceImages ? 'control-field file-control has-file' : 'control-field file-control'} title={referenceNames || '上传参考图'} aria-label="上传参考图">
+                <span>参考图</span>
+                <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleReferenceChange} />
+                <strong>{hasReferenceImages ? `${referenceImages.length} 张` : '上传'}</strong>
+              </label>
+
+              <label className={hasReferenceImages ? 'control-field file-control mask-control' : 'control-field file-control mask-control is-disabled'} title={maskImage?.name || '上传 mask'} aria-label="上传 mask">
+                <span>Mask</span>
+                <input type="file" accept="image/png" disabled={!hasReferenceImages} onChange={handleMaskChange} />
+                <strong>{maskImage ? '已选择' : hasReferenceImages ? '可选' : '先传图'}</strong>
               </label>
 
               <button type="submit" className="send-button" disabled={status.loading} aria-label="生成图片">
@@ -1131,11 +1216,26 @@ function App() {
               </button>
             </div>
 
-            {referenceImage ? (
+            {hasReferenceImages ? (
               <div className="reference-preview">
-                <img src={referenceImage.previewUrl} alt="参考图" />
-                <span>{referenceImage.name}</span>
-                <button type="button" className="text-button" onClick={clearReference}>移除参考图</button>
+                <div className="reference-preview-list">
+                  {referenceImages.map((image, index) => (
+                    <figure key={image.id}>
+                      <img src={image.previewUrl} alt={`参考图 ${index + 1}`} />
+                      <figcaption>图{index + 1}</figcaption>
+                      <button type="button" className="mini-remove" onClick={() => removeReference(image.id)} aria-label={`移除参考图 ${index + 1}`}>×</button>
+                    </figure>
+                  ))}
+                  {maskImage ? (
+                    <figure className="mask-preview-card">
+                      <img src={maskImage.previewUrl} alt="mask" />
+                      <figcaption>Mask</figcaption>
+                      <button type="button" className="mini-remove" onClick={clearMask} aria-label="移除 mask">×</button>
+                    </figure>
+                  ) : null}
+                </div>
+                <span>{referenceNames}</span>
+                <button type="button" className="text-button" onClick={clearReference}>移除全部</button>
               </div>
             ) : null}
           </div>
@@ -1186,8 +1286,8 @@ function App() {
                   <div><span>质量</span><strong>{getQualityLabel(detailParams.quality)}</strong></div>
                   <div><span>格式</span><strong>{detailParams.output_format || 'png'}</strong></div>
                   <div><span>背景</span><strong>{detailParams.background || 'auto'}</strong></div>
-                  <div><span>审核</span><strong>{detailParams.moderation || 'auto'}</strong></div>
-                  <div><span>数量</span><strong>{detailParams.n || 1}</strong></div>
+                  {selectedImage.source === 'edit' ? null : <div><span>审核</span><strong>{detailParams.moderation || 'auto'}</strong></div>}
+                  <div><span>数量</span><strong>1</strong></div>
                 </div>
 
                 <p className="created-line">创建于 {formatDate(selectedImage.createdAt)} · 耗时 {detailElapsed}</p>
@@ -1263,12 +1363,16 @@ function App() {
                       </label>
                       <label>
                         <span>请求超时（秒）</span>
-                        <input min="10" max="600" type="number" value={apiConfigForm.requestTimeout} onChange={(event) => setApiConfigForm((current) => ({ ...current, requestTimeout: event.target.value }))} placeholder="600" />
+                        <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={apiConfigForm.requestTimeout} onChange={(event) => setApiConfigForm((current) => ({ ...current, requestTimeout: event.target.value }))} placeholder="999" />
                       </label>
-                      <label className="is-disabled">
+                      <label>
                         <span>流式传输</span>
-                        <button type="button" className="disabled-select-like" disabled>
-                          暂不启用
+                        <button
+                          type="button"
+                          className={apiConfigForm.streamEnabled ? 'toggle-select-like is-active' : 'toggle-select-like'}
+                          onClick={() => setApiConfigForm((current) => ({ ...current, streamEnabled: !current.streamEnabled }))}
+                        >
+                          {apiConfigForm.streamEnabled ? '已启用' : '未启用'}
                         </button>
                       </label>
                       <label className="full-field">
