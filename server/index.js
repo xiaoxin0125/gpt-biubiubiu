@@ -22,6 +22,7 @@ const sessionSecret = process.env.SESSION_SECRET || 'dev-session-secret-change-m
 const apiKeySecret = process.env.USER_API_KEY_SECRET || process.env.SESSION_SECRET || '';
 const mysqlConfigured = Boolean(process.env.MYSQL_HOST && process.env.MYSQL_USER && process.env.MYSQL_DATABASE);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 18 * 1024 * 1024 } });
+const allowedImageQualities = new Set(['low', 'medium', 'high']);
 
 const pool = mysqlConfigured
   ? mysql.createPool({
@@ -56,6 +57,7 @@ const ensureSchema = async () => {
     CREATE TABLE IF NOT EXISTS users (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       username VARCHAR(64) NOT NULL UNIQUE,
+      display_name VARCHAR(96) DEFAULT NULL,
       password_hash VARCHAR(255) NOT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -65,6 +67,9 @@ const ensureSchema = async () => {
     CREATE TABLE IF NOT EXISTS user_settings (
       user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
       model VARCHAR(128) DEFAULT NULL,
+      api_name VARCHAR(128) DEFAULT NULL,
+      api_base_url VARCHAR(255) DEFAULT NULL,
+      stream_enabled TINYINT(1) NOT NULL DEFAULT 0,
       size VARCHAR(64) DEFAULT NULL,
       quality VARCHAR(64) DEFAULT NULL,
       style VARCHAR(64) DEFAULT NULL,
@@ -120,6 +125,20 @@ const ensureSchema = async () => {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
+  const ensureColumn = async (table, column, definition) => {
+    const [rows] = await pool.query(
+      'SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+      [table, column]
+    );
+    if (Number(rows[0]?.count || 0) > 0) return;
+    await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN ${definition}`);
+  };
+
+  await ensureColumn('users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
+  await ensureColumn('user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
+  await ensureColumn('user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
+  await ensureColumn('user_settings', 'stream_enabled', 'stream_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER api_base_url');
+
   schemaReady = true;
 };
 
@@ -139,8 +158,35 @@ const parseJsonText = (text) => {
   try {
     return JSON.parse(text);
   } catch {
-    return { message: text };
+    const snippet = String(text).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 220) || '上游接口返回了非 JSON 内容';
+    return {
+      message: '上游接口返回了非 JSON 内容，请检查 API 地址是否应填写到 /v1 或只填写域名。',
+      snippet,
+    };
   }
+};
+
+const upstreamErrorMessage = (data, fallback) => data?.error?.message || data?.message || fallback;
+
+const assertImageResponse = (data, fallback) => {
+  if (Array.isArray(data?.data)) return null;
+  return {
+    error: upstreamErrorMessage(data, fallback),
+    detail: data,
+  };
+};
+
+const buildUpstreamUrl = (base, routePath) => {
+  const normalizedBase = String(base || baseUrl).replace(/\s+/g, '').replace(/\/$/, '');
+  const url = new URL(normalizedBase);
+  const basePath = url.pathname.replace(/\/$/, '');
+  let nextPath = `/${String(routePath || '').replace(/^\/+/, '')}`;
+
+  if (basePath && nextPath.startsWith(`${basePath}/`)) nextPath = nextPath.slice(basePath.length);
+  url.pathname = `${basePath}${nextPath}`.replace(/\/+/g, '/');
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 };
 
 const getSessionUserId = (req) => {
@@ -169,14 +215,35 @@ const getVisitorId = (req, res) => {
   return visitorId;
 };
 
+const normalizeDisplayName = (value, fallback) => {
+  const displayName = String(value || '').trim();
+  if (!displayName) return fallback;
+  if (!/^[\p{L}\p{N}_ .-]{1,30}$/u.test(displayName)) {
+    const error = new Error('展示名称需为 1-30 位中文、字母、数字、空格、下划线、点或短横线');
+    error.status = 400;
+    throw error;
+  }
+  return displayName;
+};
+
+const isValidApiBaseUrl = (value) => {
+  if (!value) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const getCurrentUser = async (req) => {
   const userId = getSessionUserId(req);
   if (!userId || !pool) return null;
 
   await ensureSchema();
-  const [rows] = await pool.query('SELECT id, username, created_at FROM users WHERE id = ? LIMIT 1', [userId]);
+  const [rows] = await pool.query('SELECT id, username, display_name, created_at FROM users WHERE id = ? LIMIT 1', [userId]);
   const user = rows[0];
-  return user ? { id: user.id, username: user.username, createdAt: user.created_at } : null;
+  return user ? { id: user.id, username: user.username, displayName: user.display_name || user.username, createdAt: user.created_at } : null;
 };
 
 const requireUser = async (req, res) => {
@@ -230,8 +297,9 @@ const toOpenAIImagePayload = (body = {}) => {
   };
 
   if (body.size) payload.size = body.size;
+  if (allowedImageQualities.has(body.quality)) payload.quality = body.quality;
 
-  ['quality', 'style', 'background', 'moderation', 'output_format', 'output_compression'].forEach((key) => {
+  ['style', 'background', 'moderation', 'output_format'].forEach((key) => {
     if (body[key] !== undefined && body[key] !== '' && body[key] !== 'auto') payload[key] = body[key];
   });
 
@@ -264,12 +332,14 @@ const getSettingsForUser = async (userId) => {
 
   return {
     model: settings.model || '',
+    apiName: settings.api_name || 'OpenAI Compatible',
+    apiBaseUrl: settings.api_base_url || '',
+    streamEnabled: Boolean(settings.stream_enabled),
     size: settings.size || '',
     quality: settings.quality || '',
     style: settings.style || '',
     response_format: settings.response_format || '',
     output_format: settings.output_format || '',
-    output_compression: settings.output_compression || '',
     moderation: settings.moderation || '',
     n: settings.n || 1,
     hasApiKey: Boolean(settings.api_key_ciphertext),
@@ -277,13 +347,23 @@ const getSettingsForUser = async (userId) => {
   };
 };
 
-const getStoredUserApiKey = async (req) => {
+const getStoredUserSettings = async (req) => {
   const userId = getSessionUserId(req);
-  if (!pool || !userId) return '';
+  if (!pool || !userId) return null;
 
   await ensureSchema();
-  const [rows] = await pool.query('SELECT api_key_ciphertext, api_key_iv, api_key_tag FROM user_settings WHERE user_id = ? LIMIT 1', [userId]);
-  return decryptApiKey(rows[0]);
+  const [rows] = await pool.query('SELECT * FROM user_settings WHERE user_id = ? LIMIT 1', [userId]);
+  return rows[0] || null;
+};
+
+const getStoredUserApiKey = async (req) => {
+  const settings = await getStoredUserSettings(req);
+  return decryptApiKey(settings);
+};
+
+const getEffectiveApiBaseUrl = async (req) => {
+  const settings = await getStoredUserSettings(req);
+  return String(settings?.api_base_url || baseUrl).replace(/\s+/g, '').replace(/\/$/, '');
 };
 
 const getEffectiveApiKey = async (req) => (await getStoredUserApiKey(req)) || systemApiKey;
@@ -327,14 +407,30 @@ const toClientWallItem = (item) => ({
   source: 'wall',
 });
 
-app.get('/api/health', (_req, res) => {
-  res.json({
-    ok: true,
-    configured: Boolean(systemApiKey),
-    mysqlConfigured,
-    baseUrl,
-    defaultImageModel,
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    const settings = await getStoredUserSettings(req);
+    const apiName = settings?.api_name || 'OpenAI Compatible';
+    const configured = Boolean(await getEffectiveApiKey(req));
+
+    res.json({
+      ok: true,
+      configured,
+      mysqlConfigured,
+      apiName,
+      baseUrl,
+      defaultImageModel,
+    });
+  } catch {
+    res.json({
+      ok: true,
+      configured: Boolean(systemApiKey),
+      mysqlConfigured,
+      apiName: 'OpenAI Compatible',
+      baseUrl,
+      defaultImageModel,
+    });
+  }
 });
 
 app.get('/api/auth/me', async (req, res) => {
@@ -357,9 +453,10 @@ app.post('/api/auth/register', async (req, res) => {
 
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
+  let displayName = '';
 
-  if (!/^[\w\u4e00-\u9fa5.-]{3,30}$/.test(username)) {
-    res.status(400).json({ error: '用户名需为 3-30 位中文、字母、数字、下划线、点或短横线' });
+  if (!/^[\w\u4e00-\u9fa5.-]{2,20}$/.test(username)) {
+    res.status(400).json({ error: '用户名需为 2-20 位中文、字母、数字、下划线、点或短横线' });
     return;
   }
 
@@ -369,10 +466,17 @@ app.post('/api/auth/register', async (req, res) => {
   }
 
   try {
+    displayName = normalizeDisplayName(req.body?.displayName ?? req.body?.display_name, username);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+    return;
+  }
+
+  try {
     const passwordHash = await bcrypt.hash(password, 12);
-    const [result] = await pool.query('INSERT INTO users (username, password_hash) VALUES (?, ?)', [username, passwordHash]);
+    const [result] = await pool.query('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)', [username, displayName, passwordHash]);
     setSessionUser(res, result.insertId);
-    res.json({ user: { id: result.insertId, username }, settings: null });
+    res.json({ user: { id: result.insertId, username, displayName }, settings: null });
   } catch (error) {
     const message = error?.code === 'ER_DUP_ENTRY' ? '用户名已存在' : '注册失败';
     res.status(400).json({ error: message });
@@ -394,7 +498,41 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   setSessionUser(res, user.id);
-  res.json({ user: { id: user.id, username: user.username, createdAt: user.created_at }, settings: await getSettingsForUser(user.id) });
+  res.json({ user: { id: user.id, username: user.username, displayName: user.display_name || user.username, createdAt: user.created_at }, settings: await getSettingsForUser(user.id) });
+});
+
+app.post('/api/auth/profile', async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const displayName = normalizeDisplayName(req.body?.displayName ?? req.body?.display_name, user.username);
+    await pool.query('UPDATE users SET display_name = ? WHERE id = ?', [displayName, user.id]);
+    res.json({ user: { ...user, displayName } });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || '保存账号信息失败' });
+  }
+});
+
+app.post('/api/auth/password', async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  const currentPassword = String(req.body?.currentPassword || req.body?.current_password || '');
+  const newPassword = String(req.body?.newPassword || req.body?.new_password || '');
+  if (newPassword.length < 6) {
+    res.status(400).json({ error: '新密码至少 6 位' });
+    return;
+  }
+
+  const [rows] = await pool.query('SELECT password_hash FROM users WHERE id = ? LIMIT 1', [user.id]);
+  if (!rows[0] || !(await bcrypt.compare(currentPassword, rows[0].password_hash))) {
+    res.status(401).json({ error: '旧密码错误' });
+    return;
+  }
+
+  await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [await bcrypt.hash(newPassword, 12), user.id]);
+  res.json({ ok: true });
 });
 
 app.post('/api/auth/logout', (_req, res) => {
@@ -440,19 +578,27 @@ app.post('/api/settings', async (req, res) => {
         api_key_hint: encrypted.api_key_hint ?? existing.api_key_hint ?? null,
       };
 
+  const apiBaseUrl = String(settings.apiBaseUrl || settings.api_base_url || '').replace(/\s+/g, '');
+  if (!isValidApiBaseUrl(apiBaseUrl)) {
+    res.status(400).json({ error: 'API 地址必须是 http 或 https 地址' });
+    return;
+  }
+
   await pool.query(
     `INSERT INTO user_settings (
-      user_id, model, size, quality, style, response_format, output_format, output_compression, moderation, n,
+      user_id, model, api_name, api_base_url, stream_enabled, size, quality, style, response_format, output_format, moderation, n,
       api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       model = VALUES(model),
+      api_name = VALUES(api_name),
+      api_base_url = VALUES(api_base_url),
+      stream_enabled = VALUES(stream_enabled),
       size = VALUES(size),
       quality = VALUES(quality),
       style = VALUES(style),
       response_format = VALUES(response_format),
       output_format = VALUES(output_format),
-      output_compression = VALUES(output_compression),
       moderation = VALUES(moderation),
       n = VALUES(n),
       api_key_ciphertext = VALUES(api_key_ciphertext),
@@ -462,12 +608,14 @@ app.post('/api/settings', async (req, res) => {
     [
       user.id,
       settings.model || defaultImageModel,
+      String(settings.apiName || settings.api_name || 'OpenAI Compatible').trim(),
+      apiBaseUrl,
+      settings.streamEnabled || settings.stream_enabled ? 1 : 0,
       settings.size || '',
-      settings.quality || 'auto',
+      ['auto', ...allowedImageQualities].includes(settings.quality) ? settings.quality : 'auto',
       settings.style || 'auto',
       settings.response_format || 'url',
       settings.output_format || 'png',
-      settings.output_compression || '',
       settings.moderation || 'auto',
       Number(settings.n || 1),
       apiFields.api_key_ciphertext,
@@ -510,7 +658,7 @@ app.post('/api/wall', async (req, res) => {
     [
       user?.id || null,
       visitorId,
-      user?.username || '未知艺术家',
+      user?.displayName || user?.username || '未知艺术家',
       prompt,
       req.body?.revised_prompt || '',
       imageUrl || null,
@@ -564,9 +712,10 @@ app.post('/api/images/generations', async (req, res) => {
   }
 
   const payload = toOpenAIImagePayload(req.body);
+  const effectiveBaseUrl = await getEffectiveApiBaseUrl(req);
 
   try {
-    const response = await fetch(`${baseUrl}/v1/images/generations`, {
+    const response = await fetch(buildUpstreamUrl(effectiveBaseUrl, '/v1/images/generations'), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${effectiveApiKey}`,
@@ -580,9 +729,15 @@ app.post('/api/images/generations', async (req, res) => {
 
     if (!response.ok) {
       res.status(response.status).json({
-        error: data?.error?.message || data?.message || '生图接口请求失败',
+        error: upstreamErrorMessage(data, '生图接口请求失败'),
         detail: data,
       });
+      return;
+    }
+
+    const invalidResponse = assertImageResponse(data, '生图接口没有返回图片数据');
+    if (invalidResponse) {
+      res.status(502).json(invalidResponse);
       return;
     }
 
@@ -616,6 +771,7 @@ app.post('/api/images/edits', upload.single('image'), async (req, res) => {
   }
 
   const payload = toOpenAIImagePayload(req.body);
+  const effectiveBaseUrl = await getEffectiveApiBaseUrl(req);
   const formData = new FormData();
   const imageBlob = new Blob([req.file.buffer], { type: req.file.mimetype || 'image/png' });
   formData.append('image', imageBlob, req.file.originalname || 'reference.png');
@@ -625,7 +781,7 @@ app.post('/api/images/edits', upload.single('image'), async (req, res) => {
   });
 
   try {
-    const response = await fetch(`${baseUrl}/v1/images/edits`, {
+    const response = await fetch(buildUpstreamUrl(effectiveBaseUrl, '/v1/images/edits'), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${effectiveApiKey}`,
@@ -638,9 +794,15 @@ app.post('/api/images/edits', upload.single('image'), async (req, res) => {
 
     if (!response.ok) {
       res.status(response.status).json({
-        error: data?.error?.message || data?.message || '图生图接口请求失败',
+        error: upstreamErrorMessage(data, '图生图接口请求失败'),
         detail: data,
       });
+      return;
+    }
+
+    const invalidResponse = assertImageResponse(data, '图生图接口没有返回图片数据');
+    if (invalidResponse) {
+      res.status(502).json(invalidResponse);
       return;
     }
 

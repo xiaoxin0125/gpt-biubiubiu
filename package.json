@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite --host 0.0.0.0",
-    "dev:server": "node server/index.js",
+    "dev:server": "php -S 127.0.0.1:8088 -t public",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "start": "NODE_ENV=production node server/index.js"
+    "start": "php -S 0.0.0.0:8088 -t dist"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

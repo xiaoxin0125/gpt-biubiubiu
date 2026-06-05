@@ -2,12 +2,23 @@ import { useEffect, useMemo, useState } from 'react';
 
 const HISTORY_KEY = 'gpt-biubiubiu:image-history';
 
-const qualityOptions = ['auto', 'standard', 'hd', 'low', 'medium', 'high'];
+const qualityOptions = [
+  { label: 'auto', value: 'auto' },
+  { label: 'low', value: 'low' },
+  { label: 'medium', value: 'medium' },
+  { label: 'high', value: 'high' },
+];
 const styleOptions = ['auto', 'vivid', 'natural'];
 const responseFormatOptions = ['url', 'b64_json'];
 const outputFormatOptions = ['png', 'jpeg', 'webp'];
 const moderationOptions = ['auto', 'low', 'off'];
-const modelOptions = ['gpt-image-1', 'dall-e-3', 'dall-e-2'];
+const boardFilterOptions = [
+  { label: '全部状态', value: 'all' },
+  { label: '已上墙', value: 'on-wall' },
+  { label: '未上墙', value: 'off-wall' },
+  { label: '文生图', value: 'generation' },
+  { label: '图生图', value: 'edit' },
+];
 
 const resolutionGroups = [
   { label: '1K', value: '1k' },
@@ -80,11 +91,10 @@ const defaultForm = {
   negative_prompt: '',
   size: '1024x1024',
   n: 1,
-  quality: 'auto',
+  quality: 'medium',
   style: 'auto',
   response_format: 'url',
   output_format: 'png',
-  output_compression: '',
   moderation: 'auto',
 };
 
@@ -100,7 +110,35 @@ const defaultSizeDraft = {
 
 const emptyAuthForm = {
   username: '',
+  displayName: '',
   password: '',
+};
+
+const emptyProfileForm = {
+  displayName: '',
+};
+
+const emptyPasswordForm = {
+  currentPassword: '',
+  newPassword: '',
+};
+
+const defaultApiConfigForm = {
+  apiName: 'OpenAI Compatible',
+  apiBaseUrl: '',
+  streamEnabled: false,
+};
+
+const normalizeQuality = (value) => (qualityOptions.some((item) => item.value === value) ? value : 'medium');
+const getQualityLabel = (value) => qualityOptions.find((item) => item.value === value)?.label || '自动';
+const normalizeForm = (value = {}) => {
+  const nextForm = { ...defaultForm, ...value };
+  delete nextForm.output_compression;
+
+  return {
+    ...nextForm,
+    quality: normalizeQuality(nextForm.quality),
+  };
 };
 
 const createImageSrc = (image) => {
@@ -211,14 +249,39 @@ const getDraftSize = (draft) => {
   return `${size.width}x${size.height}`;
 };
 
-const fieldLabel = {
-  model: '模型',
-  quality: '质量',
-  style: '风格',
-  response_format: '返回',
-  output_format: '格式',
-  output_compression: '压缩率',
-  moderation: '审核',
+const readApiResponse = async (response) => {
+  const text = await response.text();
+  const contentType = response.headers.get('content-type') || '';
+
+  if (!text) return {};
+
+  if (contentType.includes('application/json') || /^[\s\r\n]*[\[{]/.test(text)) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error('接口返回了无法解析的数据，请检查后端服务。');
+    }
+  }
+
+  if (/^[\s\r\n]*</.test(text)) {
+    throw new Error('接口返回了页面内容，请检查后端服务或 /api 反向代理。');
+  }
+
+  throw new Error(text.slice(0, 160) || '接口返回异常内容。');
+};
+
+const toApiUrl = (input) => {
+  const value = String(input || '');
+  if (!value.startsWith('/api/')) return value;
+  return `/api/index.php?route=${encodeURIComponent(value.slice(4))}`;
+};
+
+const requestJson = async (input, init) => {
+  const response = await fetch(toApiUrl(input), init);
+  const data = await readApiResponse(response);
+
+  if (!response.ok) throw new Error(data.error || data.message || '请求失败');
+  return data;
 };
 
 function App() {
@@ -231,7 +294,11 @@ function App() {
   const [user, setUser] = useState(null);
   const [settingsMeta, setSettingsMeta] = useState(null);
   const [authMode, setAuthMode] = useState('login');
+  const [authTab, setAuthTab] = useState('profile');
   const [authForm, setAuthForm] = useState(emptyAuthForm);
+  const [profileForm, setProfileForm] = useState(emptyProfileForm);
+  const [passwordForm, setPasswordForm] = useState(emptyPasswordForm);
+  const [apiConfigForm, setApiConfigForm] = useState(defaultApiConfigForm);
   const [settingsApiKey, setSettingsApiKey] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
   const [status, setStatus] = useState({ loading: true, configured: false, message: '检查接口中' });
@@ -239,15 +306,64 @@ function App() {
   const [activeDialog, setActiveDialog] = useState(null);
   const [sizeDraft, setSizeDraft] = useState(defaultSizeDraft);
   const [wallBusyId, setWallBusyId] = useState('');
+  const [boardSearch, setBoardSearch] = useState('');
+  const [boardFilter, setBoardFilter] = useState('all');
+  const [openSelect, setOpenSelect] = useState('');
 
   const availableRatios = getAvailableRatios(sizeDraft.resolution);
   const activeSize = getDraftSize(sizeDraft);
   const displaySize = activeSize || '自动';
+  const userDisplayName = user?.displayName || user?.username || '';
   const visibleImages = useMemo(() => images.filter(createImageSrc), [images]);
-  const boardItems = view === 'wall' ? wallItems : visibleImages;
+  const sourceBoardItems = view === 'wall' ? wallItems : visibleImages;
+  const statusText = status.configured ? (status.apiName || status.message || defaultApiConfigForm.apiName) : status.message;
 
   const updateForm = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const renderSelect = ({ id, label, value, options, onChange, disabled = false, className = '', menuDirection = 'up' }) => {
+    const normalizedOptions = options.map((option) => (typeof option === 'string' ? { label: option, value: option } : option));
+    const selected = normalizedOptions.find((option) => option.value === value) || normalizedOptions[0];
+    const isOpen = openSelect === id && !disabled;
+
+    return (
+      <div className={`${className} custom-select-field ${menuDirection === 'up' ? 'is-menu-up' : ''} ${disabled ? 'is-disabled' : ''}`.trim()}>
+        {label ? <span>{label}</span> : null}
+        <button
+          type="button"
+          className={isOpen ? 'custom-select-trigger is-open' : 'custom-select-trigger'}
+          onClick={() => setOpenSelect((current) => (current === id ? '' : id))}
+          disabled={disabled}
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+        >
+          <strong>{selected?.label || value}</strong>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" />
+          </svg>
+        </button>
+        {isOpen ? (
+          <div className="custom-select-menu" role="listbox">
+            {normalizedOptions.map((option) => (
+              <button
+                type="button"
+                className={option.value === value ? 'custom-select-option is-active' : 'custom-select-option'}
+                key={option.value}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpenSelect('');
+                }}
+                role="option"
+                aria-selected={option.value === value}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
   };
 
   const buildPayload = (prompt) => {
@@ -258,23 +374,35 @@ function App() {
     };
 
     if (!payload.size) delete payload.size;
-    if (!payload.output_compression) delete payload.output_compression;
+    payload.quality = normalizeQuality(payload.quality);
+    if (payload.quality === 'auto') delete payload.quality;
     return payload;
   };
 
   const applySettings = (settings) => {
     if (!settings) return;
 
+    const apiName = settings.apiName || defaultApiConfigForm.apiName;
     setSettingsMeta(settings);
-    setForm((current) => ({
+    setStatus((current) => ({
       ...current,
+      configured: Boolean(settings.hasApiKey || current.configured),
+      apiName,
+      message: apiName,
+    }));
+    setApiConfigForm({
+      apiName,
+      apiBaseUrl: settings.apiBaseUrl || '',
+      streamEnabled: Boolean(settings.streamEnabled),
+    });
+    setForm((current) => ({
+      ...normalizeForm(current),
       model: settings.model || current.model,
       size: settings.size !== undefined ? settings.size : current.size,
-      quality: settings.quality || current.quality,
+      quality: normalizeQuality(settings.quality || current.quality),
       style: settings.style || current.style,
       response_format: settings.response_format || current.response_format,
       output_format: settings.output_format || current.output_format,
-      output_compression: settings.output_compression !== undefined ? settings.output_compression : current.output_compression,
       moderation: settings.moderation || current.moderation,
       n: settings.n || current.n,
     }));
@@ -282,9 +410,7 @@ function App() {
 
   const loadWall = async () => {
     try {
-      const response = await fetch('/api/wall');
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '作品墙加载失败');
+      const data = await requestJson('/api/wall');
       setWallItems(Array.isArray(data.items) ? data.items : []);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '作品墙加载失败');
@@ -294,21 +420,21 @@ function App() {
   useEffect(() => {
     setHistory(readHistory());
 
-    fetch('/api/health')
-      .then((res) => res.json())
+    requestJson('/api/health')
       .then((data) => {
+        const apiName = data.apiName || defaultApiConfigForm.apiName;
         setStatus({
           loading: false,
           configured: Boolean(data.configured),
-          message: data.configured ? `Ready · ${data.defaultImageModel}` : '未配置 API Key',
+          apiName,
+          message: data.configured ? apiName : '未配置 API Key',
         });
       })
       .catch(() => {
         setStatus({ loading: false, configured: false, message: '代理未启动' });
       });
 
-    fetch('/api/auth/me')
-      .then((res) => res.json())
+    requestJson('/api/auth/me')
       .then((data) => {
         setUser(data.user || null);
         applySettings(data.settings || null);
@@ -317,6 +443,29 @@ function App() {
 
     loadWall();
   }, []);
+
+  useEffect(() => {
+    setProfileForm({ displayName: user?.displayName || user?.username || '' });
+  }, [user]);
+
+  useEffect(() => {
+    if (!error) return undefined;
+
+    const timer = window.setTimeout(() => setError(''), 5000);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+
+  useEffect(() => {
+    if (!openSelect) return undefined;
+
+    const closeOpenSelect = (event) => {
+      if (event.target instanceof Element && event.target.closest('.custom-select-field')) return;
+      setOpenSelect('');
+    };
+
+    document.addEventListener('pointerdown', closeOpenSelect);
+    return () => document.removeEventListener('pointerdown', closeOpenSelect);
+  }, [openSelect]);
 
   const findWallItem = (image) => {
     if (!image) return null;
@@ -329,6 +478,31 @@ function App() {
       return src && wallSrc && src === wallSrc;
     }) || null;
   };
+
+  const boardItems = sourceBoardItems.filter((image) => {
+    const wallItem = findWallItem(image);
+    const text = [
+      image.prompt,
+      image.revised_prompt,
+      image.form?.prompt,
+      image.form?.size,
+      image.form?.quality,
+      image.form?.output_format,
+      image.authorName,
+      image.referenceName,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    const keyword = boardSearch.trim().toLowerCase();
+
+    if (keyword && !text.includes(keyword)) return false;
+    if (boardFilter === 'on-wall') return Boolean(wallItem);
+    if (boardFilter === 'off-wall') return !wallItem;
+    if (boardFilter === 'generation') return image.source !== 'edit' && image.source !== 'wall';
+    if (boardFilter === 'edit') return image.source === 'edit';
+    return true;
+  });
 
   const isSameImage = (left, right) => {
     if (!left || !right) return false;
@@ -362,10 +536,12 @@ function App() {
   };
 
   const selectHistory = (item) => {
-    setForm({ ...defaultForm, ...item.form });
+    const nextForm = normalizeForm(item.form);
+
+    setForm(nextForm);
     setImages((item.images || []).map((image) => ({
       ...image,
-      form: { ...defaultForm, ...item.form },
+      form: nextForm,
       prompt: item.form?.prompt || '',
       createdAt: item.createdAt,
       source: image.source || 'generated',
@@ -388,6 +564,7 @@ function App() {
   const closeDialog = () => {
     setActiveDialog(null);
     setSelectedImage(null);
+    setOpenSelect('');
   };
 
   const handleReferenceChange = (event) => {
@@ -418,23 +595,20 @@ function App() {
 
     try {
       const payload = buildPayload(prompt);
-      const response = referenceImage
+      const imageForm = normalizeForm({ ...form, prompt, n: Number(form.n || 1) });
+      const data = referenceImage
         ? await submitImageEdit(payload)
-        : await fetch('/api/images/generations', {
+        : await requestJson('/api/images/generations', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
 
-      const data = await response.json();
-
-      if (!response.ok) throw new Error(data.error || '生成失败');
-
       const createdAt = new Date().toISOString();
       const nextImages = Array.isArray(data.data)
         ? data.data.map((image) => ({
             ...image,
-            form: payload,
+            form: imageForm,
             prompt,
             createdAt,
             source: referenceImage ? 'edit' : 'generated',
@@ -447,7 +621,7 @@ function App() {
 
       const record = {
         id: `${Date.now()}`,
-        form: payload,
+        form: imageForm,
         images: nextImages,
         createdAt,
       };
@@ -469,7 +643,7 @@ function App() {
       if (value !== undefined && value !== null && value !== '') formData.append(key, String(value));
     });
 
-    return fetch('/api/images/edits', {
+    return requestJson('/api/images/edits', {
       method: 'POST',
       body: formData,
     });
@@ -483,9 +657,7 @@ function App() {
 
     try {
       if (wallItem?.id) {
-        const response = await fetch(`/api/wall/${wallItem.id}`, { method: 'DELETE' });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || '取消上墙失败');
+        await requestJson(`/api/wall/${wallItem.id}`, { method: 'DELETE' });
 
         setWallItems((items) => items.filter((item) => Number(item.id) !== Number(wallItem.id)));
         setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)));
@@ -493,7 +665,7 @@ function App() {
         return;
       }
 
-      const response = await fetch('/api/wall', {
+      const data = await requestJson('/api/wall', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -509,8 +681,6 @@ function App() {
           jobId: image.jobId || null,
         }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '上墙失败');
 
       const nextWallItem = data.item;
       setWallItems((items) => [nextWallItem, ...items.filter((item) => Number(item.id) !== Number(nextWallItem.id))]);
@@ -528,28 +698,29 @@ function App() {
     setError('');
 
     try {
-      const response = await fetch(`/api/auth/${authMode === 'login' ? 'login' : 'register'}`, {
+      const data = await requestJson(`/api/auth/${authMode === 'login' ? 'login' : 'register'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(authForm),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '账号操作失败');
 
       setUser(data.user || null);
       applySettings(data.settings || null);
       setAuthForm(emptyAuthForm);
-      setActiveDialog(null);
+      setAuthTab('profile');
+      setActiveDialog(data.user ? 'auth' : null);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : '账号操作失败');
     }
   };
 
   const logout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await requestJson('/api/auth/logout', { method: 'POST' });
     setUser(null);
     setSettingsMeta(null);
     setSettingsApiKey('');
+    setProfileForm(emptyProfileForm);
+    setPasswordForm(emptyPasswordForm);
   };
 
   const saveAccountSettings = async () => {
@@ -564,17 +735,20 @@ function App() {
     if (apiKey && !window.confirm('API Key 会加密保存到服务端数据库。确认保存？')) return;
 
     try {
-      const response = await fetch('/api/settings', {
+      const data = await requestJson('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          settings: form,
+          settings: {
+            ...form,
+            apiName: apiConfigForm.apiName,
+            apiBaseUrl: apiConfigForm.apiBaseUrl.replace(/\s+/g, ''),
+            streamEnabled: apiConfigForm.streamEnabled,
+          },
           apiKey,
           confirmApiKeySave: Boolean(apiKey),
         }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '保存配置失败');
 
       setSettingsApiKey('');
       applySettings(data.settings || null);
@@ -584,8 +758,40 @@ function App() {
     }
   };
 
+  const saveProfile = async () => {
+    if (!user) return;
+
+    try {
+      const data = await requestJson('/api/auth/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName: profileForm.displayName }),
+      });
+      setUser(data.user || user);
+      setError('');
+    } catch (profileError) {
+      setError(profileError instanceof Error ? profileError.message : '保存账号信息失败');
+    }
+  };
+
+  const changePassword = async () => {
+    if (!user) return;
+
+    try {
+      await requestJson('/api/auth/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(passwordForm),
+      });
+      setPasswordForm(emptyPasswordForm);
+      setError('');
+    } catch (passwordError) {
+      setError(passwordError instanceof Error ? passwordError.message : '修改密码失败');
+    }
+  };
+
   const reuseConfig = (image) => {
-    if (image?.form) setForm({ ...defaultForm, ...image.form });
+    if (image?.form) setForm(normalizeForm(image.form));
     setView('generate');
     closeDialog();
   };
@@ -632,10 +838,20 @@ function App() {
 
   return (
     <main className="playground-shell">
+      {error ? <div className="error-toast" role="alert">{error}</div> : null}
+
       <header className="topbar">
         <a className="brand" href="/" aria-label="GPT Biubiubiu">
-          <span className="brand-orb" />
-          <span>GPT Image Playground</span>
+          <span className="brand-orb" aria-hidden="true">
+            <svg viewBox="0 0 32 32">
+              <path d="M6 21.5 21.5 6l4.5 4.5L10.5 26H6v-4.5Z" />
+              <path d="M18.5 9 23 13.5" />
+              <path d="M7 7h7" />
+              <path d="M5 12h4" />
+              <path d="M20 25h7" />
+            </svg>
+          </span>
+          <span>GPT Biubiubiu</span>
         </a>
 
         <nav className="mode-tabs" aria-label="工作台模式">
@@ -655,30 +871,40 @@ function App() {
         </nav>
 
         <div className="topbar-actions">
-          <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{status.message}</span>
-          <button type="button" className="round-tool account-tool" onClick={() => setActiveDialog('auth')} aria-label="账号">
-            {user ? user.username.slice(0, 1).toUpperCase() : '登'}
+          <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>
+          <button type="button" className="round-tool account-tool" onClick={() => { setAuthTab('profile'); setActiveDialog('auth'); }} aria-label="账号设置">
+            {user ? userDisplayName : '登录'}
           </button>
           <button type="button" className="round-tool" onClick={() => setActiveDialog('history')} aria-label="历史记录">
             H
-          </button>
-          <button type="button" className="round-tool" onClick={() => setActiveDialog('settings')} aria-label="参数设置">
-            S
           </button>
         </div>
       </header>
 
       <section className="canvas-stage">
         <div className="canvas-toolbar">
-          <button type="button" className={view === 'generate' ? 'soft-chip is-active' : 'soft-chip'} onClick={() => setView('generate')}>
-            生成区
+          <button type="button" className="toolbar-icon-button" onClick={() => { setView('wall'); loadWall(); }} aria-label="刷新作品墙">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 11a8 8 0 1 0-2.34 5.66" />
+              <path d="M20 5v6h-6" />
+            </svg>
           </button>
-          <button type="button" className={referenceImage ? 'soft-chip is-active' : 'soft-chip'} onClick={() => setView('generate')}>
-            {referenceImage ? '图生图' : '文生图'}
-          </button>
-          <button type="button" className={view === 'wall' ? 'soft-chip is-active' : 'soft-chip'} onClick={() => { setView('wall'); loadWall(); }}>
-            作品墙
-          </button>
+          {renderSelect({
+            id: 'board-filter',
+            label: '',
+            value: boardFilter,
+            options: boardFilterOptions,
+            onChange: setBoardFilter,
+            className: 'toolbar-filter',
+            menuDirection: 'down',
+          })}
+          <label className="toolbar-search" aria-label="搜索作品">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m21 21-4.3-4.3" />
+              <circle cx="11" cy="11" r="7" />
+            </svg>
+            <input value={boardSearch} onChange={(event) => setBoardSearch(event.target.value)} placeholder="搜索提示词、参数、作者..." />
+          </label>
         </div>
 
         <div className={boardItems.length ? 'image-board has-images' : 'image-board'}>
@@ -686,9 +912,16 @@ function App() {
             boardItems.filter(createImageSrc).map(renderImageCard)
           ) : (
             <div className="empty-canvas">
-              <span className="empty-mark">+</span>
-              <h1>{view === 'wall' ? 'No works on the wall yet' : 'What do you want to create?'}</h1>
-              <p>{view === 'wall' ? '生成图片后点击星标即可上墙，未登录会显示为未知艺术家。' : '底部工作台输入提示词，可直接文生图，也可以上传参考图进入图生图。'}</p>
+              <span className="empty-mark" aria-hidden="true">
+                <svg viewBox="0 0 48 48">
+                  <rect x="8" y="10" width="32" height="28" rx="3" />
+                  <path d="M14 31l7-7 5 5 4-4 6 6" />
+                  <circle cx="31" cy="18" r="3" />
+                  <path d="M24 4v6" />
+                  <path d="M18 7h12" />
+                </svg>
+              </span>
+              <p>输入提示词开始生成图片</p>
             </div>
           )}
         </div>
@@ -703,47 +936,80 @@ function App() {
               placeholder="描述你想生成的图片，可输入 @ 来指定参考图..."
               rows={2}
             />
+            <textarea
+              className="negative-prompt-input"
+              value={form.negative_prompt}
+              onChange={(event) => updateForm('negative_prompt', event.target.value)}
+              placeholder="反向提示词：不想出现的元素，可留空"
+              rows={1}
+            />
 
             <div className="workbench-actions">
-              <button type="button" className="tool-pill" onClick={openSizeDialog}>
+              <div className="control-field size-control">
                 <span>尺寸</span>
-                <strong>{form.size || '自动'}</strong>
-              </button>
+                <button type="button" className="tool-pill" onClick={openSizeDialog}>
+                  {form.size || '自动'}
+                </button>
+              </div>
 
-              <label className="control-field">
-                <span>质量</span>
-                <select value={form.quality} onChange={(event) => updateForm('quality', event.target.value)}>
-                  {qualityOptions.map((quality) => <option key={quality} value={quality}>{quality}</option>)}
-                </select>
-              </label>
+              {renderSelect({
+                id: 'workbench-quality',
+                label: '质量',
+                value: form.quality,
+                options: qualityOptions,
+                onChange: (value) => updateForm('quality', value),
+                className: 'control-field',
+              })}
 
-              <label className="control-field">
-                <span>格式</span>
-                <select value={form.output_format} onChange={(event) => updateForm('output_format', event.target.value)}>
-                  {outputFormatOptions.map((format) => <option key={format} value={format}>{format.toUpperCase()}</option>)}
-                </select>
-              </label>
+              {renderSelect({
+                id: 'workbench-response-format',
+                label: '返回格式',
+                value: form.response_format,
+                options: responseFormatOptions,
+                onChange: (value) => updateForm('response_format', value),
+                className: 'control-field',
+              })}
 
-              <label className="control-field">
-                <span>压缩率</span>
-                <input min="0" max="100" type="number" value={form.output_compression} onChange={(event) => updateForm('output_compression', event.target.value)} placeholder="0-100" />
-              </label>
+              {renderSelect({
+                id: 'workbench-output-format',
+                label: '格式',
+                value: form.output_format,
+                options: outputFormatOptions.map((format) => ({ label: format.toUpperCase(), value: format })),
+                onChange: (value) => updateForm('output_format', value),
+                disabled: form.response_format === 'b64_json',
+                className: 'control-field',
+              })}
 
-              <label className="control-field">
-                <span>审核</span>
-                <select value={form.moderation} onChange={(event) => updateForm('moderation', event.target.value)}>
-                  {moderationOptions.map((moderation) => <option key={moderation} value={moderation}>{moderation}</option>)}
-                </select>
-              </label>
+              {renderSelect({
+                id: 'workbench-moderation',
+                label: '审核',
+                value: form.moderation,
+                options: moderationOptions,
+                onChange: (value) => updateForm('moderation', value),
+                className: 'control-field',
+              })}
+
+              {renderSelect({
+                id: 'workbench-style',
+                label: '风格',
+                value: form.style,
+                options: styleOptions,
+                onChange: (value) => updateForm('style', value),
+                className: 'control-field',
+              })}
 
               <label className="control-field count-field">
                 <span>数量</span>
                 <input min="1" max="4" type="number" value={form.n} onChange={(event) => updateForm('n', event.target.value)} />
               </label>
 
-              <label className={referenceImage ? 'reference-uploader has-file' : 'reference-uploader'} title={referenceImage?.name || '上传参考图'}>
+              <label className={referenceImage ? 'reference-uploader has-file' : 'reference-uploader'} title={referenceImage?.name || '上传参考图'} aria-label="上传参考图">
                 <input type="file" accept="image/*" onChange={handleReferenceChange} />
-                <span>{referenceImage ? '已附图' : '附图'}</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 7.5 7.2 5.7A4.2 4.2 0 0 0 1.3 11.6l3.6 3.6a4.2 4.2 0 0 0 5.9 0l1.4-1.4" />
+                  <path d="m15 16.5 1.8 1.8a4.2 4.2 0 0 0 5.9-5.9l-3.6-3.6a4.2 4.2 0 0 0-5.9 0l-1.4 1.4" />
+                  <path d="m8.8 15.2 6.4-6.4" />
+                </svg>
               </label>
 
               <button type="submit" className="send-button" disabled={status.loading} aria-label="生成图片">
@@ -760,7 +1026,6 @@ function App() {
             ) : null}
           </div>
 
-          {error ? <div className="error-toast">{error}</div> : null}
         </form>
       ) : null}
 
@@ -795,7 +1060,7 @@ function App() {
                 <div className="detail-meta-grid">
                   <div><span>来源</span><strong>{selectedImage.source === 'edit' ? '图生图' : selectedImage.source === 'wall' ? '作品墙' : '文生图'}</strong></div>
                   <div><span>尺寸</span><strong>{detailParams.size || '自动'}</strong></div>
-                  <div><span>质量</span><strong>{detailParams.quality || 'auto'}</strong></div>
+                  <div><span>质量</span><strong>{getQualityLabel(detailParams.quality)}</strong></div>
                   <div><span>格式</span><strong>{detailParams.output_format || detailParams.response_format || 'png'}</strong></div>
                   <div><span>审核</span><strong>{detailParams.moderation || 'auto'}</strong></div>
                   <div><span>数量</span><strong>{detailParams.n || 1}</strong></div>
@@ -815,26 +1080,78 @@ function App() {
           ) : null}
 
           {activeDialog === 'auth' ? (
-            <section className="modal-card compact-modal" role="dialog" aria-modal="true" aria-label="账号">
+            <section className="modal-card account-modal" role="dialog" aria-modal="true" aria-label="账号设置">
               <div className="modal-head">
                 <div>
-                  <h2>{user ? '账号信息' : authMode === 'login' ? '登录' : '注册'}</h2>
-                  <p>{user ? '登录用户可保存个人配置和 API Key' : '登录后可保存配置，上墙作品显示用户名'}</p>
+                  <h2>{user ? '账号设置' : authMode === 'login' ? '登录' : '注册'}</h2>
+                  <p>{user ? '账号信息、密码和参数设置' : '登录后可保存配置，上墙作品显示展示名称'}</p>
                 </div>
                 <button type="button" className="close-button" onClick={closeDialog}>×</button>
               </div>
 
               {user ? (
                 <div className="account-panel">
-                  <div className="summary-box">
-                    <span>当前用户</span>
-                    <strong>{user.username}</strong>
+                  <div className="segmented-control two-tabs account-tabs">
+                    <button type="button" className={authTab === 'profile' ? 'is-active' : ''} onClick={() => setAuthTab('profile')}>账号信息</button>
+                    <button type="button" className={authTab === 'settings' ? 'is-active' : ''} onClick={() => setAuthTab('settings')}>参数设置</button>
                   </div>
-                  <div className="summary-box">
-                    <span>API Key</span>
-                    <strong>{settingsMeta?.hasApiKey ? settingsMeta.apiKeyHint || '已保存' : '未保存'}</strong>
-                  </div>
-                  <button type="button" className="secondary-action" onClick={logout}>退出登录</button>
+
+                  {authTab === 'profile' ? (
+                    <div className="account-section-grid">
+                      <div className="summary-box full-field">
+                        <span>当前账号</span>
+                        <strong>{userDisplayName}</strong>
+                        <small>@{user.username}</small>
+                      </div>
+                      <label>
+                        <span>展示名称</span>
+                        <input value={profileForm.displayName} onChange={(event) => setProfileForm((current) => ({ ...current, displayName: event.target.value }))} placeholder="留空则使用用户名" />
+                      </label>
+                      <button type="button" className="secondary-action align-end" onClick={saveProfile}>保存名称</button>
+                      <label>
+                        <span>旧密码</span>
+                        <input type="password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} placeholder="当前密码" />
+                      </label>
+                      <label>
+                        <span>新密码</span>
+                        <input type="password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} placeholder="至少 6 位" />
+                      </label>
+                      <button type="button" className="secondary-action" onClick={changePassword}>修改密码</button>
+                      <button type="button" className="secondary-action" onClick={logout}>退出登录</button>
+                    </div>
+                  ) : null}
+
+                  {authTab === 'settings' ? (
+                    <div className="settings-grid account-settings-grid">
+                      <label>
+                        <span>API 名称</span>
+                        <input value={apiConfigForm.apiName} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiName: event.target.value }))} placeholder="OpenAI Compatible" />
+                      </label>
+                      <label>
+                        <span>API 地址</span>
+                        <input value={apiConfigForm.apiBaseUrl} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="由服务端配置" />
+                      </label>
+                      <label>
+                        <span>模型 ID</span>
+                        <input value={form.model} onChange={(event) => updateForm('model', event.target.value)} placeholder="gpt-image-1" />
+                      </label>
+                      <label className="is-disabled">
+                        <span>流式传输</span>
+                        <button type="button" className="disabled-select-like" disabled>
+                          暂不启用
+                        </button>
+                      </label>
+                      <label className="full-field">
+                        <span>密钥</span>
+                        <input value={settingsApiKey} onChange={(event) => setSettingsApiKey(event.target.value)} placeholder={settingsMeta?.hasApiKey ? `已保存：${settingsMeta.apiKeyHint}` : '可选，保存前会再次确认'} />
+                      </label>
+                      <div className="modal-actions three-actions full-field">
+                        <button type="button" className="secondary-action" onClick={() => setForm(defaultForm)}>重置</button>
+                        <button type="button" className="secondary-action" onClick={saveAccountSettings}>保存配置</button>
+                        <button type="button" className="primary-action" onClick={closeDialog}>完成</button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <form className="auth-form" onSubmit={submitAuth}>
@@ -844,8 +1161,14 @@ function App() {
                   </div>
                   <label>
                     <span>用户名</span>
-                    <input value={authForm.username} onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))} placeholder="3-30 位" />
+                    <input value={authForm.username} onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))} placeholder="2-20 位" />
                   </label>
+                  {authMode === 'register' ? (
+                    <label>
+                      <span>展示名称</span>
+                      <input value={authForm.displayName} onChange={(event) => setAuthForm((current) => ({ ...current, displayName: event.target.value }))} placeholder="可选，默认同用户名" />
+                    </label>
+                  ) : null}
                   <label>
                     <span>密码</span>
                     <input type="password" value={authForm.password} onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))} placeholder="至少 6 位" />
@@ -875,7 +1198,13 @@ function App() {
               {sizeDraft.mode === 'auto' ? (
                 <div className="size-tab-panel auto-size-panel">
                   <div className="auto-card">
-                    <span className="auto-icon">A</span>
+                    <span className="auto-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <path d="M12 3l1.45 4.05L17.5 8.5l-4.05 1.45L12 14l-1.45-4.05L6.5 8.5l4.05-1.45L12 3Z" />
+                        <path d="M18 14l.82 2.18L21 17l-2.18.82L18 20l-.82-2.18L15 17l2.18-.82L18 14Z" />
+                        <path d="M6 15l.55 1.45L8 17l-1.45.55L6 19l-.55-1.45L4 17l1.45-.55L6 15Z" />
+                      </svg>
+                    </span>
                     <div>
                       <strong>自动尺寸</strong>
                       <p>不向模型传递具体的分辨率参数，由模型或上游接口自行决定生成尺寸。</p>
@@ -958,7 +1287,16 @@ function App() {
                     </label>
                   </div>
                   <div className="size-limit-note">
-                    <strong>由于模型限制，最终输出会自动规整到合法尺寸：</strong>
+                    <span className="auto-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <rect x="4" y="5" width="16" height="14" rx="2" />
+                        <path d="M8 9h8" />
+                        <path d="M8 15h8" />
+                        <path d="M9 3v4" />
+                        <path d="M15 17v4" />
+                      </svg>
+                    </span>
+                    <strong>由于模型限制，最终输出会自动规整到合法尺寸</strong>
                     <span>宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素限制为 655360-8294400。</span>
                   </div>
                 </div>
@@ -972,98 +1310,6 @@ function App() {
               <div className="modal-actions">
                 <button type="button" className="secondary-action" onClick={closeDialog}>取消</button>
                 <button type="button" className="primary-action" onClick={applySize}>确定</button>
-              </div>
-            </section>
-          ) : null}
-
-          {activeDialog === 'model' ? (
-            <section className="modal-card compact-modal" role="dialog" aria-modal="true" aria-label="选择模型">
-              <div className="modal-head">
-                <div>
-                  <h2>选择模型</h2>
-                  <p>用于 OpenAI 兼容生图接口</p>
-                </div>
-                <button type="button" className="close-button" onClick={closeDialog}>×</button>
-              </div>
-
-              <div className="option-list">
-                {modelOptions.map((model) => (
-                  <button
-                    type="button"
-                    className={form.model === model ? 'option-row is-active' : 'option-row'}
-                    key={model}
-                    onClick={() => {
-                      updateForm('model', model);
-                      setActiveDialog(null);
-                    }}
-                  >
-                    <span>{model}</span>
-                    <small>{form.model === model ? '当前使用' : '点击切换'}</small>
-                  </button>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {activeDialog === 'settings' ? (
-            <section className="modal-card settings-modal" role="dialog" aria-modal="true" aria-label="生成参数">
-              <div className="modal-head">
-                <div>
-                  <h2>生成参数</h2>
-                  <p>质量、风格、数量、格式、审核和账号配置</p>
-                </div>
-                <button type="button" className="close-button" onClick={closeDialog}>×</button>
-              </div>
-
-              <div className="settings-grid">
-                <label>
-                  <span>{fieldLabel.quality}</span>
-                  <select value={form.quality} onChange={(event) => updateForm('quality', event.target.value)}>
-                    {qualityOptions.map((quality) => <option key={quality} value={quality}>{quality}</option>)}
-                  </select>
-                </label>
-                <label>
-                  <span>{fieldLabel.style}</span>
-                  <select value={form.style} onChange={(event) => updateForm('style', event.target.value)}>
-                    {styleOptions.map((style) => <option key={style} value={style}>{style}</option>)}
-                  </select>
-                </label>
-                <label>
-                  <span>数量</span>
-                  <input min="1" max="4" type="number" value={form.n} onChange={(event) => updateForm('n', event.target.value)} />
-                </label>
-                <label>
-                  <span>{fieldLabel.response_format}</span>
-                  <select value={form.response_format} onChange={(event) => updateForm('response_format', event.target.value)}>
-                    {responseFormatOptions.map((format) => <option key={format} value={format}>{format}</option>)}
-                  </select>
-                </label>
-                <label>
-                  <span>{fieldLabel.output_format}</span>
-                  <select value={form.output_format} onChange={(event) => updateForm('output_format', event.target.value)}>
-                    {outputFormatOptions.map((format) => <option key={format} value={format}>{format}</option>)}
-                  </select>
-                </label>
-                <label>
-                  <span>{fieldLabel.moderation}</span>
-                  <select value={form.moderation} onChange={(event) => updateForm('moderation', event.target.value)}>
-                    {moderationOptions.map((moderation) => <option key={moderation} value={moderation}>{moderation}</option>)}
-                  </select>
-                </label>
-                <label className="full-field">
-                  <span>反向提示词</span>
-                  <textarea value={form.negative_prompt} onChange={(event) => updateForm('negative_prompt', event.target.value)} placeholder="不想出现的元素，可留空" rows={3} />
-                </label>
-                <label className="full-field">
-                  <span>保存到账号的 API Key</span>
-                  <input value={settingsApiKey} onChange={(event) => setSettingsApiKey(event.target.value)} placeholder={settingsMeta?.hasApiKey ? `已保存：${settingsMeta.apiKeyHint}` : '可选，保存前会再次确认'} />
-                </label>
-              </div>
-
-              <div className="modal-actions three-actions">
-                <button type="button" className="secondary-action" onClick={() => setForm(defaultForm)}>重置</button>
-                <button type="button" className="secondary-action" onClick={saveAccountSettings}>保存配置</button>
-                <button type="button" className="primary-action" onClick={closeDialog}>完成</button>
               </div>
             </section>
           ) : null}
