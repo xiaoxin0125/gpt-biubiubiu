@@ -1459,7 +1459,6 @@ function App() {
               </label>
 
               <label className={hasReferenceImages ? 'control-field file-control has-file icon-file-control' : 'control-field file-control icon-file-control'} title={referenceNames || '上传参考图'} aria-label="上传参考图">
-                <span>参考图</span>
                 <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleReferenceChange} />
                 <strong>
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1474,7 +1473,6 @@ function App() {
               </label>
 
               <label className={hasReferenceImages ? 'control-field file-control mask-control icon-file-control' : 'control-field file-control mask-control icon-file-control is-disabled'} title={maskImage?.name || '上传 mask'} aria-label="上传 mask">
-                <span>Mask</span>
                 <input type="file" accept="image/png" disabled={!hasReferenceImages} onChange={handleMaskChange} />
                 <strong>
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1709,8 +1707,8 @@ function App() {
                 </label>
                 <label className="toggle-row full-field">
                   <input type="checkbox" checked={apiConfigForm.stream} onChange={(event) => setApiConfigForm((current) => ({ ...current, stream: event.target.checked }))} />
-                  <span>启用流式传输</span>
-                  <small>保存到服务器参数中，供支持 stream 的上游请求使用。</small>
+                  <span>启用流式传输功能</span>
+                  <small>关闭后请求不使用 stream；保存后对当前账号生效。</small>
                 </label>
                 <div className="modal-actions full-field">
                   <button type="button" className="secondary-action" onClick={resetDirectSettings}>重置</button>
