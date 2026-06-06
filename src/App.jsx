@@ -327,6 +327,12 @@ const saveHistory = (items) => {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 30)));
 };
 
+const prependHistoryRecord = (record) => {
+  const nextHistory = [record, ...readHistory().filter((item) => item.id !== record.id)].slice(0, 30);
+  saveHistory(nextHistory);
+  return nextHistory;
+};
+
 const readDirectApiKeyCache = () => {
   try {
     const parsed = JSON.parse(localStorage.getItem(DIRECT_API_KEY_CACHE_KEY) || '{}');
@@ -714,6 +720,7 @@ function App() {
   const [apiConfigForm, setApiConfigForm] = useState(defaultApiConfigForm);
   const [selectedImage, setSelectedImage] = useState(null);
   const [status, setStatus] = useState({ loading: true, configured: false, message: '检查接口中' });
+  const [runningGenerations, setRunningGenerations] = useState(0);
   const [error, setError] = useState('');
   const [activeDialog, setActiveDialog] = useState(null);
   const [sizeDraft, setSizeDraft] = useState(defaultSizeDraft);
@@ -729,6 +736,8 @@ function App() {
   const hasReferenceImages = referenceImages.length > 0;
   const responseFormat = normalizeResponseFormat(form.response_format);
   const canUseOutputFormat = responseFormat === 'url';
+  const isGenerating = runningGenerations > 0;
+  const canSubmitGeneration = status.configured;
   const referenceNames = referenceImages.map((image, index) => `图${index + 1}:${image.name}`).join('，');
   const availableRatios = getAvailableRatios(sizeDraft.resolution);
   const activeSize = getDraftSize(sizeDraft);
@@ -1174,11 +1183,12 @@ function App() {
     }
 
     setError('');
-    setStatus((current) => ({ ...current, loading: true, message: hasReferenceImages ? 'Editing' : 'Generating' }));
+    setRunningGenerations((count) => count + 1);
+    setStatus((current) => ({ ...current, message: hasReferenceImages ? 'Editing' : 'Generating' }));
     setView('generate');
     setBoardScope('generate');
 
-    const requestId = `request-${Date.now()}`;
+    const requestId = `request-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     deletedRequestIdsRef.current.delete(requestId);
     const startedAt = new Date().toISOString();
     const requestConfig = activeApiConfig || defaultApiConfigItem;
@@ -1215,7 +1225,7 @@ function App() {
 
       const finishedAt = new Date().toISOString();
       if (deletedRequestIdsRef.current.has(requestId)) {
-        setStatus((current) => ({ ...current, loading: false, message: 'Done · 0' }));
+        setStatus((current) => ({ ...current, message: 'Done · 0' }));
         return;
       }
       const nextImages = Array.isArray(normalizedData.data)
@@ -1254,20 +1264,19 @@ function App() {
         createdAt: finishedAt,
       };
 
-      const nextHistory = [record, ...history].slice(0, 30);
       try {
+        const nextHistory = prependHistoryRecord(record);
         setHistory(nextHistory);
-        saveHistory(nextHistory);
       } catch {
-        setHistory(nextHistory);
+        setHistory((items) => [record, ...items.filter((item) => item.id !== record.id)].slice(0, 30));
         setError('图片已生成，但本地历史记录保存失败。');
       }
-      setStatus((current) => ({ ...current, loading: false, message: `Done · ${nextImages.length}` }));
+      setStatus((current) => ({ ...current, message: `Done · ${nextImages.length}` }));
     } catch (requestError) {
       const failedAt = new Date().toISOString();
       const message = requestError instanceof Error ? requestError.message : '生成失败';
       if (deletedRequestIdsRef.current.has(requestId)) {
-        setStatus((current) => ({ ...current, loading: false, message: current.configured ? '已删除' : current.message }));
+        setStatus((current) => ({ ...current, message: current.configured ? '已删除' : current.message }));
         return;
       }
       setError(message);
@@ -1277,7 +1286,9 @@ function App() {
           : item
       )));
       setSelectedImage((current) => (current?.requestId === requestId || current?.id === requestId ? { ...current, status: 'failed', error: message, finishedAt: failedAt } : current));
-      setStatus((current) => ({ ...current, loading: false, message: current.configured ? 'Failed' : current.message }));
+      setStatus((current) => ({ ...current, message: current.configured ? 'Failed' : current.message }));
+    } finally {
+      setRunningGenerations((count) => Math.max(0, count - 1));
     }
   };
 
@@ -1782,8 +1793,8 @@ function App() {
                 </strong>
               </label>
 
-              <button type="submit" className="send-button" disabled={status.loading} aria-label="生成图片">
-                {status.loading ? (
+              <button type="submit" className="send-button" disabled={!canSubmitGeneration} aria-label="生成图片">
+                {isGenerating ? (
                   <svg viewBox="0 0 24 24" aria-hidden="true" className="loading-dots-icon">
                     <circle cx="6" cy="12" r="1.8" />
                     <circle cx="12" cy="12" r="1.8" />
