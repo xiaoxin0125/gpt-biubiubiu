@@ -10,6 +10,8 @@ ob_start();
 define('DEFAULT_REQUEST_TIMEOUT', 999);
 define('MAX_REQUEST_TIMEOUT', 999);
 define('REQUEST_TIMEOUT_BUFFER', 60);
+define('WALL_DISPLAY_MAX_BYTES', 1048576);
+define('IMAGE_REQUEST_LOG_LIMIT', 5);
 
 @ini_set('max_execution_time', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
 @ini_set('default_socket_timeout', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
@@ -95,6 +97,21 @@ function ensure_column(PDO $db, string $table, string $column, string $definitio
     }
 }
 
+function ensure_index(PDO $db, string $table, string $index, string $definition): void
+{
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $table) || !preg_match('/^[a-zA-Z0-9_]+$/', $index)) return;
+
+    $stmt = $db->prepare('SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?');
+    $stmt->execute([$table, $index]);
+    if ((int) $stmt->fetchColumn() > 0) return;
+
+    try {
+        $db->exec("ALTER TABLE `{$table}` ADD {$definition}");
+    } catch (PDOException $error) {
+        if (($error->errorInfo[1] ?? null) !== 1061) throw $error;
+    }
+}
+
 function normalize_display_name(string $value, string $fallback): string
 {
     $displayName = trim($value);
@@ -109,6 +126,16 @@ function valid_api_base_url(string $value): bool
     $parts = parse_url($value);
     $scheme = strtolower((string) ($parts['scheme'] ?? ''));
     return in_array($scheme, ['http', 'https'], true) && !empty($parts['host']);
+}
+
+function normalize_api_base_url(string $value): string
+{
+    return rtrim(preg_replace('/\s+/', '', $value), '/');
+}
+
+function normalize_request_timeout($value): int
+{
+    return max(10, min(MAX_REQUEST_TIMEOUT, (int) ($value ?: DEFAULT_REQUEST_TIMEOUT)));
 }
 
 function ensure_schema(): void
@@ -133,12 +160,31 @@ function ensure_schema(): void
       api_base_url VARCHAR(255) DEFAULT NULL,
       request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
       stream TINYINT(1) NOT NULL DEFAULT 0,
+      active_api_config_id BIGINT UNSIGNED DEFAULT NULL,
       api_key_ciphertext TEXT DEFAULT NULL,
       api_key_iv VARCHAR(64) DEFAULT NULL,
       api_key_tag VARCHAR(64) DEFAULT NULL,
       api_key_hint VARCHAR(24) DEFAULT NULL,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       CONSTRAINT fk_user_settings_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS user_api_configs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      user_id BIGINT UNSIGNED NOT NULL,
+      api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI Compatible',
+      api_base_url VARCHAR(255) NOT NULL DEFAULT '',
+      model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
+      request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
+      api_key_ciphertext TEXT DEFAULT NULL,
+      api_key_iv VARCHAR(64) DEFAULT NULL,
+      api_key_tag VARCHAR(64) DEFAULT NULL,
+      api_key_hint VARCHAR(24) DEFAULT NULL,
+      sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_user_api_configs_user_sort (user_id, sort_order, id),
+      CONSTRAINT fk_user_api_configs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $db->exec("CREATE TABLE IF NOT EXISTS wall_items (
@@ -151,6 +197,13 @@ function ensure_schema(): void
       image_url TEXT DEFAULT NULL,
       image_b64 LONGTEXT DEFAULT NULL,
       image_mime VARCHAR(80) DEFAULT 'image/png',
+      original_url TEXT DEFAULT NULL,
+      display_url TEXT DEFAULT NULL,
+      original_path TEXT DEFAULT NULL,
+      display_path TEXT DEFAULT NULL,
+      original_bytes BIGINT UNSIGNED DEFAULT NULL,
+      display_bytes BIGINT UNSIGNED DEFAULT NULL,
+      duration_seconds INT UNSIGNED DEFAULT NULL,
       params_json JSON DEFAULT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_wall_items_created (created_at),
@@ -164,6 +217,15 @@ function ensure_schema(): void
     ensure_column($db, 'user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
     ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');
     ensure_column($db, 'user_settings', 'stream', 'stream TINYINT(1) NOT NULL DEFAULT 0 AFTER request_timeout');
+    ensure_column($db, 'user_settings', 'active_api_config_id', 'active_api_config_id BIGINT UNSIGNED DEFAULT NULL AFTER stream');
+    ensure_column($db, 'wall_items', 'original_url', 'original_url TEXT DEFAULT NULL AFTER image_mime');
+    ensure_column($db, 'wall_items', 'display_url', 'display_url TEXT DEFAULT NULL AFTER original_url');
+    ensure_column($db, 'wall_items', 'original_path', 'original_path TEXT DEFAULT NULL AFTER display_url');
+    ensure_column($db, 'wall_items', 'display_path', 'display_path TEXT DEFAULT NULL AFTER original_path');
+    ensure_column($db, 'wall_items', 'original_bytes', 'original_bytes BIGINT UNSIGNED DEFAULT NULL AFTER display_path');
+    ensure_column($db, 'wall_items', 'display_bytes', 'display_bytes BIGINT UNSIGNED DEFAULT NULL AFTER original_bytes');
+    ensure_column($db, 'wall_items', 'duration_seconds', 'duration_seconds INT UNSIGNED DEFAULT NULL AFTER display_bytes');
+    ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
 
     $adminHash = password_hash('1427145484', PASSWORD_BCRYPT, ['cost' => 12]);
     $stmt = $db->prepare('INSERT INTO users (username, display_name, password_hash, is_admin) VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE is_admin = 1');
@@ -267,24 +329,6 @@ function require_user(): array
     return $user;
 }
 
-function settings_for_user(int $userId): ?array
-{
-    $stmt = pdo()->prepare('SELECT * FROM user_settings WHERE user_id = ? LIMIT 1');
-    $stmt->execute([$userId]);
-    $settings = $stmt->fetch();
-    if (!$settings) return null;
-
-    return [
-        'model' => $settings['model'] ?: '',
-        'apiName' => $settings['api_name'] ?: 'OpenAI Compatible',
-        'apiBaseUrl' => $settings['api_base_url'] ?: '',
-        'requestTimeout' => (int) ($settings['request_timeout'] ?: DEFAULT_REQUEST_TIMEOUT),
-        'stream' => !empty($settings['stream']),
-        'hasApiKey' => !empty($settings['api_key_ciphertext']),
-        'apiKeyHint' => $settings['api_key_hint'] ?: '',
-    ];
-}
-
 function api_key_secret(): string
 {
     return (string) (cfg('user_api_key_secret') ?: cfg('session_secret') ?: '');
@@ -327,21 +371,400 @@ function decrypt_api_key(?array $settings): string
     return $plain === false ? '' : $plain;
 }
 
-function stored_user_settings(): ?array
+function stored_user_settings_row(int $userId): ?array
 {
-    $userId = session_user_id();
-    if (!$userId) return null;
-
     $stmt = pdo()->prepare('SELECT * FROM user_settings WHERE user_id = ? LIMIT 1');
     $stmt->execute([$userId]);
     $settings = $stmt->fetch();
     return $settings ?: null;
 }
 
+function stored_user_settings(): ?array
+{
+    $userId = session_user_id();
+    return $userId ? stored_user_settings_row($userId) : null;
+}
+
+function config_from_row(array $row): array
+{
+    return [
+        'id' => (int) $row['id'],
+        'apiName' => $row['api_name'] ?: 'OpenAI Compatible',
+        'apiBaseUrl' => $row['api_base_url'] ?: '',
+        'model' => $row['model'] ?: 'gpt-image-2',
+        'requestTimeout' => (int) ($row['request_timeout'] ?: DEFAULT_REQUEST_TIMEOUT),
+        'hasApiKey' => !empty($row['api_key_ciphertext']),
+        'apiKeyHint' => $row['api_key_hint'] ?: '',
+        'sortOrder' => (int) ($row['sort_order'] ?? 0),
+    ];
+}
+
+function legacy_settings_config(array $settings): array
+{
+    return [
+        'apiName' => trim((string) ($settings['api_name'] ?? '')) ?: 'OpenAI Compatible',
+        'apiBaseUrl' => trim((string) ($settings['api_base_url'] ?? '')),
+        'model' => trim((string) ($settings['model'] ?? '')) ?: 'gpt-image-2',
+        'requestTimeout' => normalize_request_timeout($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
+        'api_key_ciphertext' => $settings['api_key_ciphertext'] ?? null,
+        'api_key_iv' => $settings['api_key_iv'] ?? null,
+        'api_key_tag' => $settings['api_key_tag'] ?? null,
+        'api_key_hint' => $settings['api_key_hint'] ?? null,
+    ];
+}
+
+function ensure_user_api_config(int $userId): ?array
+{
+    $db = pdo();
+    $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE user_id = ? ORDER BY sort_order ASC, id ASC LIMIT 1');
+    $stmt->execute([$userId]);
+    $existing = $stmt->fetch();
+    if ($existing) return $existing;
+
+    $settings = stored_user_settings_row($userId) ?: [];
+    $legacy = legacy_settings_config($settings);
+    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
+    $stmt->execute([
+        $userId,
+        $legacy['apiName'],
+        $legacy['apiBaseUrl'],
+        $legacy['model'],
+        $legacy['requestTimeout'],
+        $legacy['api_key_ciphertext'],
+        $legacy['api_key_iv'],
+        $legacy['api_key_tag'],
+        $legacy['api_key_hint'],
+    ]);
+    $configId = (int) $db->lastInsertId();
+    $stmt = $db->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream, active_api_config_id, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE active_api_config_id = COALESCE(active_api_config_id, VALUES(active_api_config_id))');
+    $stmt->execute([
+        $userId,
+        $legacy['model'],
+        $legacy['apiName'],
+        $legacy['apiBaseUrl'],
+        $legacy['requestTimeout'],
+        $configId,
+        $legacy['api_key_ciphertext'],
+        $legacy['api_key_iv'],
+        $legacy['api_key_tag'],
+        $legacy['api_key_hint'],
+    ]);
+
+    $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? LIMIT 1');
+    $stmt->execute([$configId]);
+    return $stmt->fetch() ?: null;
+}
+
+function user_api_config_rows(int $userId): array
+{
+    ensure_user_api_config($userId);
+    $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE user_id = ? ORDER BY sort_order ASC, id ASC');
+    $stmt->execute([$userId]);
+    return $stmt->fetchAll();
+}
+
+function active_api_config_row(int $userId): ?array
+{
+    $settings = stored_user_settings_row($userId);
+    ensure_user_api_config($userId);
+    $activeId = (int) ($settings['active_api_config_id'] ?? 0);
+    if ($activeId > 0) {
+        $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+        $stmt->execute([$activeId, $userId]);
+        $row = $stmt->fetch();
+        if ($row) return $row;
+    }
+
+    $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE user_id = ? ORDER BY sort_order ASC, id ASC LIMIT 1');
+    $stmt->execute([$userId]);
+    $row = $stmt->fetch() ?: null;
+    if ($row) {
+        $stmt = pdo()->prepare('UPDATE user_settings SET active_api_config_id = ? WHERE user_id = ?');
+        $stmt->execute([(int) $row['id'], $userId]);
+    }
+    return $row;
+}
+
+function settings_for_user(int $userId): ?array
+{
+    $settings = stored_user_settings_row($userId);
+    $configs = user_api_config_rows($userId);
+    $active = active_api_config_row($userId);
+    $activeClient = $active ? config_from_row($active) : null;
+
+    return [
+        'stream' => !empty($settings['stream']),
+        'activeApiConfigId' => $activeClient['id'] ?? null,
+        'apiConfigs' => array_map('config_from_row', $configs),
+        'activeConfig' => $activeClient,
+        'model' => $activeClient['model'] ?? 'gpt-image-2',
+        'apiName' => $activeClient['apiName'] ?? 'OpenAI Compatible',
+        'apiBaseUrl' => $activeClient['apiBaseUrl'] ?? '',
+        'requestTimeout' => $activeClient['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT,
+        'hasApiKey' => $activeClient['hasApiKey'] ?? false,
+        'apiKeyHint' => $activeClient['apiKeyHint'] ?? '',
+    ];
+}
+
 function stored_user_api_key(): string
 {
-    $settings = stored_user_settings();
-    return decrypt_api_key($settings);
+    $userId = session_user_id();
+    if (!$userId) return '';
+    return decrypt_api_key(active_api_config_row($userId));
+}
+
+function save_user_settings(array $user, array $body): array
+{
+    $db = pdo();
+    $settings = is_array($body['settings'] ?? null) ? $body['settings'] : [];
+    $configs = array_values(array_filter(is_array($body['apiConfigs'] ?? null) ? $body['apiConfigs'] : [], 'is_array'));
+    if (!$configs && isset($settings['apiName'], $settings['apiBaseUrl'])) $configs = [$settings];
+    if (!$configs) json_response(['error' => '至少保留一套 API 配置'], 400);
+
+    $activeId = (int) ($settings['activeApiConfigId'] ?? ($settings['active_api_config_id'] ?? 0));
+    $stream = !empty($settings['stream']);
+    $seenIds = [];
+    $savedRows = [];
+
+    $db->beginTransaction();
+    try {
+        foreach ($configs as $index => $config) {
+            $configId = (int) ($config['id'] ?? 0);
+            $apiName = trim((string) ($config['apiName'] ?? ($config['api_name'] ?? 'OpenAI Compatible'))) ?: 'OpenAI Compatible';
+            $apiBaseUrl = normalize_api_base_url((string) ($config['apiBaseUrl'] ?? ($config['api_base_url'] ?? '')));
+            $model = trim((string) ($config['model'] ?? cfg('openai_image_model', 'gpt-image-2'))) ?: 'gpt-image-2';
+            $requestTimeout = normalize_request_timeout($config['requestTimeout'] ?? ($config['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT));
+            $apiKey = trim((string) ($config['apiKey'] ?? ''));
+            $clearApiKey = !empty($config['clearApiKey']);
+            if (!valid_api_base_url($apiBaseUrl)) json_response(['error' => 'API 地址必须是 http 或 https 地址'], 400);
+            if ($apiKey !== '' && empty($config['confirmApiKeySave'])) json_response(['error' => '保存 API Key 前需要确认'], 400);
+            if ($apiKey !== '' && api_key_secret() === '') json_response(['error' => '服务端未配置 USER_API_KEY_SECRET'], 500);
+
+            $existing = [];
+            if ($configId > 0) {
+                $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+                $stmt->execute([$configId, $user['id']]);
+                $existing = $stmt->fetch() ?: [];
+                if (!$existing) $configId = 0;
+            }
+
+            $encrypted = $apiKey !== '' ? encrypt_api_key($apiKey) : [];
+            $apiFields = $clearApiKey ? [null, null, null, null] : [
+                $encrypted['api_key_ciphertext'] ?? ($existing['api_key_ciphertext'] ?? null),
+                $encrypted['api_key_iv'] ?? ($existing['api_key_iv'] ?? null),
+                $encrypted['api_key_tag'] ?? ($existing['api_key_tag'] ?? null),
+                $encrypted['api_key_hint'] ?? ($existing['api_key_hint'] ?? null),
+            ];
+
+            if ($configId > 0) {
+                $stmt = $db->prepare('UPDATE user_api_configs SET api_name = ?, api_base_url = ?, model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
+                $stmt->execute([$apiName, $apiBaseUrl, $model, $requestTimeout, $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3], $index, $configId, $user['id']]);
+            } else {
+                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt->execute([$user['id'], $apiName, $apiBaseUrl, $model, $requestTimeout, $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3], $index]);
+                $configId = (int) $db->lastInsertId();
+            }
+
+            $seenIds[] = $configId;
+            if (!$activeId) $activeId = $configId;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($seenIds), '?'));
+        $params = array_merge([$user['id']], $seenIds);
+        $db->prepare("DELETE FROM user_api_configs WHERE user_id = ? AND id NOT IN ({$placeholders})")->execute($params);
+        if (!in_array($activeId, $seenIds, true)) $activeId = $seenIds[0];
+
+        $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+        $stmt->execute([$activeId, $user['id']]);
+        $active = $stmt->fetch();
+        if (!$active) throw new RuntimeException('当前 API 配置不存在');
+
+        $stmt = $db->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream, active_api_config_id, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE model = VALUES(model), api_name = VALUES(api_name), api_base_url = VALUES(api_base_url), request_timeout = VALUES(request_timeout), stream = VALUES(stream), active_api_config_id = VALUES(active_api_config_id), api_key_ciphertext = VALUES(api_key_ciphertext), api_key_iv = VALUES(api_key_iv), api_key_tag = VALUES(api_key_tag), api_key_hint = VALUES(api_key_hint)');
+        $stmt->execute([
+            $user['id'],
+            $active['model'],
+            $active['api_name'],
+            $active['api_base_url'],
+            $active['request_timeout'],
+            $stream ? 1 : 0,
+            $activeId,
+            $active['api_key_ciphertext'],
+            $active['api_key_iv'],
+            $active['api_key_tag'],
+            $active['api_key_hint'],
+        ]);
+
+        $db->commit();
+        return settings_for_user((int) $user['id']);
+    } catch (Throwable $error) {
+        $db->rollBack();
+        throw $error;
+    }
+}
+
+function public_base_dir(): string
+{
+    return dirname(__DIR__);
+}
+
+function public_url_for_path(string $path): string
+{
+    $relative = str_replace('\\', '/', $path);
+    $root = str_replace('\\', '/', public_base_dir());
+    if (strpos($relative, $root) === 0) $relative = substr($relative, strlen($root));
+    return '/' . ltrim($relative, '/');
+}
+
+function ensure_dir(string $path): void
+{
+    if (!is_dir($path) && !mkdir($path, 0775, true) && !is_dir($path)) throw new RuntimeException('无法创建目录：' . $path);
+}
+
+function extension_for_mime(string $mime): string
+{
+    $mime = strtolower($mime);
+    if ($mime === 'image/jpeg' || $mime === 'image/jpg') return 'jpg';
+    if ($mime === 'image/webp') return 'webp';
+    if ($mime === 'image/gif') return 'gif';
+    return 'png';
+}
+
+function mime_from_binary(string $binary, string $fallback = 'image/png'): string
+{
+    $info = @getimagesizefromstring($binary);
+    if (is_array($info) && !empty($info['mime'])) return (string) $info['mime'];
+    return $fallback ?: 'image/png';
+}
+
+function decode_image_payload(array $image): array
+{
+    $imageUrl = trim((string) ($image['url'] ?? ''));
+    $imageB64 = trim((string) ($image['b64_json'] ?? ''));
+    $mime = trim((string) ($image['mime'] ?? 'image/png')) ?: 'image/png';
+
+    if ($imageB64 !== '') {
+        $imageB64 = preg_replace('#^data:(image/[a-z0-9.+-]+);base64,#i', '', $imageB64);
+        $binary = base64_decode($imageB64, true);
+        if ($binary === false || $binary === '') json_response(['error' => '图片 base64 无法解析'], 400);
+        return ['binary' => $binary, 'mime' => mime_from_binary($binary, $mime), 'sourceUrl' => ''];
+    }
+
+    if ($imageUrl !== '') {
+        if (!preg_match('#^https?://#i', $imageUrl) && strpos($imageUrl, '/') !== 0) json_response(['error' => '图片 URL 不合法'], 400);
+        $binary = @file_get_contents($imageUrl);
+        if ($binary === false || $binary === '') json_response(['error' => '无法读取上墙图片'], 400);
+        return ['binary' => $binary, 'mime' => mime_from_binary($binary, $mime), 'sourceUrl' => $imageUrl];
+    }
+
+    json_response(['error' => '缺少可上墙的图片'], 400);
+}
+
+function create_image_resource(string $binary, string $mime)
+{
+    if (!function_exists('imagecreatefromstring')) return null;
+    $image = @imagecreatefromstring($binary);
+    if (!$image) return null;
+    if (function_exists('imagepalettetotruecolor')) @imagepalettetotruecolor($image);
+    if (in_array(strtolower($mime), ['image/png', 'image/webp'], true)) {
+        imagealphablending($image, true);
+        imagesavealpha($image, true);
+    }
+    return $image;
+}
+
+function encode_image_candidate($resource, string $path, string $mime, int $quality): bool
+{
+    $mime = strtolower($mime);
+    if (($mime === 'image/webp') && function_exists('imagewebp')) return imagewebp($resource, $path, $quality);
+    if (($mime === 'image/jpeg' || $mime === 'image/jpg') && function_exists('imagejpeg')) return imagejpeg($resource, $path, $quality);
+    if ($mime === 'image/png' && function_exists('imagepng')) {
+        $level = max(0, min(9, (int) round((100 - $quality) / 11)));
+        return imagepng($resource, $path, $level);
+    }
+    return false;
+}
+
+function compress_display_image(string $binary, string $originalMime, string $targetPath): array
+{
+    if (strlen($binary) <= WALL_DISPLAY_MAX_BYTES) {
+        file_put_contents($targetPath, $binary);
+        return ['path' => $targetPath, 'mime' => $originalMime, 'bytes' => filesize($targetPath) ?: strlen($binary)];
+    }
+
+    $image = create_image_resource($binary, $originalMime);
+    if (!$image) {
+        file_put_contents($targetPath, $binary);
+        return ['path' => $targetPath, 'mime' => $originalMime, 'bytes' => filesize($targetPath) ?: strlen($binary)];
+    }
+
+    $targetMime = function_exists('imagewebp') ? 'image/webp' : 'image/jpeg';
+    $targetPath = preg_replace('/\.[a-z0-9]+$/i', '.' . extension_for_mime($targetMime), $targetPath) ?: $targetPath;
+    $width = imagesx($image);
+    $height = imagesy($image);
+    $qualities = [88, 80, 72, 64, 56, 48, 40, 32];
+    $scales = [1, 0.9, 0.8, 0.7, 0.6, 0.5];
+    $bestPath = '';
+    $bestBytes = PHP_INT_MAX;
+
+    foreach ($scales as $scale) {
+        $work = $image;
+        if ($scale < 1) {
+            $nextWidth = max(1, (int) floor($width * $scale));
+            $nextHeight = max(1, (int) floor($height * $scale));
+            $work = imagescale($image, $nextWidth, $nextHeight);
+            if (!$work) continue;
+        }
+
+        foreach ($qualities as $quality) {
+            $candidatePath = preg_replace('/\.[a-z0-9]+$/i', '-' . (int) round($scale * 100) . '-' . $quality . '.' . extension_for_mime($targetMime), $targetPath) ?: $targetPath;
+            if (!encode_image_candidate($work, $candidatePath, $targetMime, $quality)) continue;
+            $bytes = filesize($candidatePath) ?: PHP_INT_MAX;
+            if ($bytes < $bestBytes) {
+                if ($bestPath && $bestPath !== $candidatePath && is_file($bestPath)) @unlink($bestPath);
+                $bestPath = $candidatePath;
+                $bestBytes = $bytes;
+            } elseif (is_file($candidatePath)) {
+                @unlink($candidatePath);
+            }
+            if ($bytes <= WALL_DISPLAY_MAX_BYTES) break 2;
+        }
+
+        if ($work !== $image) imagedestroy($work);
+    }
+
+    imagedestroy($image);
+    if ($bestPath === '') {
+        file_put_contents($targetPath, $binary);
+        return ['path' => $targetPath, 'mime' => $originalMime, 'bytes' => filesize($targetPath) ?: strlen($binary)];
+    }
+
+    return ['path' => $bestPath, 'mime' => $targetMime, 'bytes' => $bestBytes];
+}
+
+function save_wall_image(array $image): array
+{
+    $payload = decode_image_payload($image);
+    $mime = $payload['mime'];
+    $id = bin2hex(random_bytes(12));
+    $originalDir = public_base_dir() . '/wall-images/original';
+    $displayDir = public_base_dir() . '/wall-images/display';
+    ensure_dir($originalDir);
+    ensure_dir($displayDir);
+
+    $originalPath = $originalDir . '/' . $id . '.' . extension_for_mime($mime);
+    file_put_contents($originalPath, $payload['binary']);
+    $displayBasePath = $displayDir . '/' . $id . '.' . extension_for_mime($mime);
+    $display = compress_display_image($payload['binary'], $mime, $displayBasePath);
+
+    return [
+        'imageMime' => $mime,
+        'originalPath' => $originalPath,
+        'displayPath' => $display['path'],
+        'originalUrl' => public_url_for_path($originalPath),
+        'displayUrl' => public_url_for_path($display['path']),
+        'originalBytes' => filesize($originalPath) ?: strlen($payload['binary']),
+        'displayBytes' => $display['bytes'],
+    ];
 }
 
 function client_wall_item(array $item): array
@@ -352,20 +775,78 @@ function client_wall_item(array $item): array
         $params = is_array($decoded) ? $decoded : [];
     }
 
+    $displayUrl = $item['display_url'] ?: ($item['image_url'] ?: '');
+    $originalUrl = $item['original_url'] ?: ($item['image_url'] ?: $displayUrl);
+    $duration = $item['duration_seconds'] ?? ($params['durationSeconds'] ?? null);
+
     return [
         'id' => (int) $item['id'],
         'wallItemId' => (int) $item['id'],
-        'url' => $item['image_url'] ?: '',
-        'b64_json' => $item['image_b64'] ?: '',
+        'url' => $displayUrl,
+        'image_url' => $displayUrl,
+        'downloadUrl' => $originalUrl,
+        'originalUrl' => $originalUrl,
+        'b64_json' => $displayUrl ? '' : ($item['image_b64'] ?: ''),
         'imageMime' => $item['image_mime'] ?: 'image/png',
         'prompt' => $item['prompt'] ?: '',
         'revised_prompt' => $item['revised_prompt'] ?: '',
         'form' => $params,
         'authorName' => $item['author_name'] ?: '未知艺术家',
         'createdAt' => $item['created_at'],
+        'durationSeconds' => $duration !== null && $duration !== '' ? (int) $duration : null,
         'isOnWall' => true,
         'source' => $params['source'] ?? (($params['referenceName'] ?? '') !== '' ? 'edit' : 'generation'),
     ];
+}
+
+function request_log_dir(): string
+{
+    $dist = dirname(__DIR__, 2) . '/dist';
+    $base = is_dir($dist) ? $dist : public_base_dir();
+    return $base . '/image-requests';
+}
+
+function sanitize_log_payload($value)
+{
+    if (is_array($value)) {
+        $next = [];
+        foreach ($value as $key => $item) {
+            if (preg_match('/authorization|api[_-]?key|token|secret/i', (string) $key)) continue;
+            if (is_string($item) && strlen($item) > 4096 && preg_match('/^[a-z0-9+\/=\r\n]+$/i', $item)) {
+                $next[$key] = '[base64 omitted]';
+            } else {
+                $next[$key] = sanitize_log_payload($item);
+            }
+        }
+        return $next;
+    }
+    return $value;
+}
+
+function rotate_request_logs(string $dir): void
+{
+    $files = glob($dir . '/*.json') ?: [];
+    usort($files, fn($a, $b) => filemtime($b) <=> filemtime($a));
+    foreach (array_slice($files, IMAGE_REQUEST_LOG_LIMIT) as $file) @unlink($file);
+}
+
+function save_request_log(array $body): array
+{
+    $dir = request_log_dir();
+    ensure_dir($dir);
+    $id = preg_replace('/[^a-zA-Z0-9_.-]/', '-', (string) ($body['requestId'] ?? ('request-' . time())));
+    $path = $dir . '/' . date('Ymd-His') . '-' . $id . '.json';
+    $payload = [
+        'requestId' => $body['requestId'] ?? null,
+        'mode' => $body['mode'] ?? null,
+        'createdAt' => date(DATE_ATOM),
+        'request' => sanitize_log_payload($body['request'] ?? null),
+        'response' => sanitize_log_payload($body['response'] ?? null),
+        'error' => sanitize_log_payload($body['error'] ?? null),
+    ];
+    file_put_contents($path, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+    rotate_request_logs($dir);
+    return ['ok' => true, 'file' => basename($path)];
 }
 
 function route_path(): string
@@ -389,7 +870,8 @@ try {
         try {
             ensure_schema();
             $settings = stored_user_settings();
-            $apiName = trim((string) ($settings['api_name'] ?? '')) ?: $apiName;
+            $active = session_user_id() ? active_api_config_row((int) session_user_id()) : null;
+            $apiName = trim((string) ($active['api_name'] ?? ($settings['api_name'] ?? ''))) ?: $apiName;
             $configured = stored_user_api_key() !== '';
         } catch (Throwable $error) {
             $configured = false;
@@ -429,7 +911,7 @@ try {
             $stmt->execute([$username, $displayName, $hash]);
             $id = (int) pdo()->lastInsertId();
             set_signed_cookie('session_user', (string) $id, 30 * 24 * 60 * 60);
-            json_response(['user' => ['id' => $id, 'username' => $username, 'displayName' => $displayName, 'isAdmin' => false], 'settings' => null]);
+            json_response(['user' => ['id' => $id, 'username' => $username, 'displayName' => $displayName, 'isAdmin' => false], 'settings' => settings_for_user($id)]);
         } catch (Throwable $error) {
             json_response(['error' => '用户名已存在'], 400);
         }
@@ -484,50 +966,20 @@ try {
 
     if ($method === 'GET' && $route === '/settings/direct') {
         $user = require_user();
-        $stmt = pdo()->prepare('SELECT * FROM user_settings WHERE user_id = ? LIMIT 1');
-        $stmt->execute([$user['id']]);
-        $settings = $stmt->fetch() ?: null;
+        $settings = settings_for_user((int) $user['id']);
         json_response([
-            'settings' => settings_for_user((int) $user['id']),
-            'apiKey' => decrypt_api_key($settings),
+            'settings' => $settings,
+            'apiKey' => stored_user_api_key(),
         ]);
     }
 
     if ($method === 'POST' && $route === '/settings') {
         $user = require_user();
-        $settings = is_array($body['settings'] ?? null) ? $body['settings'] : [];
-        $apiKeyToSave = trim((string) ($body['apiKey'] ?? ''));
-        $clearApiKey = !empty($body['clearApiKey']);
-        if ($apiKeyToSave !== '' && empty($body['confirmApiKeySave'])) json_response(['error' => '保存 API Key 前需要确认'], 400);
-        if ($apiKeyToSave !== '' && api_key_secret() === '') json_response(['error' => '服务端未配置 USER_API_KEY_SECRET'], 500);
+        json_response(['settings' => save_user_settings($user, $body)]);
+    }
 
-        $stmt = pdo()->prepare('SELECT * FROM user_settings WHERE user_id = ? LIMIT 1');
-        $stmt->execute([$user['id']]);
-        $existing = $stmt->fetch() ?: [];
-        $encrypted = $apiKeyToSave !== '' ? encrypt_api_key($apiKeyToSave) : [];
-        $apiFields = $clearApiKey ? [null, null, null, null] : [
-            $encrypted['api_key_ciphertext'] ?? ($existing['api_key_ciphertext'] ?? null),
-            $encrypted['api_key_iv'] ?? ($existing['api_key_iv'] ?? null),
-            $encrypted['api_key_tag'] ?? ($existing['api_key_tag'] ?? null),
-            $encrypted['api_key_hint'] ?? ($existing['api_key_hint'] ?? null),
-        ];
-
-        $stmt = pdo()->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE model = VALUES(model), api_name = VALUES(api_name), api_base_url = VALUES(api_base_url), request_timeout = VALUES(request_timeout), stream = VALUES(stream), api_key_ciphertext = VALUES(api_key_ciphertext), api_key_iv = VALUES(api_key_iv), api_key_tag = VALUES(api_key_tag), api_key_hint = VALUES(api_key_hint)');
-        $apiBaseUrl = preg_replace('/\s+/', '', (string) ($settings['apiBaseUrl'] ?? ($settings['api_base_url'] ?? '')));
-        $requestTimeout = max(10, min(MAX_REQUEST_TIMEOUT, (int) ($settings['requestTimeout'] ?? ($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT))));
-        if (!valid_api_base_url($apiBaseUrl)) json_response(['error' => 'API 地址必须是 http 或 https 地址'], 400);
-        $stmt->execute([
-            $user['id'],
-            trim((string) ($settings['model'] ?? cfg('openai_image_model', 'gpt-image-2'))),
-            trim((string) ($settings['apiName'] ?? ($settings['api_name'] ?? 'OpenAI Compatible'))),
-            $apiBaseUrl,
-            $requestTimeout,
-            !empty($settings['stream']) ? 1 : 0,
-            $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3],
-        ]);
-        json_response(['settings' => settings_for_user((int) $user['id'])]);
+    if ($method === 'POST' && $route === '/image-requests') {
+        json_response(save_request_log($body));
     }
 
     if ($method === 'GET' && $route === '/wall') {
@@ -536,28 +988,43 @@ try {
         json_response(['items' => array_map('client_wall_item', $rows)]);
     }
 
+    if ($method === 'GET' && preg_match('#^/wall/(\d+)$#', $route, $matches)) {
+        require_database();
+        $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
+        $stmt->execute([(int) $matches[1]]);
+        $item = $stmt->fetch();
+        if (!$item) json_response(['exists' => false], 404);
+        json_response(['exists' => true, 'item' => client_wall_item($item)]);
+    }
+
     if ($method === 'POST' && $route === '/wall') {
         require_database();
         $image = is_array($body['image'] ?? null) ? $body['image'] : [];
-        $imageUrl = trim((string) ($image['url'] ?? ''));
-        $imageB64 = trim((string) ($image['b64_json'] ?? ''));
-        if ($imageUrl === '' && $imageB64 === '') json_response(['error' => '缺少可上墙的图片'], 400);
-
+        $storedImage = save_wall_image($image);
         $user = current_user();
         $visitorId = $user ? null : visitor_id();
         $form = is_array($body['form'] ?? null) ? $body['form'] : [];
         $params = is_array($body['params'] ?? null) ? $body['params'] : $form;
+        $duration = isset($body['durationSeconds']) ? max(0, (int) $body['durationSeconds']) : (isset($params['durationSeconds']) ? max(0, (int) $params['durationSeconds']) : null);
+        if ($duration !== null) $params['durationSeconds'] = $duration;
         $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? '未命名作品')));
-        $stmt = pdo()->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, params_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt = pdo()->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, original_url, display_url, original_path, display_path, original_bytes, display_bytes, duration_seconds, params_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $user['id'] ?? null,
             $visitorId,
             $user['displayName'] ?? ($user['username'] ?? '未知艺术家'),
-            $prompt,
+            $prompt ?: '未命名作品',
             $body['revised_prompt'] ?? '',
-            $imageUrl ?: null,
-            $imageB64 ?: null,
-            $image['mime'] ?? 'image/png',
+            $storedImage['displayUrl'],
+            null,
+            $storedImage['imageMime'],
+            $storedImage['originalUrl'],
+            $storedImage['displayUrl'],
+            $storedImage['originalPath'],
+            $storedImage['displayPath'],
+            $storedImage['originalBytes'],
+            $storedImage['displayBytes'],
+            $duration,
             json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ]);
         $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
@@ -576,6 +1043,10 @@ try {
         $isOwner = $item['user_id'] ? ((int) $item['user_id'] === (int) ($user['id'] ?? 0)) : (!empty($item['client_id']) && $item['client_id'] === $currentVisitor);
         $canDelete = $isOwner || !empty($user['isAdmin']);
         if (!$canDelete) json_response(['error' => '只能取消自己上墙的作品'], 403);
+        foreach (['original_path', 'display_path'] as $pathKey) {
+            $path = (string) ($item[$pathKey] ?? '');
+            if ($path && is_file($path)) @unlink($path);
+        }
         $stmt = pdo()->prepare('DELETE FROM wall_items WHERE id = ?');
         $stmt->execute([(int) $matches[1]]);
         json_response(['ok' => true]);

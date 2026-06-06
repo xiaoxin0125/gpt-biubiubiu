@@ -141,7 +141,8 @@ const emptyPasswordForm = {
   newPassword: '',
 };
 
-const defaultApiConfigForm = {
+const defaultApiConfigItem = {
+  id: 'default-api-config',
   apiName: 'API易 gpt-image-2',
   apiBaseUrl: DEFAULT_DIRECT_API_BASE_URL,
   model: defaultForm.model,
@@ -149,7 +150,13 @@ const defaultApiConfigForm = {
   hasApiKey: false,
   apiKeyHint: '',
   requestTimeout: MAX_REQUEST_TIMEOUT_SECONDS,
+};
+
+const defaultApiConfigForm = {
+  ...defaultApiConfigItem,
   stream: false,
+  activeApiConfigId: defaultApiConfigItem.id,
+  apiConfigs: [defaultApiConfigItem],
 };
 
 const normalizeQuality = (value) => (qualityOptions.some((item) => item.value === value) ? value : 'auto');
@@ -238,6 +245,12 @@ const createImageSrc = (image) => {
   if (!b64Json) return '';
 
   return createObjectImageUrl(b64Json, getDataImageMime(b64Json) || image?.imageMime || image?.image_mime || 'image/png');
+};
+
+const createImageDownloadSrc = (image) => {
+  const url = String(image?.downloadUrl || image?.originalUrl || image?.original_url || image?.url || image?.image_url || '');
+  if (url) return isDataImageValue(url) ? createObjectImageUrl(url, getDataImageMime(url) || image?.imageMime || 'image/png') : url;
+  return createImageSrc(image);
 };
 
 const normalizeImageSource = (source) => {
@@ -442,17 +455,38 @@ const readApiResponse = async (response) => {
 
 const normalizeApiBaseUrl = (value) => String(value || DEFAULT_DIRECT_API_BASE_URL).replace(/\s+/g, '').replace(/\/+$/, '') || DEFAULT_DIRECT_API_BASE_URL;
 
-const normalizeServerSettings = (value = {}) => ({
-  apiName: String(value.apiName || value.api_name || defaultApiConfigForm.apiName).trim() || defaultApiConfigForm.apiName,
-  apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url),
-  model: String(value.model || defaultForm.model).trim() || defaultForm.model,
+const createLocalApiConfigId = () => `api-config-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+const normalizeApiConfigItem = (value = {}, index = 0) => ({
+  id: value.id ?? value.configId ?? value.config_id ?? createLocalApiConfigId(),
+  apiName: String(value.apiName || value.api_name || (index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`)).trim() || defaultApiConfigItem.apiName,
+  apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url || defaultApiConfigItem.apiBaseUrl),
+  model: String(value.model || defaultApiConfigItem.model).trim() || defaultApiConfigItem.model,
   apiKey: '',
   hasApiKey: Boolean(value.hasApiKey || value.has_api_key),
   apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),
-  requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigForm.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
-  stream: Boolean(value.stream),
-  form: normalizeForm({ model: value.model || defaultForm.model }),
+  clearApiKey: Boolean(value.clearApiKey || value.clear_api_key),
+  requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
 });
+
+const normalizeServerSettings = (value = {}) => {
+  const rawConfigs = Array.isArray(value.apiConfigs || value.api_configs)
+    ? (value.apiConfigs || value.api_configs)
+    : [value.activeConfig || value.active_config || value];
+  const apiConfigs = rawConfigs.map(normalizeApiConfigItem).filter(Boolean);
+  const safeConfigs = apiConfigs.length ? apiConfigs : [normalizeApiConfigItem(defaultApiConfigItem)];
+  const activeApiConfigId = value.activeApiConfigId ?? value.active_api_config_id ?? value.activeConfig?.id ?? value.active_config?.id ?? safeConfigs[0].id;
+  const activeConfig = safeConfigs.find((item) => String(item.id) === String(activeApiConfigId)) || safeConfigs[0];
+
+  return {
+    ...activeConfig,
+    apiKey: '',
+    stream: Boolean(value.stream),
+    activeApiConfigId: activeConfig.id,
+    apiConfigs: safeConfigs,
+    form: normalizeForm({ model: activeConfig.model || defaultForm.model }),
+  };
+};
 
 const imageMimeForOutputFormat = (format) => {
   if (format === 'jpeg') return 'image/jpeg';
@@ -678,6 +712,7 @@ function App() {
   const [boardFilter, setBoardFilter] = useState('all');
   const [boardScope, setBoardScope] = useState('all');
   const [openSelect, setOpenSelect] = useState('');
+  const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const deletedRequestIdsRef = useRef(new Set());
 
@@ -705,7 +740,11 @@ function App() {
   const sourceBoardItems = view === 'wall' ? wallItems : boardScope === 'history' ? historyImages : boardScope === 'generate' ? visibleImages : allLocalImages;
   const activeFilterOptions = view === 'wall' ? wallFilterOptions : boardFilterOptions;
   const activeBoardFilter = activeFilterOptions.some((option) => option.value === boardFilter) ? boardFilter : 'all';
-  const statusText = status.configured ? (status.apiName || status.message || defaultApiConfigForm.apiName) : status.message;
+  const activeApiConfig = useMemo(() => {
+    const configs = Array.isArray(apiConfigForm.apiConfigs) && apiConfigForm.apiConfigs.length ? apiConfigForm.apiConfigs : [normalizeApiConfigItem(apiConfigForm)];
+    return configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId)) || configs[0];
+  }, [apiConfigForm]);
+  const statusText = status.configured ? (status.apiName || activeApiConfig?.apiName || status.message || defaultApiConfigItem.apiName) : status.message;
 
   const updateForm = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -755,9 +794,10 @@ function App() {
     );
   };
 
-  const buildGenerationPayload = (prompt) => {
-    const normalized = normalizeForm({ ...form, prompt, model: apiConfigForm.model || form.model });
-    const responseFormat = apiConfigForm.stream ? 'url' : normalizeResponseFormat(normalized.response_format);
+  const buildGenerationPayload = (prompt, apiConfig = activeApiConfig) => {
+    const normalized = normalizeForm({ ...form, prompt, model: apiConfig?.model || form.model });
+    const useStream = Boolean(apiConfig?.stream ?? apiConfigForm.stream);
+    const responseFormat = useStream ? 'url' : normalizeResponseFormat(normalized.response_format);
     const outputFormat = normalizeOutputFormat(normalized.output_format);
     const canUseOutputFormat = responseFormat === 'url';
     const payload = {
@@ -770,7 +810,7 @@ function App() {
 
     if (canUseOutputFormat) payload.output_format = outputFormat;
     if (normalized.size) payload.size = normalized.size;
-    if (apiConfigForm.stream && responseFormat === 'url') payload.stream = true;
+    if (useStream && responseFormat === 'url') payload.stream = true;
     if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
     if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
     if (canUseOutputFormat && ['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
@@ -778,8 +818,8 @@ function App() {
     return payload;
   };
 
-  const buildEditPayload = (prompt) => {
-    const normalized = normalizeForm({ ...form, prompt, model: apiConfigForm.model || form.model });
+  const buildEditPayload = (prompt, apiConfig = activeApiConfig) => {
+    const normalized = normalizeForm({ ...form, prompt, model: apiConfig?.model || form.model });
     const outputFormat = normalizeOutputFormat(normalized.output_format);
     const canUseOutputFormat = responseFormat === 'url';
     const payload = new FormData();
@@ -806,7 +846,66 @@ function App() {
     const apiKey = String(data.apiKey || data.api_key || '');
     if (!apiKey) throw new Error('请先在参数设置里保存 API Key。');
     setApiConfigForm((current) => ({ ...current, ...settings, apiKey: current.apiKey, hasApiKey: true }));
-    return { ...settings, apiKey };
+    return { ...settings, ...settings.apiConfigs.find((item) => String(item.id) === String(settings.activeApiConfigId)), apiKey };
+  };
+
+  const updateApiConfig = (id, key, value) => {
+    setApiConfigForm((current) => ({
+      ...current,
+      apiConfigs: (current.apiConfigs || []).map((item) => (String(item.id) === String(id) ? { ...item, [key]: value } : item)),
+    }));
+  };
+
+  const addApiConfig = () => {
+    const nextConfig = normalizeApiConfigItem({
+      id: createLocalApiConfigId(),
+      apiName: `API 配置 ${(apiConfigForm.apiConfigs || []).length + 1}`,
+      apiBaseUrl: activeApiConfig?.apiBaseUrl || DEFAULT_DIRECT_API_BASE_URL,
+      model: activeApiConfig?.model || defaultForm.model,
+      requestTimeout: activeApiConfig?.requestTimeout || MAX_REQUEST_TIMEOUT_SECONDS,
+    }, (apiConfigForm.apiConfigs || []).length);
+    setApiConfigForm((current) => ({
+      ...current,
+      activeApiConfigId: nextConfig.id,
+      apiConfigs: [...(current.apiConfigs || []), nextConfig],
+    }));
+  };
+
+  const removeApiConfig = (id) => {
+    setApiConfigForm((current) => {
+      const nextConfigs = (current.apiConfigs || []).filter((item) => String(item.id) !== String(id));
+      if (!nextConfigs.length) return current;
+      return {
+        ...current,
+        activeApiConfigId: String(current.activeApiConfigId) === String(id) ? nextConfigs[0].id : current.activeApiConfigId,
+        apiConfigs: nextConfigs,
+      };
+    });
+  };
+
+  const logImageRequest = async ({ requestId, mode, request, response, error: logError }) => {
+    try {
+      await requestJson('/api/image-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId, mode, request, response, error: logError }),
+      });
+    } catch {
+      // 日志失败不影响生图主流程。
+    }
+  };
+
+  const formDataLogPayload = (payload) => {
+    const fields = {};
+    const files = [];
+    payload.forEach((value, key) => {
+      if (value instanceof File) {
+        files.push({ key, name: value.name, type: value.type, size: value.size });
+      } else {
+        fields[key] = value;
+      }
+    });
+    return { fields, files };
   };
 
   const applyServerSettings = (settings, nextUser = user) => {
@@ -978,7 +1077,17 @@ function App() {
     setOpenSelect('');
   };
 
-  const getElapsedSeconds = (item) => Math.max(0, Math.floor(((item?.finishedAt ? new Date(item.finishedAt).getTime() : nowTick) - new Date(item?.startedAt || item?.createdAt || Date.now()).getTime()) / 1000));
+  const getElapsedSeconds = (item) => {
+    if (!item) return null;
+    if (item.durationSeconds !== undefined && item.durationSeconds !== null && item.durationSeconds !== '') return Math.max(0, Math.floor(Number(item.durationSeconds) || 0));
+    if (item.finishedAt && (item.startedAt || item.createdAt)) {
+      return Math.max(0, Math.floor((new Date(item.finishedAt).getTime() - new Date(item.startedAt || item.createdAt).getTime()) / 1000));
+    }
+    if (item.status === 'pending') {
+      return Math.max(0, Math.floor((nowTick - new Date(item.startedAt || item.createdAt || Date.now()).getTime()) / 1000));
+    }
+    return null;
+  };
 
   const handleReferenceChange = (event) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
@@ -1064,8 +1173,9 @@ function App() {
     const requestId = `request-${Date.now()}`;
     deletedRequestIdsRef.current.delete(requestId);
     const startedAt = new Date().toISOString();
-    const requestApiName = apiConfigForm.apiName || status.apiName || defaultApiConfigForm.apiName;
-    const imageForm = normalizeForm({ ...form, prompt, apiName: requestApiName });
+    const requestConfig = activeApiConfig || defaultApiConfigItem;
+    const requestApiName = requestConfig.apiName || status.apiName || defaultApiConfigItem.apiName;
+    const imageForm = normalizeForm({ ...form, prompt, model: requestConfig.model });
     const pendingItem = {
       id: requestId,
       requestId,
@@ -1080,15 +1190,23 @@ function App() {
     };
     setImages((items) => [pendingItem, ...items]);
 
+    let requestLogPayload = null;
     try {
       if (!user) throw new Error('请先登录后再生成图片。');
       const directConfig = await loadDirectSettings();
       const payload = hasReferenceImages
-        ? buildEditPayload(prompt)
-        : buildGenerationPayload(prompt);
+        ? buildEditPayload(prompt, directConfig)
+        : buildGenerationPayload(prompt, directConfig);
+      requestLogPayload = hasReferenceImages ? formDataLogPayload(payload) : payload;
       const data = hasReferenceImages
         ? await requestDirectImageFormData('/v1/images/edits', payload, directConfig)
         : await requestDirectImageJson('/v1/images/generations', payload, directConfig);
+      await logImageRequest({
+        requestId,
+        mode: hasReferenceImages ? 'edit' : 'generation',
+        request: requestLogPayload,
+        response: data,
+      });
       const outputFormat = hasReferenceImages
         ? (responseFormat === 'url' ? normalizeOutputFormat(form.output_format) : defaultForm.output_format)
         : payload.output_format || defaultForm.output_format;
@@ -1146,6 +1264,12 @@ function App() {
     } catch (requestError) {
       const failedAt = new Date().toISOString();
       const message = requestError instanceof Error ? requestError.message : '生成失败';
+      await logImageRequest({
+        requestId,
+        mode: hasReferenceImages ? 'edit' : 'generation',
+        request: requestLogPayload,
+        error: { message },
+      });
       if (deletedRequestIdsRef.current.has(requestId)) {
         setStatus((current) => ({ ...current, loading: false, message: current.configured ? '已删除' : current.message }));
         return;
@@ -1158,6 +1282,45 @@ function App() {
       )));
       setSelectedImage((current) => (current?.requestId === requestId || current?.id === requestId ? { ...current, status: 'failed', error: message, finishedAt: failedAt } : current));
       setStatus((current) => ({ ...current, loading: false, message: current.configured ? 'Failed' : current.message }));
+    }
+  };
+
+  const clearWallState = (image) => {
+    setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)));
+    setHistory((items) => {
+      const nextHistory = items.map((record) => ({
+        ...record,
+        images: (record.images || []).map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)),
+      }));
+      saveHistory(nextHistory);
+      return nextHistory;
+    });
+    setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: null, isOnWall: false } : current));
+  };
+
+  const checkWallState = async (image) => {
+    const wallItem = findWallItem(image);
+    if (!wallItem?.id) {
+      clearWallState(image);
+      setError('本地上墙状态已清理，可重新上墙。');
+      return;
+    }
+
+    const busyId = String(image.wallItemId || image.id || createImageSrc(image));
+    setWallBusyId(busyId);
+    try {
+      const data = await requestJson(`/api/wall/${wallItem.id}`);
+      if (data.item) {
+        setWallItems((items) => [data.item, ...items.filter((item) => Number(item.id) !== Number(data.item.id))]);
+        setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: data.item.id, isOnWall: true } : current));
+        setError('作品仍在墙上。');
+      }
+    } catch {
+      setWallItems((items) => items.filter((item) => Number(item.id) !== Number(wallItem.id)));
+      clearWallState(image);
+      setError('服务器未找到该上墙作品，可重新上墙。');
+    } finally {
+      setWallBusyId('');
     }
   };
 
@@ -1192,14 +1355,15 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           image: {
-            url: image.url || '',
+            url: createImageDownloadSrc(image) || image.url || '',
             b64_json: imageB64,
             mime: imageMime,
           },
           prompt: image.prompt || image.form?.prompt || form.prompt,
           revised_prompt: image.revised_prompt || '',
+          durationSeconds: getElapsedSeconds(image),
           form: { ...(image.form || form), source: normalizeImageSource(image.source) },
-          params: { ...(image.form || form), source: normalizeImageSource(image.source) },
+          params: { ...(image.form || form), source: normalizeImageSource(image.source), durationSeconds: getElapsedSeconds(image) },
         }),
       });
 
@@ -1258,27 +1422,37 @@ function App() {
       return;
     }
 
-    const nextSettings = normalizeServerSettings({ ...apiConfigForm, ...form });
+    const nextSettings = normalizeServerSettings({
+      ...apiConfigForm,
+      apiConfigs: apiConfigForm.apiConfigs,
+      activeApiConfigId: apiConfigForm.activeApiConfigId,
+      stream: apiConfigForm.stream,
+    });
     try {
       const data = await requestJson('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           settings: {
-            apiName: nextSettings.apiName,
-            apiBaseUrl: nextSettings.apiBaseUrl,
-            model: apiConfigForm.model || form.model || nextSettings.model,
-            requestTimeout: nextSettings.requestTimeout,
+            activeApiConfigId: nextSettings.activeApiConfigId,
             stream: nextSettings.stream,
           },
-          apiKey: apiConfigForm.apiKey,
-          confirmApiKeySave: Boolean(apiConfigForm.apiKey),
+          apiConfigs: (apiConfigForm.apiConfigs || []).map((item) => ({
+            id: item.id,
+            apiName: item.apiName,
+            apiBaseUrl: item.apiBaseUrl,
+            model: item.model,
+            requestTimeout: item.requestTimeout,
+            apiKey: item.apiKey,
+            confirmApiKeySave: Boolean(item.apiKey),
+            clearApiKey: Boolean(item.clearApiKey),
+          })),
         }),
       });
       applyServerSettings(data.settings, user);
-      setForm((current) => ({ ...current, model: data.settings?.model || apiConfigForm.model || current.model }));
+      setForm((current) => ({ ...current, model: data.settings?.model || activeApiConfig?.model || current.model }));
       setError('');
-      closeDialog();
+      setAuthTab('settings');
     } catch (settingsError) {
       setError(settingsError instanceof Error ? settingsError.message : '保存参数失败');
     }
@@ -1287,9 +1461,16 @@ function App() {
   const resetDirectSettings = () => {
     setApiConfigForm((current) => ({
       ...defaultApiConfigForm,
-      hasApiKey: current.hasApiKey,
-      apiKeyHint: current.apiKeyHint,
-      apiKey: '',
+      stream: current.stream,
+      apiConfigs: current.apiConfigs?.length ? current.apiConfigs.map((item, index) => ({
+        ...normalizeApiConfigItem(index === 0 ? defaultApiConfigItem : item, index),
+        id: item.id,
+        hasApiKey: item.hasApiKey,
+        apiKeyHint: item.apiKeyHint,
+        apiKey: '',
+        clearApiKey: false,
+      })) : [defaultApiConfigItem],
+      activeApiConfigId: current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
     }));
     setForm(defaultForm);
   };
@@ -1335,11 +1516,13 @@ function App() {
 
   const detailParams = selectedImage?.form || form;
   const detailSrc = createImageSrc(selectedImage);
+  const detailDownloadSrc = createImageDownloadSrc(selectedImage);
   const detailIsFailed = selectedImage?.status === 'failed' && !detailSrc;
   const detailIsPending = selectedImage?.status === 'pending' && !detailSrc;
   const detailInputPrompt = selectedImage?.prompt || detailParams.prompt || '';
   const detailRevisedPrompt = selectedImage?.revised_prompt || '';
-  const detailElapsed = selectedImage ? formatDuration(getElapsedSeconds(selectedImage)) : '00:00';
+  const detailElapsedSeconds = selectedImage ? getElapsedSeconds(selectedImage) : null;
+  const detailElapsed = detailElapsedSeconds === null ? '' : formatDuration(detailElapsedSeconds);
   const selectedWallItem = detailSrc ? findWallItem(selectedImage) : null;
   const selectedOnWall = Boolean(selectedWallItem);
   const busySelected = selectedImage && wallBusyId === String(selectedImage.wallItemId || selectedImage.id || detailSrc);
@@ -1349,7 +1532,7 @@ function App() {
     const isPending = image.status === 'pending';
     const isFailed = image.status === 'failed';
     const title = image.revised_prompt || image.prompt || image.form?.prompt || 'Generated image';
-    const apiName = image.apiName || status.apiName || defaultApiConfigForm.apiName;
+    const apiName = image.apiName || status.apiName || activeApiConfig?.apiName || defaultApiConfigItem.apiName;
     const canDelete = view !== 'wall';
 
     return (
@@ -1430,7 +1613,7 @@ function App() {
         </div>
       </header>
 
-      <section className="canvas-stage">
+      <section className={view === 'wall' ? 'canvas-stage is-wall-view' : 'canvas-stage'}>
         <div className="canvas-toolbar">
           <button type="button" className="toolbar-icon-button" onClick={view === 'wall' ? loadWall : () => setHistory(readHistory())} aria-label={view === 'wall' ? '刷新作品墙' : '刷新作品'}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1498,8 +1681,15 @@ function App() {
               rows={2}
             />
 
-            <div className="workbench-actions">
-              <div className="control-field size-control">
+            <div className={workbenchExpanded ? 'workbench-actions is-expanded' : 'workbench-actions'}>
+              <button type="button" className="workbench-toggle-button" onClick={() => setWorkbenchExpanded((current) => !current)} aria-expanded={workbenchExpanded} aria-label={workbenchExpanded ? '收起参数' : '展开参数'}>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16" />
+                  <path d="M7 12h10" />
+                  <path d="M10 17h4" />
+                </svg>
+              </button>
+              <div className="control-field size-control workbench-extra-control">
                 <span>尺寸</span>
                 <button type="button" className="tool-pill" onClick={openSizeDialog}>
                   {form.size || '自动'}
@@ -1512,7 +1702,7 @@ function App() {
                 value: form.quality,
                 options: qualityOptions,
                 onChange: (value) => updateForm('quality', value),
-                className: 'control-field',
+                className: 'control-field workbench-extra-control',
               })}
 
               {renderSelect({
@@ -1521,7 +1711,7 @@ function App() {
                 value: form.background,
                 options: backgroundOptions,
                 onChange: (value) => updateForm('background', value),
-                className: 'control-field',
+                className: 'control-field workbench-extra-control',
               })}
 
               {renderSelect({
@@ -1530,7 +1720,7 @@ function App() {
                 value: responseFormat,
                 options: responseFormatOptions,
                 onChange: (value) => updateForm('response_format', value),
-                className: 'control-field response-format-control',
+                className: 'control-field response-format-control workbench-extra-control',
               })}
 
               {renderSelect({
@@ -1540,10 +1730,10 @@ function App() {
                 options: outputFormatOptions.map((format) => ({ label: format.toUpperCase(), value: format })),
                 onChange: (value) => updateForm('output_format', value),
                 disabled: !canUseOutputFormat,
-                className: 'control-field',
+                className: 'control-field workbench-extra-control',
               })}
 
-              <label className={canCompressOutput ? 'control-field count-field' : 'control-field count-field is-disabled'}>
+              <label className={canCompressOutput ? 'control-field count-field workbench-extra-control' : 'control-field count-field is-disabled workbench-extra-control'}>
                 <span>压缩</span>
                 <input min="0" max="100" type="number" value={form.output_compression} disabled={!canCompressOutput} onChange={(event) => updateForm('output_compression', event.target.value)} />
               </label>
@@ -1555,10 +1745,10 @@ function App() {
                 options: moderationOptions,
                 onChange: (value) => updateForm('moderation', value),
                 disabled: hasReferenceImages,
-                className: 'control-field',
+                className: 'control-field workbench-extra-control',
               })}
 
-              <label className="control-field count-field">
+              <label className="control-field count-field workbench-extra-control">
                 <span>数量</span>
                 <input min="1" max={MAX_OUTPUT_IMAGES} type="number" value={form.n} onChange={(event) => updateForm('n', normalizeOutputCount(event.target.value))} />
               </label>
@@ -1642,7 +1832,7 @@ function App() {
             <section className="modal-card image-detail-modal" role="dialog" aria-modal="true" aria-label="图片详情">
               <div className="detail-preview">
                 <div className="detail-badges">
-                  <span>◷ {detailElapsed}</span>
+                  {detailElapsed ? <span>◷ {detailElapsed}</span> : null}
                   <span>{detailParams.size || '自动'}</span>
                   <span>{detailParams.response_format === 'url' ? detailParams.output_format || 'png' : getResponseFormatLabel(detailParams.response_format)}</span>
                 </div>
@@ -1671,10 +1861,12 @@ function App() {
                     <span>输入提示词</span>
                     <p>{detailInputPrompt || '无提示词'}</p>
                   </div>
-                  <div>
-                    <span>优化提示词</span>
-                    <p>{detailRevisedPrompt || '该接口未返回优化提示词'}</p>
-                  </div>
+                  {detailRevisedPrompt ? (
+                    <div>
+                      <span>优化提示词</span>
+                      <p>{detailRevisedPrompt}</p>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="detail-meta-grid">
@@ -1688,11 +1880,14 @@ function App() {
                   <div><span>数量</span><strong>{detailParams.n || 1}</strong></div>
                 </div>
 
-                <p className="created-line">创建于 {formatDate(selectedImage.createdAt)} · 耗时 {detailElapsed}</p>
+                <p className="created-line">创建于 {formatDate(selectedImage.createdAt)}{detailElapsed ? ` · 耗时 ${detailElapsed}` : ''}</p>
 
                 <div className="detail-actions">
-                  {detailSrc ? <a className="secondary-action" href={detailSrc} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer">下载</a> : null}
+                  {detailDownloadSrc ? <a className="secondary-action" href={detailDownloadSrc} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer">下载</a> : null}
                   <button type="button" className="secondary-action" onClick={() => reuseConfig(selectedImage)}>复用配置</button>
+                  {view !== 'wall' && selectedOnWall ? (
+                    <button type="button" className="secondary-action" onClick={() => checkWallState(selectedImage)} disabled={busySelected}>检测上墙</button>
+                  ) : null}
                   {view !== 'wall' ? (
                     <button type="button" className="secondary-action danger-action" onClick={() => deleteImage(selectedImage)}>删除</button>
                   ) : null}
@@ -1719,8 +1914,8 @@ function App() {
               {user ? (
                 <div className="account-panel">
                   <div className="segmented-control two-tabs account-tabs">
-                    <button type="button" className="is-active" onClick={() => setAuthTab('profile')}>账号信息</button>
-                    <button type="button" onClick={() => setActiveDialog('direct-settings')}>参数设置</button>
+                    <button type="button" className={authTab === 'profile' ? 'is-active' : ''} onClick={() => setAuthTab('profile')}>账号信息</button>
+                    <button type="button" className={authTab === 'settings' ? 'is-active' : ''} onClick={() => setAuthTab('settings')}>参数设置</button>
                   </div>
 
                   {authTab === 'profile' ? (
@@ -1748,6 +1943,80 @@ function App() {
                     </div>
                   ) : null}
 
+                  {authTab === 'settings' ? (
+                    <div className="settings-grid account-settings-grid direct-settings-grid">
+                      <div className="settings-section-title full-field">
+                        <strong>API 配置</strong>
+                        <span>可以保存多套 API。生成时使用当前启用的配置；API Key 加密存储，不会回显明文。</span>
+                      </div>
+
+                      {(apiConfigForm.apiConfigs || []).map((config, index) => {
+                        const isActiveConfig = String(config.id) === String(apiConfigForm.activeApiConfigId);
+                        return (
+                          <section className={isActiveConfig ? 'api-config-card full-field is-active' : 'api-config-card full-field'} key={config.id}>
+                            <div className="api-config-card-head">
+                              <div>
+                                <strong>{config.apiName || `API 配置 ${index + 1}`}</strong>
+                                <span>{isActiveConfig ? '当前启用' : '备用配置'}</span>
+                              </div>
+                              <div className="api-config-actions">
+                                <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, activeApiConfigId: config.id }))}>启用</button>
+                                <button type="button" className="secondary-action danger-action" onClick={() => removeApiConfig(config.id)} disabled={(apiConfigForm.apiConfigs || []).length <= 1}>删除</button>
+                              </div>
+                            </div>
+                            <div className="api-config-fields">
+                              <label>
+                                <span>API 名称</span>
+                                <input value={config.apiName} onChange={(event) => updateApiConfig(config.id, 'apiName', event.target.value)} placeholder="API易 gpt-image-2" />
+                              </label>
+                              <label>
+                                <span>API 地址</span>
+                                <input value={config.apiBaseUrl} onChange={(event) => updateApiConfig(config.id, 'apiBaseUrl', event.target.value)} placeholder="https://api.apiyi.com" />
+                              </label>
+                              <label>
+                                <span>模型 ID</span>
+                                <input value={config.model} onChange={(event) => updateApiConfig(config.id, 'model', event.target.value)} placeholder="gpt-image-2" />
+                              </label>
+                              <label>
+                                <span>请求超时（秒）</span>
+                                <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={config.requestTimeout} onChange={(event) => updateApiConfig(config.id, 'requestTimeout', event.target.value)} placeholder="999" />
+                              </label>
+                              <label className="full-field">
+                                <span>密钥设置</span>
+                                <input type="password" value={config.apiKey || ''} onChange={(event) => {
+                                  updateApiConfig(config.id, 'apiKey', event.target.value);
+                                  if (event.target.value) updateApiConfig(config.id, 'clearApiKey', false);
+                                }} placeholder={config.hasApiKey ? `已保存：${config.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
+                              </label>
+                              {config.hasApiKey ? (
+                                <label className="toggle-row full-field api-key-clear-row">
+                                  <input type="checkbox" checked={Boolean(config.clearApiKey)} onChange={(event) => {
+                                    updateApiConfig(config.id, 'clearApiKey', event.target.checked);
+                                    if (event.target.checked) updateApiConfig(config.id, 'apiKey', '');
+                                  }} />
+                                  <span>清空已保存密钥</span>
+                                  <small>不勾选且不填写新密钥时，将保留当前密钥。</small>
+                                </label>
+                              ) : null}
+                            </div>
+                          </section>
+                        );
+                      })}
+
+                      <label className="toggle-row full-field">
+                        <input type="checkbox" checked={apiConfigForm.stream} onChange={(event) => setApiConfigForm((current) => ({ ...current, stream: event.target.checked }))} />
+                        <span>启用流式传输功能</span>
+                        <small>这是账号级通用设置，切换 API 配置时不会变化。开启后文生图强制使用 URL 返回；图生图始终不使用 stream。</small>
+                      </label>
+
+                      <div className="modal-actions three-actions full-field">
+                        <button type="button" className="secondary-action" onClick={addApiConfig}>新增配置</button>
+                        <button type="button" className="secondary-action" onClick={resetDirectSettings}>重置</button>
+                        <button type="button" className="primary-action" onClick={saveAccountSettings}>保存配置</button>
+                      </div>
+                    </div>
+                  ) : null}
+
                 </div>
               ) : (
                 <form className="auth-form" onSubmit={submitAuth}>
@@ -1772,54 +2041,6 @@ function App() {
                   <button type="submit" className="primary-action">{authMode === 'login' ? '登录' : '注册'}</button>
                 </form>
               )}
-            </section>
-          ) : null}
-
-          {activeDialog === 'direct-settings' ? (
-            <section className="modal-card settings-modal" role="dialog" aria-modal="true" aria-label="参数设置">
-              <div className="modal-head">
-                <div>
-                  <h2>参数设置</h2>
-                  <p>配置保存到当前登录账号；生成时浏览器按 API 地址直连上游并使用 API Key。</p>
-                </div>
-                <button type="button" className="close-button" onClick={closeDialog}>×</button>
-              </div>
-
-              <div className="settings-grid account-settings-grid direct-settings-grid">
-                <div className="settings-section-title full-field">
-                  <strong>连接设置</strong>
-                  <span>配置保存在服务器中，未登录不可使用参数设置。API Key 加密存储，不会回显明文。</span>
-                </div>
-                <label>
-                  <span>API 名称</span>
-                  <input value={apiConfigForm.apiName} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiName: event.target.value }))} placeholder="API易 gpt-image-2" />
-                </label>
-                <label>
-                  <span>API 地址</span>
-                  <input value={apiConfigForm.apiBaseUrl} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="https://api.apiyi.com" />
-                </label>
-                <label>
-                  <span>模型 ID</span>
-                  <input value={apiConfigForm.model} onChange={(event) => { setApiConfigForm((current) => ({ ...current, model: event.target.value })); updateForm('model', event.target.value); }} placeholder="gpt-image-2" />
-                </label>
-                <label>
-                  <span>请求超时（秒）</span>
-                  <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={apiConfigForm.requestTimeout} onChange={(event) => setApiConfigForm((current) => ({ ...current, requestTimeout: event.target.value }))} placeholder="999" />
-                </label>
-                <label className="full-field">
-                  <span>密钥设置</span>
-                  <input type="password" value={apiConfigForm.apiKey} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiKey: event.target.value }))} placeholder={apiConfigForm.hasApiKey ? `已保存：${apiConfigForm.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
-                </label>
-                <label className="toggle-row full-field">
-                  <input type="checkbox" checked={apiConfigForm.stream} onChange={(event) => setApiConfigForm((current) => ({ ...current, stream: event.target.checked }))} />
-                  <span>启用流式传输功能</span>
-                  <small>开启后文生图强制使用 URL 返回，避免大 Base64 响应被浏览器或网关清理；图生图始终不使用 stream。</small>
-                </label>
-                <div className="modal-actions full-field">
-                  <button type="button" className="secondary-action" onClick={resetDirectSettings}>重置</button>
-                  <button type="button" className="primary-action" onClick={saveAccountSettings}>保存配置</button>
-                </div>
-              </div>
             </section>
           ) : null}
 

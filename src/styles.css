@@ -263,6 +263,10 @@ button:disabled {
   padding: 16px 0 160px;
 }
 
+.canvas-stage.is-wall-view {
+  padding-bottom: 0;
+}
+
 .canvas-toolbar {
   position: absolute;
   z-index: 3;
@@ -272,7 +276,7 @@ button:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  width: min(860px, calc(100% - 24px));
+  width: 80%;
   min-width: 0;
   padding: 10px;
   border-radius: var(--radius);
@@ -291,6 +295,12 @@ button:disabled {
 .toolbar-scope,
 .toolbar-filter {
   flex: 0 1 150px;
+}
+
+.toolbar-scope .custom-select-trigger,
+.toolbar-filter .custom-select-trigger {
+  width: 100%;
+  min-height: 34px;
 }
 
 .toolbar-search {
@@ -389,8 +399,8 @@ button:disabled {
 .image-board.has-images {
   display: block;
   width: 100%;
-  max-width: min(1280px, 100%);
-  margin: 0 auto;
+  max-width: 80%;
+  margin: 10px auto;
   column-width: 220px;
   column-gap: 14px;
   column-fill: balance;
@@ -618,6 +628,33 @@ input::placeholder {
   flex-wrap: wrap;
   align-items: end;
   gap: 8px;
+}
+
+.workbench-toggle-button {
+  display: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--black);
+  cursor: pointer;
+}
+
+.workbench-toggle-button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.workbench-toggle-button[aria-expanded="true"] {
+  background: var(--black);
+  color: var(--white);
 }
 
 .tool-pill,
@@ -1530,6 +1567,60 @@ select option {
   align-items: end;
 }
 
+.api-config-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+}
+
+.api-config-card.is-active {
+  box-shadow: 4px 4px 0 #d8d8d0;
+}
+
+.api-config-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.api-config-card-head > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.api-config-card-head strong {
+  color: var(--black);
+  font-size: 0.92rem;
+  font-weight: 950;
+}
+
+.api-config-card-head span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.api-config-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.api-config-actions .secondary-action {
+  min-height: 34px;
+  padding: 0 9px;
+  font-size: 0.76rem;
+}
+
+.api-config-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .settings-section-title,
 .settings-note {
   display: grid;
@@ -1775,10 +1866,20 @@ select option {
 
   .topbar {
     grid-template-columns: 1fr auto;
+    align-items: start;
   }
 
   .mode-tabs {
-    display: none;
+    order: 3;
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .mode-tabs button {
+    width: 100%;
   }
 
   .brand span:last-child {
@@ -1790,24 +1891,61 @@ select option {
 
   .canvas-stage {
     min-height: 76vh;
-    padding-bottom: 265px;
+    padding-bottom: 220px;
+  }
+
+  .canvas-stage.is-wall-view {
+    padding-bottom: 0;
   }
 
   .canvas-toolbar {
     position: static;
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
     width: 100%;
     margin: 0 0 12px;
     transform: none;
   }
 
+  .toolbar-icon-button {
+    width: 44px;
+    min-height: 38px;
+    border-radius: var(--radius);
+  }
+
   .toolbar-scope,
-  .toolbar-filter,
+  .toolbar-filter {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .toolbar-scope .custom-select-trigger,
+  .toolbar-filter .custom-select-trigger {
+    min-width: 0;
+    min-height: 38px;
+    border-radius: var(--radius);
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .toolbar-scope .custom-select-trigger strong,
+  .toolbar-filter .custom-select-trigger strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .toolbar-search {
-    flex: 1 1 100%;
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .toolbar-search input {
+    min-height: 38px;
+    border-radius: var(--radius);
   }
 
   .toolbar-text-button {
-    flex: 1 1 auto;
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .empty-canvas h1 {
@@ -1820,23 +1958,102 @@ select option {
     left: 10px;
   }
 
+  .prompt-console {
+    gap: 8px;
+    padding: 10px;
+  }
+
   .workbench-actions {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 7px;
+    align-items: end;
+  }
+
+  .workbench-toggle-button {
+    display: grid;
+    order: 1;
+    width: 100%;
+    height: 40px;
+  }
+
+  .workbench-actions .icon-file-control {
+    order: 2;
+  }
+
+  .workbench-actions .send-button {
+    order: 3;
+  }
+
+  .workbench-actions .workbench-extra-control {
+    order: 4;
+    display: none;
+  }
+
+  .workbench-actions.is-expanded .workbench-extra-control {
+    order: 1;
+    display: grid;
+  }
+
+  .workbench-actions.is-expanded .icon-file-control {
+    order: 2;
+  }
+
+  .workbench-actions.is-expanded .send-button {
+    order: 3;
+  }
+
+  .workbench-actions.is-expanded .workbench-toggle-button {
+    order: 4;
+  }
+
+  .workbench-actions.is-expanded {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workbench-actions.is-expanded .workbench-toggle-button,
+  .workbench-actions.is-expanded .icon-file-control,
+  .workbench-actions.is-expanded .send-button {
+    grid-column: auto;
+  }
+
+  .control-field,
+  .file-control,
+  .custom-select-field {
+    width: 100%;
+    min-width: 0;
   }
 
   .control-field,
   .file-control {
-    flex: 1 1 128px;
+    flex: none;
   }
 
-  .tool-pill {
-    justify-content: center;
-    white-space: normal;
+  .custom-select-trigger,
+  .tool-pill,
+  .control-field input,
+  .control-field select,
+  .disabled-select-like,
+  .toggle-select-like {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .icon-file-control,
+  .send-button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .icon-file-control strong,
+  .send-button {
+    width: 100%;
+    min-width: 0;
+    height: 40px;
   }
 
   .send-button {
-    flex: 1 1 72px;
-    height: 40px;
+    flex: none;
   }
 
   .reference-preview {
@@ -1853,8 +2070,14 @@ select option {
   .custom-size-row,
   .detail-meta-grid,
   .detail-actions,
+  .api-config-fields,
   .modal-actions.three-actions {
     grid-template-columns: 1fr;
+  }
+
+  .api-config-card-head,
+  .api-config-actions {
+    display: grid;
   }
 
   .full-field {
@@ -1879,32 +2102,29 @@ select option {
     grid-template-columns: 1fr;
   }
 
+  .mode-tabs.segmented-control,
+  .mode-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .resolution-row {
     grid-template-columns: 1fr;
   }
 
   .canvas-toolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .toolbar-icon-button {
-    width: 100%;
+    grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .toolbar-search {
-    grid-column: auto;
+    grid-column: 1 / -1;
   }
 
   .workbench-actions {
-    display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .control-field,
-  .file-control,
-  .send-button {
-    width: 100%;
-    min-width: 0;
+  .workbench-actions.is-expanded {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .custom-select-field,
