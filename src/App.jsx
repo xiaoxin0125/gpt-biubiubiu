@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const HISTORY_KEY = 'gpt-biubiubiu:image-history';
+const DIRECT_API_CONFIG_KEY = 'gpt-biubiubiu:direct-api-config';
+const DEFAULT_DIRECT_API_BASE_URL = 'https://api.apiyi.com';
 const MAX_REFERENCE_IMAGES = 16;
 const MAX_REQUEST_TIMEOUT_SECONDS = 999;
 const MAX_MASK_SIZE_BYTES = 4 * 1024 * 1024;
@@ -135,9 +137,11 @@ const emptyPasswordForm = {
 };
 
 const defaultApiConfigForm = {
-  apiName: 'OpenAI Compatible',
-  apiBaseUrl: '',
+  apiName: 'API易 gpt-image-2',
+  apiBaseUrl: DEFAULT_DIRECT_API_BASE_URL,
+  apiKey: '',
   requestTimeout: MAX_REQUEST_TIMEOUT_SECONDS,
+  stream: false,
 };
 
 const normalizeQuality = (value) => (qualityOptions.some((item) => item.value === value) ? value : 'auto');
@@ -148,20 +152,17 @@ const normalizeCompression = (value) => clampNumber(Number(value) || 0, 0, 100);
 const getQualityLabel = (value) => qualityOptions.find((item) => item.value === value)?.label || '自动';
 const normalizeForm = (value = {}) => {
   const nextForm = { ...defaultForm, ...value };
-  delete nextForm.negative_prompt;
-  delete nextForm.style;
-  delete nextForm.response_format;
-  delete nextForm.input_fidelity;
 
   return {
-    ...nextForm,
-    model: nextForm.model || defaultForm.model,
+    model: String(nextForm.model || defaultForm.model).trim() || defaultForm.model,
+    prompt: String(nextForm.prompt || ''),
+    size: String(nextForm.size || ''),
+    n: 1,
     quality: normalizeQuality(nextForm.quality),
     background: normalizeBackground(nextForm.background),
     output_format: normalizeOutputFormat(nextForm.output_format),
     output_compression: normalizeCompression(nextForm.output_compression ?? defaultForm.output_compression),
     moderation: normalizeModeration(nextForm.moderation),
-    n: 1,
   };
 };
 
@@ -369,6 +370,205 @@ const readApiResponse = async (response) => {
   throw new Error(text.slice(0, 160) || '接口返回异常内容。');
 };
 
+const parseDirectApiText = (text) => {
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    let latestJson = null;
+
+    lines.forEach((line) => {
+      const value = line.startsWith('data:') ? line.slice(5).trim() : line;
+      if (!value || value === '[DONE]') return;
+      try {
+        const parsed = JSON.parse(value);
+        latestJson = parsed;
+      } catch {
+      }
+    });
+
+    if (latestJson) return latestJson;
+  }
+
+  if (/^[\s\r\n]*</.test(text)) throw new Error('接口返回了页面内容，请检查 API 地址。');
+  throw new Error(text.slice(0, 220) || '接口返回异常内容。');
+};
+
+const getDirectApiErrorMessage = (data, fallback = '请求失败') => {
+  const error = data?.error;
+  if (typeof error === 'string') return error;
+  if (error?.message) return error.message;
+  return data?.message || data?.detail || fallback;
+};
+
+const normalizeApiBaseUrl = (value) => String(value || DEFAULT_DIRECT_API_BASE_URL).replace(/\s+/g, '').replace(/\/+$/, '') || DEFAULT_DIRECT_API_BASE_URL;
+
+const normalizeDirectApiConfig = (value = {}) => ({
+  apiName: String(value.apiName || defaultApiConfigForm.apiName).trim() || defaultApiConfigForm.apiName,
+  apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl),
+  apiKey: String(value.apiKey || '').trim(),
+  requestTimeout: clampNumber(Number(value.requestTimeout || defaultApiConfigForm.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
+  stream: Boolean(value.stream),
+});
+
+const readDirectApiConfig = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DIRECT_API_CONFIG_KEY) || '{}');
+    return {
+      config: normalizeDirectApiConfig(parsed),
+      form: normalizeForm({ ...(parsed.form || {}), prompt: '' }),
+    };
+  } catch {
+    return { config: normalizeDirectApiConfig(defaultApiConfigForm), form: defaultForm };
+  }
+};
+
+const saveDirectApiConfig = (config, form) => {
+  localStorage.setItem(DIRECT_API_CONFIG_KEY, JSON.stringify({
+    ...normalizeDirectApiConfig(config),
+    form: normalizeForm({ ...form, prompt: '' }),
+  }));
+};
+
+const buildDirectApiUrl = (baseUrl, path) => {
+  const base = normalizeApiBaseUrl(baseUrl);
+  const route = `/${String(path || '').replace(/^\/+/, '')}`;
+  if (base.endsWith('/v1') && route.startsWith('/v1/')) return `${base}${route.slice(3)}`;
+  return `${base}${route}`;
+};
+
+const readDirectStreamResponse = async (response, onProgress) => {
+  if (!response.body?.getReader) return parseDirectApiText(await response.text());
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  let latestJson = null;
+  let chunks = 0;
+
+  const acceptLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const value = trimmed.startsWith('data:') ? trimmed.slice(5).trim() : trimmed;
+    if (!value || value === '[DONE]') return;
+
+    try {
+      const parsed = JSON.parse(value);
+      latestJson = parsed;
+      if (Array.isArray(parsed?.data)) onProgress?.('Streaming · 图片数据已返回');
+    } catch {
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    chunks += 1;
+    const chunk = decoder.decode(value, { stream: true });
+    fullText += chunk;
+    buffer += chunk;
+    onProgress?.(`Streaming · ${chunks}`);
+
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+    lines.forEach(acceptLine);
+  }
+
+  const rest = decoder.decode();
+  if (rest) {
+    fullText += rest;
+    buffer += rest;
+  }
+  acceptLine(buffer);
+
+  return latestJson || parseDirectApiText(fullText);
+};
+
+const requestDirectImageJson = async (path, payload, config, onProgress) => {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), normalizeDirectApiConfig(config).requestTimeout * 1000);
+
+  try {
+    const response = await fetch(buildDirectApiUrl(config.apiBaseUrl, path), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(config.stream ? { ...payload, stream: true } : payload),
+      signal: controller.signal,
+    });
+    const data = config.stream ? await readDirectStreamResponse(response, onProgress) : parseDirectApiText(await response.text());
+
+    if (!response.ok) throw new Error(getDirectApiErrorMessage(data, '生图接口请求失败'));
+    return data;
+  } catch (requestError) {
+    if (requestError?.name === 'AbortError') throw new Error('请求超时，请调大超时时间或降低尺寸/质量后重试。');
+    throw requestError;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+};
+
+const imageMimeForOutputFormat = (format) => {
+  if (format === 'jpeg') return 'image/jpeg';
+  if (format === 'webp') return 'image/webp';
+  return 'image/png';
+};
+
+const normalizeDirectImageItem = (image, index, outputFormat) => {
+  const imageMime = image?.imageMime || image?.mime || imageMimeForOutputFormat(outputFormat);
+  const sourceValue = typeof image === 'string'
+    ? image
+    : image?.b64_json || image?.url || image?.data_url || image?.data || image?.image || image?.content || '';
+  const nextImage = {
+    ...(image && typeof image === 'object' ? image : {}),
+    id: image?.id || `${Date.now()}-${index}`,
+    imageMime,
+  };
+
+  if (sourceValue && typeof sourceValue === 'string') {
+    if (sourceValue.startsWith('data:image/')) {
+      nextImage.b64_json = sourceValue.split(',')[1] || '';
+      nextImage.imageMime = sourceValue.slice(5, sourceValue.indexOf(';')) || imageMime;
+    } else if (/^https?:\/\//.test(sourceValue)) {
+      nextImage.url = sourceValue;
+    } else if (!nextImage.b64_json) {
+      nextImage.b64_json = sourceValue;
+    }
+  }
+
+  return nextImage;
+};
+
+const normalizeDirectImageResponse = (data, outputFormat) => {
+  const rawItems = Array.isArray(data?.data)
+    ? data.data
+    : Array.isArray(data?.images)
+      ? data.images
+      : data?.b64_json || data?.url || data?.image || data?.data_url
+        ? [data]
+        : [];
+
+  return {
+    created: data?.created || Math.floor(Date.now() / 1000),
+    usage: data?.usage || null,
+    raw: data,
+    data: rawItems.map((image, index) => normalizeDirectImageItem(image, index, outputFormat)),
+  };
+};
+
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ''));
+  reader.onerror = () => reject(new Error(`读取文件失败：${file.name}`));
+  reader.readAsDataURL(file);
+});
+
 const toApiUrl = (input) => {
   const value = String(input || '');
   if (!value.startsWith('/api/')) return value;
@@ -385,29 +585,6 @@ const requestJson = async (input, init) => {
   return data;
 };
 
-const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-
-const isPendingJob = (data) => {
-  const status = data?.job?.status;
-  return Boolean(data?.job?.id && !Array.isArray(data?.data) && ['pending', 'running'].includes(status));
-};
-
-const pollImageJob = async (jobId, timeoutSeconds = defaultApiConfigForm.requestTimeout + 30) => {
-  const deadline = Date.now() + Math.max(30, Number(timeoutSeconds) || defaultApiConfigForm.requestTimeout) * 1000;
-
-  while (Date.now() < deadline) {
-    await sleep(2500);
-    const data = await requestJson(`/api/health?job=${encodeURIComponent(jobId)}`);
-    const status = data?.job?.status;
-
-    if (Array.isArray(data?.data)) return data;
-    if (status === 'failed') throw new Error(data.job.error || '生成失败');
-    if (status && !['pending', 'running'].includes(status)) throw new Error(data.job.error || '生成状态异常');
-  }
-
-  throw new Error('生成仍在处理中，请稍后刷新或重试。');
-};
-
 function App() {
   const [view, setView] = useState('generate');
   const [form, setForm] = useState(defaultForm);
@@ -417,14 +594,12 @@ function App() {
   const [referenceImages, setReferenceImages] = useState([]);
   const [maskImage, setMaskImage] = useState(null);
   const [user, setUser] = useState(null);
-  const [settingsMeta, setSettingsMeta] = useState(null);
   const [authMode, setAuthMode] = useState('login');
   const [authTab, setAuthTab] = useState('profile');
   const [authForm, setAuthForm] = useState(emptyAuthForm);
   const [profileForm, setProfileForm] = useState(emptyProfileForm);
   const [passwordForm, setPasswordForm] = useState(emptyPasswordForm);
-  const [apiConfigForm, setApiConfigForm] = useState(defaultApiConfigForm);
-  const [settingsApiKey, setSettingsApiKey] = useState('');
+  const [apiConfigForm, setApiConfigForm] = useState(() => readDirectApiConfig().config);
   const [selectedImage, setSelectedImage] = useState(null);
   const [status, setStatus] = useState({ loading: true, configured: false, message: '检查接口中' });
   const [error, setError] = useState('');
@@ -546,33 +721,16 @@ function App() {
     return payload;
   };
 
-  const applySettings = (settings) => {
-    if (!settings) return;
-
-    const apiName = settings.apiName || defaultApiConfigForm.apiName;
-    setSettingsMeta(settings);
+  const applyDirectSettings = (settings) => {
+    const nextConfig = normalizeDirectApiConfig(settings || defaultApiConfigForm);
     setStatus((current) => ({
       ...current,
-      configured: Boolean(settings.hasApiKey || current.configured),
-      apiName,
-      message: apiName,
+      loading: false,
+      configured: Boolean(nextConfig.apiKey),
+      apiName: nextConfig.apiName,
+      message: nextConfig.apiKey ? nextConfig.apiName : '未配置 API Key',
     }));
-    setApiConfigForm({
-      apiName,
-      apiBaseUrl: settings.apiBaseUrl || '',
-      requestTimeout: settings.requestTimeout || defaultApiConfigForm.requestTimeout,
-    });
-    setForm((current) => ({
-      ...normalizeForm(current),
-      model: settings.model || current.model,
-      size: settings.size !== undefined ? settings.size : current.size,
-      quality: normalizeQuality(settings.quality || current.quality),
-      background: normalizeBackground(settings.background || current.background),
-      output_format: normalizeOutputFormat(settings.output_format || current.output_format),
-      output_compression: normalizeCompression(settings.output_compression ?? current.output_compression),
-      moderation: normalizeModeration(settings.moderation || current.moderation),
-      n: settings.n || current.n,
-    }));
+    setApiConfigForm(nextConfig);
   };
 
   const loadWall = async () => {
@@ -587,24 +745,13 @@ function App() {
   useEffect(() => {
     setHistory(readHistory());
 
-    requestJson('/api/health')
-      .then((data) => {
-        const apiName = data.apiName || defaultApiConfigForm.apiName;
-        setStatus({
-          loading: false,
-          configured: Boolean(data.configured),
-          apiName,
-          message: data.configured ? apiName : '未配置 API Key',
-        });
-      })
-      .catch(() => {
-        setStatus({ loading: false, configured: false, message: '代理未启动' });
-      });
+    const saved = readDirectApiConfig();
+    setForm((current) => ({ ...current, ...saved.form, prompt: current.prompt }));
+    applyDirectSettings(saved.config);
 
     requestJson('/api/auth/me')
       .then((data) => {
         setUser(data.user || null);
-        applySettings(data.settings || null);
       })
       .catch(() => null);
 
@@ -702,16 +849,6 @@ function App() {
 
   const applySize = () => {
     updateForm('size', activeSize);
-    setActiveDialog(null);
-  };
-
-  const selectHistory = (item) => {
-    const nextForm = normalizeForm(item.form);
-
-    setForm(nextForm);
-    setBoardScope('history');
-    setView('generate');
-    setError('');
     setActiveDialog(null);
   };
 
@@ -849,17 +986,18 @@ function App() {
     setImages((items) => [pendingItem, ...items]);
 
     try {
-      const payload = hasReferenceImages ? buildEditPayload(prompt) : buildGenerationPayload(prompt);
-      const initialData = hasReferenceImages
-        ? await submitImageEdit(payload)
-        : await requestJson('/api/images/generations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-      const data = isPendingJob(initialData)
-        ? await pollImageJob(initialData.job.id, Number(apiConfigForm.requestTimeout || defaultApiConfigForm.requestTimeout) + 30)
-        : initialData;
+      const config = normalizeDirectApiConfig(apiConfigForm);
+      if (!config.apiKey) throw new Error('请先在参数设置里填写 API Key。');
+      if (!config.apiBaseUrl) throw new Error('请先在参数设置里填写 API 地址。');
+
+      const payload = hasReferenceImages
+        ? await buildEditJsonPayload(prompt)
+        : buildGenerationPayload(prompt);
+      const endpoint = hasReferenceImages ? '/v1/images/edits' : '/v1/images/generations';
+      const rawData = await requestDirectImageJson(endpoint, payload, config, (message) => {
+        setStatus((current) => ({ ...current, loading: true, message }));
+      });
+      const data = normalizeDirectImageResponse(rawData, payload.output_format || form.output_format);
 
       const finishedAt = new Date().toISOString();
       if (deletedRequestIdsRef.current.has(requestId)) {
@@ -920,20 +1058,11 @@ function App() {
     }
   };
 
-  const submitImageEdit = (payload) => {
-    const formData = new FormData();
-    referenceImages.forEach((image) => {
-      formData.append('image[]', image.file, image.name);
-    });
-    if (maskImage?.file) formData.append('mask', maskImage.file, maskImage.name);
-    Object.entries(payload).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') formData.append(key, String(value));
-    });
-
-    return requestJson('/api/images/edits', {
-      method: 'POST',
-      body: formData,
-    });
+  const buildEditJsonPayload = async (prompt) => {
+    const payload = buildEditPayload(prompt);
+    payload.image = await Promise.all(referenceImages.map((image) => fileToDataUrl(image.file)));
+    if (maskImage?.file) payload.mask = await fileToDataUrl(maskImage.file);
+    return payload;
   };
 
   const toggleWall = async (image) => {
@@ -1008,7 +1137,6 @@ function App() {
       });
 
       setUser(data.user || null);
-      applySettings(data.settings || null);
       setAuthForm(emptyAuthForm);
       setAuthTab('profile');
       setActiveDialog(data.user ? 'auth' : null);
@@ -1020,45 +1148,28 @@ function App() {
   const logout = async () => {
     await requestJson('/api/auth/logout', { method: 'POST' });
     setUser(null);
-    setSettingsMeta(null);
-    setSettingsApiKey('');
     setProfileForm(emptyProfileForm);
     setPasswordForm(emptyPasswordForm);
   };
 
-  const saveAccountSettings = async () => {
-    if (!user) {
-      setAuthMode('login');
-      setActiveDialog('auth');
-      setError('登录后才能保存个人配置。');
+  const saveAccountSettings = () => {
+    const nextConfig = normalizeDirectApiConfig(apiConfigForm);
+    if (!nextConfig.apiKey) {
+      setError('请填写 API Key。');
       return;
     }
 
-    const apiKey = settingsApiKey.trim();
-    if (apiKey && !window.confirm('API Key 会加密保存到服务端数据库。确认保存？')) return;
+    saveDirectApiConfig(nextConfig, form);
+    applyDirectSettings(nextConfig);
+    setError('');
+  };
 
-    try {
-      const data = await requestJson('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          settings: {
-            ...normalizeForm(form),
-            apiName: apiConfigForm.apiName,
-            apiBaseUrl: apiConfigForm.apiBaseUrl.replace(/\s+/g, ''),
-            requestTimeout: clampNumber(Number(apiConfigForm.requestTimeout || defaultApiConfigForm.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
-          },
-          apiKey,
-          confirmApiKeySave: Boolean(apiKey),
-        }),
-      });
-
-      setSettingsApiKey('');
-      applySettings(data.settings || null);
-      setError('');
-    } catch (settingsError) {
-      setError(settingsError instanceof Error ? settingsError.message : '保存配置失败');
-    }
+  const resetDirectSettings = () => {
+    const nextConfig = normalizeDirectApiConfig(defaultApiConfigForm);
+    setForm(defaultForm);
+    setApiConfigForm(nextConfig);
+    saveDirectApiConfig(nextConfig, defaultForm);
+    applyDirectSettings(nextConfig);
   };
 
   const saveProfile = async () => {
@@ -1112,7 +1223,7 @@ function App() {
     const isPending = image.status === 'pending';
     const isFailed = image.status === 'failed';
     const title = image.revised_prompt || image.prompt || image.form?.prompt || 'Generated image';
-    const apiName = image.apiName || settingsMeta?.apiName || status.apiName || defaultApiConfigForm.apiName;
+    const apiName = image.apiName || status.apiName || defaultApiConfigForm.apiName;
     const canDelete = view !== 'wall';
 
     return (
@@ -1187,6 +1298,9 @@ function App() {
 
         <div className="topbar-actions">
           <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>
+          <button type="button" className="round-tool account-tool" onClick={() => setActiveDialog('direct-settings')} aria-label="参数设置">
+            参数设置
+          </button>
           <button type="button" className="round-tool account-tool" onClick={() => { setAuthTab('profile'); setActiveDialog('auth'); }} aria-label="账号设置">
             {user ? userDisplayName : '登录'}
           </button>
@@ -1438,8 +1552,8 @@ function App() {
               {user ? (
                 <div className="account-panel">
                   <div className="segmented-control two-tabs account-tabs">
-                    <button type="button" className={authTab === 'profile' ? 'is-active' : ''} onClick={() => setAuthTab('profile')}>账号信息</button>
-                    <button type="button" className={authTab === 'settings' ? 'is-active' : ''} onClick={() => setAuthTab('settings')}>参数设置</button>
+                    <button type="button" className="is-active" onClick={() => setAuthTab('profile')}>账号信息</button>
+                    <button type="button" onClick={() => setActiveDialog('direct-settings')}>生图参数</button>
                   </div>
 
                   {authTab === 'profile' ? (
@@ -1467,34 +1581,6 @@ function App() {
                     </div>
                   ) : null}
 
-                  {authTab === 'settings' ? (
-                    <div className="settings-grid account-settings-grid">
-                      <label>
-                        <span>API 名称</span>
-                        <input value={apiConfigForm.apiName} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiName: event.target.value }))} placeholder="OpenAI Compatible" />
-                      </label>
-                      <label>
-                        <span>API 地址</span>
-                        <input value={apiConfigForm.apiBaseUrl} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="由服务端配置" />
-                      </label>
-                      <label>
-                        <span>模型 ID</span>
-                        <input value={form.model} onChange={(event) => updateForm('model', event.target.value)} placeholder="gpt-image-2" />
-                      </label>
-                      <label>
-                        <span>请求超时（秒）</span>
-                        <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={apiConfigForm.requestTimeout} onChange={(event) => setApiConfigForm((current) => ({ ...current, requestTimeout: event.target.value }))} placeholder="999" />
-                      </label>
-                      <label className="full-field">
-                        <span>密钥</span>
-                        <input value={settingsApiKey} onChange={(event) => setSettingsApiKey(event.target.value)} placeholder={settingsMeta?.hasApiKey ? `已保存：${settingsMeta.apiKeyHint}` : '可选，保存前会再次确认'} />
-                      </label>
-                      <div className="modal-actions full-field">
-                        <button type="button" className="secondary-action" onClick={() => setForm(defaultForm)}>重置</button>
-                        <button type="button" className="primary-action" onClick={saveAccountSettings}>保存配置</button>
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
               ) : (
                 <form className="auth-form" onSubmit={submitAuth}>
@@ -1519,6 +1605,115 @@ function App() {
                   <button type="submit" className="primary-action">{authMode === 'login' ? '登录' : '注册'}</button>
                 </form>
               )}
+            </section>
+          ) : null}
+
+          {activeDialog === 'direct-settings' ? (
+            <section className="modal-card settings-modal" role="dialog" aria-modal="true" aria-label="直连参数设置">
+              <div className="modal-head">
+                <div>
+                  <h2>直连参数设置</h2>
+                  <p>文生图走 /v1/images/generations，图生图走 /v1/images/edits，浏览器直接 POST JSON。</p>
+                </div>
+                <button type="button" className="close-button" onClick={closeDialog}>×</button>
+              </div>
+
+              <div className="settings-grid account-settings-grid direct-settings-grid">
+                <div className="settings-section-title full-field">
+                  <strong>连接设置</strong>
+                  <span>配置保存在当前浏览器本地。前端直连会在浏览器中使用 API Key。</span>
+                </div>
+                <label>
+                  <span>API 名称</span>
+                  <input value={apiConfigForm.apiName} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiName: event.target.value }))} placeholder="API易 gpt-image-2" />
+                </label>
+                <label>
+                  <span>API 地址</span>
+                  <input value={apiConfigForm.apiBaseUrl} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="https://api.apiyi.com" />
+                </label>
+                <label>
+                  <span>模型 ID</span>
+                  <input value={form.model} onChange={(event) => updateForm('model', event.target.value)} placeholder="gpt-image-2" />
+                </label>
+                <label>
+                  <span>请求超时（秒）</span>
+                  <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={apiConfigForm.requestTimeout} onChange={(event) => setApiConfigForm((current) => ({ ...current, requestTimeout: event.target.value }))} placeholder="999" />
+                </label>
+                <label className="full-field">
+                  <span>API Key</span>
+                  <input type="password" value={apiConfigForm.apiKey} onChange={(event) => setApiConfigForm((current) => ({ ...current, apiKey: event.target.value }))} placeholder="sk-..." autoComplete="off" />
+                </label>
+                <label className="toggle-row full-field">
+                  <input type="checkbox" checked={apiConfigForm.stream} onChange={(event) => setApiConfigForm((current) => ({ ...current, stream: event.target.checked }))} />
+                  <span>启用流式传输</span>
+                  <small>请求体会附加 stream: true，并逐块解析响应；需要接口支持 SSE/stream。</small>
+                </label>
+
+                <div className="settings-section-title full-field">
+                  <strong>请求参数</strong>
+                  <span>文生图会发送审核参数；图生图会忽略审核参数。</span>
+                </div>
+                <div className="settings-control-wrap">
+                  {renderSelect({
+                    id: 'settings-quality',
+                    label: '质量',
+                    value: form.quality,
+                    options: qualityOptions,
+                    onChange: (value) => updateForm('quality', value),
+                    className: 'settings-select-field',
+                    menuDirection: 'down',
+                  })}
+                </div>
+                <div className="settings-control-wrap">
+                  {renderSelect({
+                    id: 'settings-background',
+                    label: '背景',
+                    value: form.background,
+                    options: backgroundOptions,
+                    onChange: (value) => updateForm('background', value),
+                    className: 'settings-select-field',
+                    menuDirection: 'down',
+                  })}
+                </div>
+                <div className="settings-control-wrap">
+                  {renderSelect({
+                    id: 'settings-output-format',
+                    label: '输出格式',
+                    value: form.output_format,
+                    options: outputFormatOptions.map((format) => ({ label: format.toUpperCase(), value: format })),
+                    onChange: (value) => updateForm('output_format', value),
+                    className: 'settings-select-field',
+                    menuDirection: 'down',
+                  })}
+                </div>
+                <label>
+                  <span>尺寸</span>
+                  <button type="button" className="secondary-action settings-size-button" onClick={openSizeDialog}>{form.size || '自动'}</button>
+                </label>
+                <label className={canCompressOutput ? '' : 'is-disabled'}>
+                  <span>输出压缩</span>
+                  <input min="0" max="100" type="number" value={form.output_compression} disabled={!canCompressOutput} onChange={(event) => updateForm('output_compression', event.target.value)} />
+                </label>
+                <div className="settings-control-wrap">
+                  {renderSelect({
+                    id: 'settings-moderation',
+                    label: '审核强度',
+                    value: form.moderation,
+                    options: moderationOptions,
+                    onChange: (value) => updateForm('moderation', value),
+                    className: 'settings-select-field',
+                    menuDirection: 'down',
+                  })}
+                </div>
+                <label className="is-disabled">
+                  <span>出图数量</span>
+                  <input min="1" max="1" type="number" value="1" disabled readOnly />
+                </label>
+                <div className="modal-actions full-field">
+                  <button type="button" className="secondary-action" onClick={resetDirectSettings}>重置</button>
+                  <button type="button" className="primary-action" onClick={saveAccountSettings}>保存配置</button>
+                </div>
+              </div>
             </section>
           ) : null}
 

@@ -1408,6 +1408,69 @@ select option {
   grid-column: 1 / -1;
 }
 
+.direct-settings-grid {
+  align-items: end;
+}
+
+.settings-section-title,
+.settings-note {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+}
+
+.settings-section-title strong,
+.settings-note strong {
+  color: var(--black);
+  font-size: 0.9rem;
+  font-weight: 950;
+}
+
+.settings-section-title span,
+.settings-note span,
+.toggle-row small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 760;
+  line-height: 1.55;
+}
+
+.settings-control-wrap {
+  min-width: 0;
+}
+
+.settings-select-field {
+  width: 100%;
+}
+
+.settings-select-field .custom-select-trigger {
+  width: 100%;
+  justify-content: space-between;
+  min-height: 42px;
+}
+
+.settings-size-button {
+  width: 100%;
+}
+
+.toggle-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 10px;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
+}
+
+.toggle-row small {
+  grid-column: 2;
+}
+
 .summary-box {
   display: grid;
   gap: 8px;
