@@ -187,6 +187,25 @@ function ensure_schema(): void
       CONSTRAINT fk_user_api_configs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+    $db->exec("CREATE TABLE IF NOT EXISTS image_jobs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      user_id BIGINT UNSIGNED DEFAULT NULL,
+      request_id VARCHAR(80) DEFAULT NULL,
+      mode VARCHAR(32) NOT NULL DEFAULT 'generation',
+      status VARCHAR(32) NOT NULL DEFAULT 'completed',
+      prompt TEXT NOT NULL,
+      revised_prompt TEXT DEFAULT NULL,
+      error_message TEXT DEFAULT NULL,
+      image_url TEXT DEFAULT NULL,
+      image_b64 LONGTEXT DEFAULT NULL,
+      params_json JSON DEFAULT NULL,
+      result_json JSON DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at TIMESTAMP NULL DEFAULT NULL,
+      INDEX idx_image_jobs_user_created (user_id, created_at),
+      CONSTRAINT fk_image_jobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     $db->exec("CREATE TABLE IF NOT EXISTS wall_items (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       user_id BIGINT UNSIGNED DEFAULT NULL,
@@ -205,6 +224,7 @@ function ensure_schema(): void
       display_bytes BIGINT UNSIGNED DEFAULT NULL,
       duration_seconds INT UNSIGNED DEFAULT NULL,
       params_json JSON DEFAULT NULL,
+      source_job_id BIGINT UNSIGNED DEFAULT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_wall_items_created (created_at),
       INDEX idx_wall_items_user (user_id),
@@ -225,7 +245,9 @@ function ensure_schema(): void
     ensure_column($db, 'wall_items', 'original_bytes', 'original_bytes BIGINT UNSIGNED DEFAULT NULL AFTER display_path');
     ensure_column($db, 'wall_items', 'display_bytes', 'display_bytes BIGINT UNSIGNED DEFAULT NULL AFTER original_bytes');
     ensure_column($db, 'wall_items', 'duration_seconds', 'duration_seconds INT UNSIGNED DEFAULT NULL AFTER display_bytes');
+    ensure_column($db, 'wall_items', 'source_job_id', 'source_job_id BIGINT UNSIGNED DEFAULT NULL AFTER params_json');
     ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
+    ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
 
     $adminHash = password_hash('1427145484', PASSWORD_BCRYPT, ['cost' => 12]);
     $stmt = $db->prepare('INSERT INTO users (username, display_name, password_hash, is_admin) VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE is_admin = 1');
@@ -521,7 +543,8 @@ function save_user_settings(array $user, array $body): array
     if (!$configs && isset($settings['apiName'], $settings['apiBaseUrl'])) $configs = [$settings];
     if (!$configs) json_response(['error' => '至少保留一套 API 配置'], 400);
 
-    $activeId = (int) ($settings['activeApiConfigId'] ?? ($settings['active_api_config_id'] ?? 0));
+    $activeRawId = (string) ($settings['activeApiConfigId'] ?? ($settings['active_api_config_id'] ?? ''));
+    $activeId = (int) $activeRawId;
     $stream = !empty($settings['stream']);
     $seenIds = [];
     $savedRows = [];
@@ -566,7 +589,7 @@ function save_user_settings(array $user, array $body): array
             }
 
             $seenIds[] = $configId;
-            if (!$activeId) $activeId = $configId;
+            if (!$activeId || (isset($config['id']) && (string) $config['id'] === $activeRawId)) $activeId = $configId;
         }
 
         $placeholders = implode(',', array_fill(0, count($seenIds), '?'));
@@ -602,6 +625,36 @@ function save_user_settings(array $user, array $body): array
     }
 }
 
+function switch_active_api_config(array $user, array $body): array
+{
+    $configId = (int) ($body['activeApiConfigId'] ?? ($body['active_api_config_id'] ?? 0));
+    if ($configId <= 0) json_response(['error' => '缺少 API 配置 ID'], 400);
+
+    $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+    $stmt->execute([$configId, $user['id']]);
+    $active = $stmt->fetch();
+    if (!$active) json_response(['error' => 'API 配置不存在'], 404);
+
+    $settings = stored_user_settings_row((int) $user['id']);
+    $stream = !empty($settings['stream']) ? 1 : 0;
+    $stmt = pdo()->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream, active_api_config_id, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE model = VALUES(model), api_name = VALUES(api_name), api_base_url = VALUES(api_base_url), request_timeout = VALUES(request_timeout), active_api_config_id = VALUES(active_api_config_id), api_key_ciphertext = VALUES(api_key_ciphertext), api_key_iv = VALUES(api_key_iv), api_key_tag = VALUES(api_key_tag), api_key_hint = VALUES(api_key_hint)');
+    $stmt->execute([
+        $user['id'],
+        $active['model'],
+        $active['api_name'],
+        $active['api_base_url'],
+        $active['request_timeout'],
+        $stream,
+        $configId,
+        $active['api_key_ciphertext'],
+        $active['api_key_iv'],
+        $active['api_key_tag'],
+        $active['api_key_hint'],
+    ]);
+
+    return settings_for_user((int) $user['id']);
+}
+
 function public_base_dir(): string
 {
     return dirname(__DIR__);
@@ -617,7 +670,32 @@ function public_url_for_path(string $path): string
 
 function ensure_dir(string $path): void
 {
-    if (!is_dir($path) && !mkdir($path, 0775, true) && !is_dir($path)) throw new RuntimeException('无法创建目录：' . $path);
+    clearstatcache(true, $path);
+    if (is_dir($path)) {
+        if (!is_writable($path)) throw new RuntimeException('目录不可写：' . $path);
+        return;
+    }
+
+    $nearestParent = dirname($path);
+    while ($nearestParent !== '' && $nearestParent !== '.' && !is_dir($nearestParent)) {
+        $next = dirname($nearestParent);
+        if ($next === $nearestParent) break;
+        $nearestParent = $next;
+    }
+
+    if (!@mkdir($path, 0775, true)) {
+        clearstatcache(true, $path);
+        if (!is_dir($path)) {
+            $detail = '';
+            if ($nearestParent !== '' && is_dir($nearestParent)) {
+                $detail = '；最近存在父目录：' . $nearestParent . '；父目录可写：' . (is_writable($nearestParent) ? '是' : '否');
+            }
+            throw new RuntimeException('无法创建目录：' . $path . $detail);
+        }
+    }
+
+    clearstatcache(true, $path);
+    if (!is_writable($path)) throw new RuntimeException('目录不可写：' . $path);
 }
 
 function extension_for_mime(string $mime): string
@@ -651,7 +729,8 @@ function decode_image_payload(array $image): array
 
     if ($imageUrl !== '') {
         if (!preg_match('#^https?://#i', $imageUrl) && strpos($imageUrl, '/') !== 0) json_response(['error' => '图片 URL 不合法'], 400);
-        $binary = @file_get_contents($imageUrl);
+        $sourcePath = preg_match('#^https?://#i', $imageUrl) ? $imageUrl : public_base_dir() . '/' . ltrim(parse_url($imageUrl, PHP_URL_PATH) ?: $imageUrl, '/');
+        $binary = @file_get_contents($sourcePath);
         if ($binary === false || $binary === '') json_response(['error' => '无法读取上墙图片'], 400);
         return ['binary' => $binary, 'mime' => mime_from_binary($binary, $mime), 'sourceUrl' => $imageUrl];
     }
@@ -767,6 +846,392 @@ function save_wall_image(array $image): array
     ];
 }
 
+function stored_generated_image(array $image, string $fallbackMime = 'image/png'): array
+{
+    $payload = [];
+    $url = trim((string) ($image['url'] ?? ($image['image_url'] ?? '')));
+    $b64 = trim((string) ($image['b64_json'] ?? ($image['image_b64'] ?? '')));
+    $mime = trim((string) ($image['imageMime'] ?? ($image['mime'] ?? $fallbackMime))) ?: $fallbackMime;
+
+    if ($url !== '') {
+        $payload = ['url' => $url, 'mime' => $mime];
+    } elseif ($b64 !== '') {
+        $payload = ['b64_json' => $b64, 'mime' => $mime];
+    } else {
+        return [];
+    }
+
+    return save_wall_image($payload);
+}
+
+function proxy_upload_dir(): string
+{
+    $dir = sys_get_temp_dir() . '/gpt-biubiubiu-proxy';
+    ensure_dir($dir);
+    return $dir;
+}
+
+function direct_api_url(array $config, string $path): string
+{
+    $baseUrl = normalize_api_base_url((string) ($config['api_base_url'] ?? ''));
+    $basePath = rtrim((string) (parse_url($baseUrl, PHP_URL_PATH) ?: ''), '/');
+    $normalizedPath = '/' . ltrim($path, '/');
+    $finalPath = $basePath !== '' && strpos($normalizedPath, $basePath . '/') === 0 ? substr($normalizedPath, strlen($basePath)) : $normalizedPath;
+    return $baseUrl . $finalPath;
+}
+
+function parse_upstream_response(string $text): array
+{
+    $trimmed = trim($text);
+    if ($trimmed === '') return [];
+    if (preg_match('#^data:(image/[a-z0-9.+-]+);base64,#i', $trimmed)) return ['data' => $trimmed];
+
+    $lines = preg_split('/\r?\n/', $trimmed) ?: [];
+    $payloads = [];
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if (strpos($line, 'data:') !== 0) continue;
+        $payload = trim(substr($line, 5));
+        if ($payload === '' || $payload === '[DONE]') continue;
+        $payloads[] = $payload;
+    }
+
+    if ($payloads) {
+        $events = [];
+        $imagePayload = '';
+        foreach ($payloads as $payload) {
+            if (preg_match('#^data:(image/[a-z0-9.+-]+);base64,#i', $payload)) {
+                $imagePayload = $payload;
+                continue;
+            }
+            $decoded = json_decode($payload, true);
+            if (is_array($decoded)) $events[] = $decoded;
+        }
+        if ($imagePayload !== '') return ['data' => $imagePayload];
+
+        $imageEvent = [];
+        $revisedPrompt = '';
+        foreach ($events as $event) {
+            $candidatePrompt = extract_revised_prompt($event);
+            if ($candidatePrompt !== '') $revisedPrompt = $candidatePrompt;
+            if (!$imageEvent && has_image_payload($event)) $imageEvent = $event;
+        }
+        if (!$imageEvent) $imageEvent = end($events) ?: [];
+        if ($revisedPrompt !== '' && is_array($imageEvent)) $imageEvent['revised_prompt'] = $revisedPrompt;
+        return is_array($imageEvent) ? $imageEvent : [];
+    }
+
+    $decoded = json_decode($trimmed, true);
+    if (is_array($decoded)) return $decoded;
+    throw new RuntimeException(substr($trimmed, 0, 180) ?: '上游接口返回异常内容');
+}
+
+function has_image_payload(array $value): bool
+{
+    if (!empty($value['url']) || !empty($value['b64_json']) || !empty($value['image']) || !empty($value['data_url'])) return true;
+    if (isset($value['data']) && is_string($value['data'])) return true;
+    if (isset($value['data']) && is_array($value['data'])) {
+        foreach ($value['data'] as $item) {
+            if (is_array($item) && has_image_payload($item)) return true;
+        }
+    }
+    if (isset($value['images']) && is_array($value['images'])) return count($value['images']) > 0;
+    return false;
+}
+
+function extract_revised_prompt($value): string
+{
+    if (!is_array($value)) return '';
+    foreach (['revised_prompt', 'revisedPrompt', 'prompt_revised'] as $key) {
+        if (!empty($value[$key]) && is_string($value[$key])) return $value[$key];
+    }
+    foreach (['data', 'images'] as $key) {
+        if (!isset($value[$key]) || !is_array($value[$key])) continue;
+        foreach ($value[$key] as $item) {
+            $prompt = extract_revised_prompt($item);
+            if ($prompt !== '') return $prompt;
+        }
+    }
+    return '';
+}
+
+function normalize_proxy_image_item($image, int $index, string $outputFormat, string $topRevisedPrompt = ''): array
+{
+    $raw = '';
+    $item = is_array($image) ? $image : [];
+    if (is_string($image)) $raw = $image;
+    else $raw = (string) ($item['b64_json'] ?? ($item['url'] ?? ($item['data_url'] ?? ($item['data'] ?? ($item['image'] ?? ($item['content'] ?? ''))))));
+
+    $mime = image_mime_for_output_format($outputFormat);
+    if (preg_match('#^data:(image/[a-z0-9.+-]+);base64,#i', $raw, $matches)) $mime = $matches[1];
+    if (!empty($item['mime'])) $mime = (string) $item['mime'];
+    if (!empty($item['imageMime'])) $mime = (string) $item['imageMime'];
+
+    $next = is_array($image) ? $item : [];
+    $next['id'] = $next['id'] ?? ('image-' . $index);
+    $next['imageMime'] = $mime;
+    $revisedPrompt = extract_revised_prompt($item) ?: $topRevisedPrompt;
+    if ($revisedPrompt !== '') $next['revised_prompt'] = $revisedPrompt;
+
+    if ($raw !== '') {
+        if (preg_match('#^data:image/[a-z0-9.+-]+;base64,#i', $raw)) {
+            $next['b64_json'] = preg_replace('#^data:image/[a-z0-9.+-]+;base64,#i', '', $raw);
+            unset($next['url']);
+        } elseif (preg_match('#^https?://#i', $raw)) {
+            $next['url'] = $raw;
+        } elseif (empty($next['b64_json'])) {
+            $next['b64_json'] = $raw;
+        }
+    }
+
+    return $next;
+}
+
+function image_mime_for_output_format(string $format): string
+{
+    if ($format === 'jpeg') return 'image/jpeg';
+    if ($format === 'webp') return 'image/webp';
+    return 'image/png';
+}
+
+function normalize_proxy_image_response(array $data, string $outputFormat): array
+{
+    if (isset($data['data']) && is_array($data['data'])) $rawItems = $data['data'];
+    elseif (isset($data['images']) && is_array($data['images'])) $rawItems = $data['images'];
+    elseif (!empty($data['b64_json']) || !empty($data['url']) || !empty($data['image']) || !empty($data['data_url']) || (isset($data['data']) && is_string($data['data']))) $rawItems = [$data];
+    else $rawItems = [];
+
+    $revisedPrompt = extract_revised_prompt($data);
+    return [
+        'created' => $data['created'] ?? time(),
+        'usage' => $data['usage'] ?? null,
+        'data' => array_map(fn($item, $index) => normalize_proxy_image_item($item, $index, $outputFormat, $revisedPrompt), $rawItems, array_keys($rawItems)),
+        'raw' => $data,
+    ];
+}
+
+function call_upstream_json(array $config, string $apiKey, string $path, array $payload): array
+{
+    $timeout = normalize_request_timeout($config['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT);
+    $ch = curl_init(direct_api_url($config, $path));
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => $timeout + REQUEST_TIMEOUT_BUFFER,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer ' . $apiKey],
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $text = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+    if ($text === false) throw new RuntimeException($error ?: '上游接口请求失败');
+    $data = parse_upstream_response((string) $text);
+    if ($status < 200 || $status >= 300) throw new RuntimeException(upstream_error_message($data));
+    return $data;
+}
+
+function multipart_escape(string $value): string
+{
+    return str_replace(["\\", "\"", "\r", "\n"], ["\\\\", "\\\"", '', ''], $value);
+}
+
+function append_multipart_field(string &$body, string $boundary, string $name, $value): void
+{
+    if (is_array($value)) {
+        foreach ($value as $key => $item) append_multipart_field($body, $boundary, $name . '[' . $key . ']', $item);
+        return;
+    }
+
+    $body .= '--' . $boundary . "\r\n";
+    $body .= 'Content-Disposition: form-data; name="' . multipart_escape($name) . "\"\r\n\r\n";
+    $body .= (string) $value . "\r\n";
+}
+
+function build_multipart_body(array $fields, array $files, string &$contentType, array &$fileMeta): string
+{
+    $boundary = '----gpt-biubiubiu-' . bin2hex(random_bytes(12));
+    $body = '';
+    $fileMeta = [];
+
+    foreach ($fields as $name => $value) append_multipart_field($body, $boundary, (string) $name, $value);
+
+    foreach ($files as $file) {
+        $tmp = $file['tmp_name'] ?? '';
+        if ($tmp === '' || !is_uploaded_file($tmp)) continue;
+        $name = (string) ($file['name'] ?? 'image.png');
+        $type = (string) ($file['type'] ?? 'application/octet-stream');
+        $field = (string) ($file['field'] ?? 'image[]');
+        $content = file_get_contents($tmp);
+        if ($content === false) continue;
+
+        $body .= '--' . $boundary . "\r\n";
+        $body .= 'Content-Disposition: form-data; name="' . multipart_escape($field) . '"; filename="' . multipart_escape($name) . "\"\r\n";
+        $body .= 'Content-Type: ' . ($type ?: 'application/octet-stream') . "\r\n\r\n";
+        $body .= $content . "\r\n";
+        $fileMeta[] = ['name' => $name, 'type' => $type, 'size' => (int) ($file['size'] ?? strlen($content)), 'field' => $field];
+    }
+
+    $body .= '--' . $boundary . "--\r\n";
+    $contentType = 'multipart/form-data; boundary=' . $boundary;
+    return $body;
+}
+
+function call_upstream_multipart(array $config, string $apiKey, string $path, array $fields, array $files): array
+{
+    $timeout = normalize_request_timeout($config['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT);
+    $contentType = '';
+    $fileMeta = [];
+    $body = build_multipart_body($fields, $files, $contentType, $fileMeta);
+
+    $ch = curl_init(direct_api_url($config, $path));
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => $timeout + REQUEST_TIMEOUT_BUFFER,
+        CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $apiKey, 'Content-Type: ' . $contentType],
+        CURLOPT_POSTFIELDS => $body,
+    ]);
+    $text = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+    if ($text === false) throw new RuntimeException($error ?: '上游接口请求失败');
+    $data = parse_upstream_response((string) $text);
+    if ($status < 200 || $status >= 300) throw new RuntimeException(upstream_error_message($data));
+    return $data;
+}
+
+function upstream_error_message(array $data): string
+{
+    $error = $data['error'] ?? null;
+    if (is_array($error)) return (string) ($error['message'] ?? '生图接口请求失败');
+    if (is_string($error) && $error !== '') return $error;
+    if (!empty($data['message'])) return (string) $data['message'];
+    return '生图接口请求失败';
+}
+
+function proxy_result_images(array $normalized, string $outputFormat): array
+{
+    $images = [];
+    foreach ($normalized['data'] ?? [] as $index => $image) {
+        $stored = stored_generated_image($image, image_mime_for_output_format($outputFormat));
+        if (!$stored) continue;
+        $images[] = [
+            'id' => $image['id'] ?? ('image-' . $index),
+            'url' => $stored['displayUrl'],
+            'image_url' => $stored['displayUrl'],
+            'downloadUrl' => $stored['originalUrl'],
+            'originalUrl' => $stored['originalUrl'],
+            'imageMime' => $stored['imageMime'],
+            'revised_prompt' => $image['revised_prompt'] ?? '',
+            'originalBytes' => $stored['originalBytes'],
+            'displayBytes' => $stored['displayBytes'],
+        ];
+    }
+    return $images;
+}
+
+function save_image_job(array $user, string $requestId, string $mode, string $prompt, array $params, array $result, ?string $error = null): int
+{
+    $stmt = pdo()->prepare('INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, revised_prompt, error_message, image_url, image_b64, params_json, result_json, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
+    $firstImage = $result['data'][0] ?? [];
+    $revisedPrompt = $firstImage['revised_prompt'] ?? extract_revised_prompt($result);
+    $stmt->execute([
+        $user['id'],
+        $requestId,
+        $mode,
+        $error ? 'failed' : 'completed',
+        $prompt,
+        $revisedPrompt,
+        $error,
+        $firstImage['url'] ?? '',
+        '',
+        json_encode(sanitize_log_payload($params), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        json_encode(sanitize_log_payload($result), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    return (int) pdo()->lastInsertId();
+}
+
+function handle_proxy_generation(array $user, array $body): array
+{
+    $config = active_api_config_row((int) $user['id']);
+    $apiKey = decrypt_api_key($config);
+    if (!$config || $apiKey === '') json_response(['error' => '请先在参数设置里保存 API Key。'], 400);
+    $requestId = preg_replace('/[^a-zA-Z0-9_.-]/', '-', (string) ($body['requestId'] ?? ('request-' . time())));
+    $payload = is_array($body['payload'] ?? null) ? $body['payload'] : $body;
+    $payload['model'] = $config['model'] ?: ($payload['model'] ?? 'gpt-image-2');
+    $outputFormat = (string) ($payload['output_format'] ?? 'png');
+    $prompt = trim((string) ($payload['prompt'] ?? ''));
+    if ($prompt === '') json_response(['error' => '缺少提示词'], 400);
+
+    try {
+        $raw = call_upstream_json($config, $apiKey, '/v1/images/generations', $payload);
+        $normalized = normalize_proxy_image_response($raw, $outputFormat);
+        $images = proxy_result_images($normalized, $outputFormat);
+        if (!$images) throw new RuntimeException('上游接口未返回可展示图片。');
+        $result = ['created' => $normalized['created'], 'usage' => $normalized['usage'], 'data' => $images, 'raw' => $normalized['raw']];
+        $jobId = save_image_job($user, $requestId, 'generation', $prompt, ['payload' => $payload], $result);
+        $images = array_map(fn($image) => array_merge($image, ['jobId' => $jobId, 'sourceJobId' => $jobId]), $images);
+        $result['data'] = $images;
+        save_request_log(['requestId' => $requestId, 'mode' => 'generation', 'request' => $payload, 'response' => $result]);
+        return ['jobId' => $jobId, 'data' => $images, 'created' => $normalized['created'], 'usage' => $normalized['usage']];
+    } catch (Throwable $error) {
+        save_image_job($user, $requestId, 'generation', $prompt, ['payload' => $payload], [], $error->getMessage());
+        save_request_log(['requestId' => $requestId, 'mode' => 'generation', 'request' => $payload, 'error' => ['message' => $error->getMessage()]]);
+        throw $error;
+    }
+}
+
+function uploaded_file_list(string $field): array
+{
+    if (!isset($_FILES[$field])) return [];
+    $file = $_FILES[$field];
+    if (is_array($file['name'] ?? null)) {
+        $items = [];
+        foreach ($file['name'] as $index => $name) {
+            $items[] = ['field' => $field . '[]', 'name' => $name, 'type' => $file['type'][$index] ?? '', 'tmp_name' => $file['tmp_name'][$index] ?? '', 'error' => $file['error'][$index] ?? 0, 'size' => $file['size'][$index] ?? 0];
+        }
+        return $items;
+    }
+    return [['field' => $field, 'name' => $file['name'] ?? '', 'type' => $file['type'] ?? '', 'tmp_name' => $file['tmp_name'] ?? '', 'error' => $file['error'] ?? 0, 'size' => $file['size'] ?? 0]];
+}
+
+function handle_proxy_edit(array $user): array
+{
+    $config = active_api_config_row((int) $user['id']);
+    $apiKey = decrypt_api_key($config);
+    if (!$config || $apiKey === '') json_response(['error' => '请先在参数设置里保存 API Key。'], 400);
+    $requestId = preg_replace('/[^a-zA-Z0-9_.-]/', '-', (string) ($_POST['requestId'] ?? ('request-' . time())));
+    $fields = $_POST;
+    unset($fields['requestId']);
+    $fields['model'] = $config['model'] ?: ($fields['model'] ?? 'gpt-image-2');
+    $prompt = trim((string) ($fields['prompt'] ?? ''));
+    if ($prompt === '') json_response(['error' => '缺少提示词'], 400);
+    $files = array_merge(uploaded_file_list('image'), uploaded_file_list('image[]'));
+    $maskFiles = uploaded_file_list('mask');
+    if ($maskFiles) $files[] = $maskFiles[0];
+    $outputFormat = (string) ($fields['output_format'] ?? 'png');
+    $fileMeta = array_map(fn($file) => ['field' => $file['field'], 'name' => $file['name'], 'type' => $file['type'], 'size' => (int) $file['size']], $files);
+
+    try {
+        $raw = call_upstream_multipart($config, $apiKey, '/v1/images/edits', $fields, $files);
+        $normalized = normalize_proxy_image_response($raw, $outputFormat);
+        $images = proxy_result_images($normalized, $outputFormat);
+        if (!$images) throw new RuntimeException('上游接口未返回可展示图片。');
+        $result = ['created' => $normalized['created'], 'usage' => $normalized['usage'], 'data' => $images, 'raw' => $normalized['raw']];
+        $jobId = save_image_job($user, $requestId, 'edit', $prompt, ['fields' => $fields, 'files' => $fileMeta], $result);
+        $images = array_map(fn($image) => array_merge($image, ['jobId' => $jobId, 'sourceJobId' => $jobId]), $images);
+        $result['data'] = $images;
+        save_request_log(['requestId' => $requestId, 'mode' => 'edit', 'request' => ['fields' => $fields, 'files' => $fileMeta], 'response' => $result]);
+        return ['jobId' => $jobId, 'data' => $images, 'created' => $normalized['created'], 'usage' => $normalized['usage']];
+    } catch (Throwable $error) {
+        save_image_job($user, $requestId, 'edit', $prompt, ['fields' => $fields, 'files' => $fileMeta], [], $error->getMessage());
+        save_request_log(['requestId' => $requestId, 'mode' => 'edit', 'request' => ['fields' => $fields, 'files' => $fileMeta], 'error' => ['message' => $error->getMessage()]]);
+        throw $error;
+    }
+}
+
 function client_wall_item(array $item): array
 {
     $params = [];
@@ -862,7 +1327,8 @@ function route_path(): string
 try {
     $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
     $route = route_path();
-    $body = in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true) ? read_json_body() : [];
+    $contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
+    $body = in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true) && (strpos($contentType, 'application/json') !== false || $contentType === '') ? read_json_body() : [];
 
     if ($method === 'GET' && $route === '/health') {
         $configured = false;
@@ -978,6 +1444,21 @@ try {
         json_response(['settings' => save_user_settings($user, $body)]);
     }
 
+    if ($method === 'POST' && $route === '/settings/active-api') {
+        $user = require_user();
+        json_response(['settings' => switch_active_api_config($user, $body)]);
+    }
+
+    if ($method === 'POST' && $route === '/images/generations') {
+        $user = require_user();
+        json_response(handle_proxy_generation($user, $body));
+    }
+
+    if ($method === 'POST' && $route === '/images/edits') {
+        $user = require_user();
+        json_response(handle_proxy_edit($user));
+    }
+
     if ($method === 'POST' && $route === '/image-requests') {
         json_response(save_request_log($body));
     }
@@ -1007,8 +1488,9 @@ try {
         $params = is_array($body['params'] ?? null) ? $body['params'] : $form;
         $duration = isset($body['durationSeconds']) ? max(0, (int) $body['durationSeconds']) : (isset($params['durationSeconds']) ? max(0, (int) $params['durationSeconds']) : null);
         if ($duration !== null) $params['durationSeconds'] = $duration;
+        $sourceJobId = max(0, (int) ($body['sourceJobId'] ?? ($body['jobId'] ?? ($params['sourceJobId'] ?? 0))));
         $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? '未命名作品')));
-        $stmt = pdo()->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, original_url, display_url, original_path, display_path, original_bytes, display_bytes, duration_seconds, params_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt = pdo()->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, original_url, display_url, original_path, display_path, original_bytes, display_bytes, duration_seconds, params_json, source_job_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $user['id'] ?? null,
             $visitorId,
@@ -1026,6 +1508,7 @@ try {
             $storedImage['displayBytes'],
             $duration,
             json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $sourceJobId > 0 ? $sourceJobId : null,
         ]);
         $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
         $stmt->execute([(int) pdo()->lastInsertId()]);
@@ -1054,5 +1537,6 @@ try {
 
     json_response(['error' => '接口不存在', 'route' => $route], 404);
 } catch (Throwable $error) {
-    json_response(['error' => '服务端异常', 'detail' => $error->getMessage()], 500);
+    $status = $error instanceof RuntimeException ? 502 : 500;
+    json_response(['error' => $error->getMessage() ?: '服务端异常', 'detail' => $error->getMessage()], $status);
 }

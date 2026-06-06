@@ -465,7 +465,6 @@ const normalizeApiConfigItem = (value = {}, index = 0) => ({
   apiKey: '',
   hasApiKey: Boolean(value.hasApiKey || value.has_api_key),
   apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),
-  clearApiKey: Boolean(value.clearApiKey || value.clear_api_key),
   requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
 });
 
@@ -558,133 +557,8 @@ const requestJson = async (input, init) => {
   const response = await fetch(toApiUrl(input), init);
   const data = await readApiResponse(response);
 
-  if (!response.ok) throw new Error(data.error || data.message || '请求失败');
+  if (!response.ok) throw new Error(data.error || data.message || data.detail || '请求失败');
   return data;
-};
-
-const buildDirectApiUrl = (apiBaseUrl, path) => {
-  const baseUrl = normalizeApiBaseUrl(apiBaseUrl);
-  const basePath = new URL(baseUrl).pathname.replace(/\/+$/, '');
-  const normalizedPath = `/${String(path || '').replace(/^\/+/, '')}`;
-  const finalPath = basePath && normalizedPath.startsWith(`${basePath}/`)
-    ? normalizedPath.slice(basePath.length)
-    : normalizedPath;
-  return `${baseUrl}${finalPath}`;
-};
-
-const parseDirectResponseText = (text) => {
-  if (!text) return {};
-  const trimmed = text.trim();
-  if (isDataImageValue(trimmed)) return { data: trimmed };
-  const eventPayloads = trimmed
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => {
-      const payload = line.slice(5).trim();
-      return isDataImageValue(line) && !isDataImageValue(payload) ? line : payload;
-    })
-    .filter((line) => line && line !== '[DONE]');
-
-  const imagePayload = eventPayloads.find(isDataImageValue);
-  if (imagePayload) return { data: imagePayload };
-
-  if (eventPayloads.length) {
-    const events = eventPayloads
-      .map((payload) => {
-        try {
-          return JSON.parse(payload);
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
-    const imageEvent = events.find((event) => Array.isArray(event?.data) && event.data.length)
-      || events.find((event) => event?.b64_json || event?.url || event?.image || event?.data_url)
-      || events.at(-1)
-      || {};
-    const textEvent = [...events].reverse().find((event) => event?.revised_prompt || event?.revisedPrompt || event?.prompt_revised || event?.data?.some?.((item) => item?.revised_prompt || item?.revisedPrompt || item?.prompt_revised));
-    const revisedPrompt = textEvent?.revised_prompt
-      || textEvent?.revisedPrompt
-      || textEvent?.prompt_revised
-      || textEvent?.data?.find?.((item) => item?.revised_prompt || item?.revisedPrompt || item?.prompt_revised)?.revised_prompt
-      || textEvent?.data?.find?.((item) => item?.revised_prompt || item?.revisedPrompt || item?.prompt_revised)?.revisedPrompt
-      || textEvent?.data?.find?.((item) => item?.revised_prompt || item?.revisedPrompt || item?.prompt_revised)?.prompt_revised
-      || '';
-
-    if (!revisedPrompt) return imageEvent;
-    if (Array.isArray(imageEvent?.data)) {
-      return {
-        ...imageEvent,
-        data: imageEvent.data.map((item, index) => (index === 0 && !item?.revised_prompt ? { ...item, revised_prompt: revisedPrompt } : item)),
-      };
-    }
-    return imageEvent?.revised_prompt ? imageEvent : { ...imageEvent, revised_prompt: revisedPrompt };
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    if (/^[\s\r\n]*</.test(text)) throw new Error('上游接口返回了页面内容，请检查 API 地址。');
-    throw new Error(text.slice(0, 180) || '上游接口返回异常内容。');
-  }
-};
-
-const readDirectImageResponse = async (response) => {
-  const text = await response.text();
-  const data = parseDirectResponseText(text);
-  if (!response.ok) {
-    const message = data?.error?.message || data?.error || data?.message || '生图接口请求失败';
-    throw new Error(message);
-  }
-  return data;
-};
-
-const requestDirectImageJson = async (path, payload, config) => {
-  const controller = new AbortController();
-  const timeoutMs = clampNumber(Number(config.requestTimeout) || MAX_REQUEST_TIMEOUT_SECONDS, 10, MAX_REQUEST_TIMEOUT_SECONDS) * 1000;
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(buildDirectApiUrl(config.apiBaseUrl, path), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    return await readDirectImageResponse(response);
-  } catch (requestError) {
-    if (requestError?.name === 'AbortError') throw new Error('生图请求超时，请调高请求超时或降低尺寸/质量后重试。');
-    throw requestError;
-  } finally {
-    window.clearTimeout(timer);
-  }
-};
-
-const requestDirectImageFormData = async (path, body, config) => {
-  const controller = new AbortController();
-  const timeoutMs = clampNumber(Number(config.requestTimeout) || MAX_REQUEST_TIMEOUT_SECONDS, 10, MAX_REQUEST_TIMEOUT_SECONDS) * 1000;
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(buildDirectApiUrl(config.apiBaseUrl, path), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body,
-      signal: controller.signal,
-    });
-    return await readDirectImageResponse(response);
-  } catch (requestError) {
-    if (requestError?.name === 'AbortError') throw new Error('图生图请求超时，请压缩参考图、降低尺寸/质量或调高请求超时后重试。');
-    throw requestError;
-  } finally {
-    window.clearTimeout(timer);
-  }
 };
 
 function App() {
@@ -840,15 +714,6 @@ function App() {
     return payload;
   };
 
-  const loadDirectSettings = async () => {
-    const data = await requestJson('/api/settings/direct');
-    const settings = normalizeServerSettings(data.settings || {});
-    const apiKey = String(data.apiKey || data.api_key || '');
-    if (!apiKey) throw new Error('请先在参数设置里保存 API Key。');
-    setApiConfigForm((current) => ({ ...current, ...settings, apiKey: current.apiKey, hasApiKey: true }));
-    return { ...settings, ...settings.apiConfigs.find((item) => String(item.id) === String(settings.activeApiConfigId)), apiKey };
-  };
-
   const updateApiConfig = (id, key, value) => {
     setApiConfigForm((current) => ({
       ...current,
@@ -883,31 +748,6 @@ function App() {
     });
   };
 
-  const logImageRequest = async ({ requestId, mode, request, response, error: logError }) => {
-    try {
-      await requestJson('/api/image-requests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requestId, mode, request, response, error: logError }),
-      });
-    } catch {
-      // 日志失败不影响生图主流程。
-    }
-  };
-
-  const formDataLogPayload = (payload) => {
-    const fields = {};
-    const files = [];
-    payload.forEach((value, key) => {
-      if (value instanceof File) {
-        files.push({ key, name: value.name, type: value.type, size: value.size });
-      } else {
-        fields[key] = value;
-      }
-    });
-    return { fields, files };
-  };
-
   const applyServerSettings = (settings, nextUser = user) => {
     const normalized = normalizeServerSettings(settings || {});
     const nextForm = normalizeForm({ ...normalized.form, model: normalized.model, prompt: form.prompt });
@@ -921,6 +761,35 @@ function App() {
       apiName: normalized.apiName,
       message: nextUser ? (normalized.hasApiKey ? normalized.apiName : '未配置 API Key') : '请先登录',
     }));
+  };
+
+  const switchActiveApiConfig = async (configId) => {
+    if (!user) {
+      setError('请先登录后再切换 API。');
+      return;
+    }
+
+    try {
+      const data = await requestJson('/api/settings/active-api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activeApiConfigId: configId }),
+      });
+      const normalized = normalizeServerSettings(data.settings || {});
+      setApiConfigForm(normalized);
+      setForm((current) => ({ ...current, model: normalized.model || current.model }));
+      setStatus((current) => ({
+        ...current,
+        loading: false,
+        configured: Boolean(normalized.hasApiKey),
+        apiName: normalized.apiName,
+        message: normalized.hasApiKey ? normalized.apiName : '未配置 API Key',
+      }));
+      setOpenSelect('');
+      setError('');
+    } catch (switchError) {
+      setError(switchError instanceof Error ? switchError.message : '切换 API 失败');
+    }
   };
 
   const loadWall = async () => {
@@ -1190,23 +1059,26 @@ function App() {
     };
     setImages((items) => [pendingItem, ...items]);
 
-    let requestLogPayload = null;
     try {
       if (!user) throw new Error('请先登录后再生成图片。');
-      const directConfig = await loadDirectSettings();
+      if (!status.configured) throw new Error('请先在参数设置里保存 API Key。');
       const payload = hasReferenceImages
-        ? buildEditPayload(prompt, directConfig)
-        : buildGenerationPayload(prompt, directConfig);
-      requestLogPayload = hasReferenceImages ? formDataLogPayload(payload) : payload;
-      const data = hasReferenceImages
-        ? await requestDirectImageFormData('/v1/images/edits', payload, directConfig)
-        : await requestDirectImageJson('/v1/images/generations', payload, directConfig);
-      await logImageRequest({
-        requestId,
-        mode: hasReferenceImages ? 'edit' : 'generation',
-        request: requestLogPayload,
-        response: data,
-      });
+        ? buildEditPayload(prompt, requestConfig)
+        : buildGenerationPayload(prompt, { ...requestConfig, stream: apiConfigForm.stream });
+      let data;
+      if (hasReferenceImages) {
+        payload.append('requestId', requestId);
+        data = await requestJson('/api/images/edits', {
+          method: 'POST',
+          body: payload,
+        });
+      } else {
+        data = await requestJson('/api/images/generations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId, payload }),
+        });
+      }
       const outputFormat = hasReferenceImages
         ? (responseFormat === 'url' ? normalizeOutputFormat(form.output_format) : defaultForm.output_format)
         : payload.output_format || defaultForm.output_format;
@@ -1220,7 +1092,8 @@ function App() {
       const nextImages = Array.isArray(normalizedData.data)
         ? normalizedData.data.map((image, index) => normalizeBoardImage({
             ...image,
-            id: image.id || `${requestId}-${index}`,
+            upstreamImageId: image.id || '',
+            id: `${requestId}-${index}`,
             requestId,
             status: 'completed',
             form: imageForm,
@@ -1264,12 +1137,6 @@ function App() {
     } catch (requestError) {
       const failedAt = new Date().toISOString();
       const message = requestError instanceof Error ? requestError.message : '生成失败';
-      await logImageRequest({
-        requestId,
-        mode: hasReferenceImages ? 'edit' : 'generation',
-        request: requestLogPayload,
-        error: { message },
-      });
       if (deletedRequestIdsRef.current.has(requestId)) {
         setStatus((current) => ({ ...current, loading: false, message: current.configured ? '已删除' : current.message }));
         return;
@@ -1362,8 +1229,9 @@ function App() {
           prompt: image.prompt || image.form?.prompt || form.prompt,
           revised_prompt: image.revised_prompt || '',
           durationSeconds: getElapsedSeconds(image),
-          form: { ...(image.form || form), source: normalizeImageSource(image.source) },
-          params: { ...(image.form || form), source: normalizeImageSource(image.source), durationSeconds: getElapsedSeconds(image) },
+          sourceJobId: image.sourceJobId || image.jobId || null,
+          form: { ...(image.form || form), source: normalizeImageSource(image.source), sourceJobId: image.sourceJobId || image.jobId || null },
+          params: { ...(image.form || form), source: normalizeImageSource(image.source), durationSeconds: getElapsedSeconds(image), sourceJobId: image.sourceJobId || image.jobId || null },
         }),
       });
 
@@ -1445,7 +1313,6 @@ function App() {
             requestTimeout: item.requestTimeout,
             apiKey: item.apiKey,
             confirmApiKeySave: Boolean(item.apiKey),
-            clearApiKey: Boolean(item.clearApiKey),
           })),
         }),
       });
@@ -1468,7 +1335,6 @@ function App() {
         hasApiKey: item.hasApiKey,
         apiKeyHint: item.apiKeyHint,
         apiKey: '',
-        clearApiKey: false,
       })) : [defaultApiConfigItem],
       activeApiConfigId: current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
     }));
@@ -1606,7 +1472,17 @@ function App() {
         </nav>
 
         <div className="topbar-actions">
-          <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>
+          {status.configured && user ? renderSelect({
+            id: 'topbar-api-switch',
+            label: '',
+            value: activeApiConfig?.id || apiConfigForm.activeApiConfigId,
+            options: (apiConfigForm.apiConfigs || []).filter((item) => item.hasApiKey).map((item) => ({ label: item.apiName || defaultApiConfigItem.apiName, value: item.id })),
+            onChange: switchActiveApiConfig,
+            className: 'status-api-select',
+            menuDirection: 'down',
+          }) : (
+            <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>
+          )}
           <button type="button" className="round-tool account-tool" onClick={() => { setAuthTab('profile'); setActiveDialog('auth'); }} aria-label="账号设置">
             {user ? userDisplayName : '登录'}
           </button>
@@ -1677,7 +1553,7 @@ function App() {
             <textarea
               value={form.prompt}
               onChange={(event) => updateForm('prompt', event.target.value)}
-              placeholder="描述你想生成的图片，可输入 @ 来指定参考图..."
+              placeholder="描述你想生成的图片..."
               rows={2}
             />
 
@@ -1983,21 +1859,8 @@ function App() {
                               </label>
                               <label className="full-field">
                                 <span>密钥设置</span>
-                                <input type="password" value={config.apiKey || ''} onChange={(event) => {
-                                  updateApiConfig(config.id, 'apiKey', event.target.value);
-                                  if (event.target.value) updateApiConfig(config.id, 'clearApiKey', false);
-                                }} placeholder={config.hasApiKey ? `已保存：${config.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
+                                <input type="password" value={config.apiKey || ''} onChange={(event) => updateApiConfig(config.id, 'apiKey', event.target.value)} placeholder={config.hasApiKey ? `已保存：${config.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
                               </label>
-                              {config.hasApiKey ? (
-                                <label className="toggle-row full-field api-key-clear-row">
-                                  <input type="checkbox" checked={Boolean(config.clearApiKey)} onChange={(event) => {
-                                    updateApiConfig(config.id, 'clearApiKey', event.target.checked);
-                                    if (event.target.checked) updateApiConfig(config.id, 'apiKey', '');
-                                  }} />
-                                  <span>清空已保存密钥</span>
-                                  <small>不勾选且不填写新密钥时，将保留当前密钥。</small>
-                                </label>
-                              ) : null}
                             </div>
                           </section>
                         );

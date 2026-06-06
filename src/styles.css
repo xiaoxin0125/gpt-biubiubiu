@@ -73,6 +73,7 @@ button {
   align-items: center;
   gap: 14px;
   min-height: 46px;
+  padding: 0 15%;
 }
 
 .brand,
@@ -188,6 +189,34 @@ button {
   justify-self: end;
 }
 
+.status-api-select {
+  width: min(220px, 28vw);
+}
+
+.status-api-select .custom-select-trigger {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--black);
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.status-api-select .custom-select-trigger strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-api-select .custom-select-menu {
+  right: 0;
+  left: auto;
+  min-width: 220px;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -276,7 +305,7 @@ button:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  width: 80%;
+  width: 70%;
   min-width: 0;
   padding: 10px;
   border-radius: var(--radius);
@@ -399,7 +428,7 @@ button:disabled {
 .image-board.has-images {
   display: block;
   width: 100%;
-  max-width: 80%;
+  max-width: 70%;
   margin: 10px auto;
   column-width: 220px;
   column-gap: 14px;
@@ -1865,8 +1894,51 @@ select option {
   }
 
   .topbar {
-    grid-template-columns: 1fr auto;
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 0;
+  }
+
+  .brand {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .topbar-actions {
+    display: contents;
+  }
+
+  .status-api-select {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .status-api-select .custom-select-trigger {
+    width: 100%;
+    min-width: 0;
+    justify-content: space-between;
+  }
+
+  .topbar-actions .status-pill {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .account-tool {
+    grid-column: 2;
+    justify-self: end;
+    max-width: 120px;
+  }
+
+  .topbar-actions .custom-select-field,
+  .topbar-actions .custom-select-trigger {
+    min-width: 0;
   }
 
   .mode-tabs {
@@ -1902,16 +1974,38 @@ select option {
     position: static;
     display: grid;
     grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
+    gap: 8px;
     width: 100%;
     margin: 0 0 12px;
+    padding: 8px;
     transform: none;
   }
 
   .toolbar-icon-button {
+    grid-column: 1;
     width: 44px;
+    min-width: 44px;
     min-height: 38px;
     border-radius: var(--radius);
   }
+
+  .toolbar-scope {
+    grid-column: 2;
+  }
+
+  .toolbar-filter {
+    grid-column: 3;
+  }
+
+  .canvas-stage.is-wall-view .canvas-toolbar {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .canvas-stage.is-wall-view .toolbar-filter {
+    grid-column: 2;
+  }
+
 
   .toolbar-scope,
   .toolbar-filter {
@@ -2080,6 +2174,20 @@ select option {
     display: grid;
   }
 
+  .api-config-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .status-api-select {
+    width: 100%;
+  }
+
+  .status-api-select .custom-select-trigger {
+    min-height: 36px;
+  }
+
   .full-field {
     grid-column: auto;
   }
@@ -2087,11 +2195,30 @@ select option {
 
 @media (max-width: 460px) {
   .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
+  }
+
+  .topbar-actions {
+    display: contents;
+  }
+
+  .account-tool {
+    max-width: 96px;
   }
 
   .status-pill {
     display: none;
+  }
+
+  .status-api-select {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .status-api-select .custom-select-trigger {
+    padding: 0 9px;
   }
 
   .modal-layer {
@@ -2114,6 +2241,15 @@ select option {
   .canvas-toolbar {
     grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
   }
+
+  .canvas-stage.is-wall-view .canvas-toolbar {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .canvas-stage.is-wall-view .toolbar-filter {
+    grid-column: 2;
+  }
+
 
   .toolbar-search {
     grid-column: 1 / -1;
