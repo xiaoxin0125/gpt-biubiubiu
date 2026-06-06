@@ -943,7 +943,8 @@ function extract_revised_prompt($value): string
 {
     if (!is_array($value)) return '';
     foreach (['revised_prompt', 'revisedPrompt', 'prompt_revised'] as $key) {
-        if (!empty($value[$key]) && is_string($value[$key])) return $value[$key];
+        $prompt = trim((string) ($value[$key] ?? ''));
+        if ($prompt !== '') return $prompt;
     }
     foreach (['data', 'images'] as $key) {
         if (!isset($value[$key]) || !is_array($value[$key])) continue;
@@ -1117,17 +1118,19 @@ function proxy_result_images(array $normalized, string $outputFormat): array
     foreach ($normalized['data'] ?? [] as $index => $image) {
         $stored = stored_generated_image($image, image_mime_for_output_format($outputFormat));
         if (!$stored) continue;
-        $images[] = [
+        $next = [
             'id' => $image['id'] ?? ('image-' . $index),
             'url' => $stored['displayUrl'],
             'image_url' => $stored['displayUrl'],
             'downloadUrl' => $stored['originalUrl'],
             'originalUrl' => $stored['originalUrl'],
             'imageMime' => $stored['imageMime'],
-            'revised_prompt' => $image['revised_prompt'] ?? '',
             'originalBytes' => $stored['originalBytes'],
             'displayBytes' => $stored['displayBytes'],
         ];
+        $revisedPrompt = extract_revised_prompt($image);
+        if ($revisedPrompt !== '') $next['revised_prompt'] = $revisedPrompt;
+        $images[] = $next;
     }
     return $images;
 }
@@ -1136,7 +1139,7 @@ function save_image_job(array $user, string $requestId, string $mode, string $pr
 {
     $stmt = pdo()->prepare('INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, revised_prompt, error_message, image_url, image_b64, params_json, result_json, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
     $firstImage = $result['data'][0] ?? [];
-    $revisedPrompt = $firstImage['revised_prompt'] ?? extract_revised_prompt($result);
+    $revisedPrompt = extract_revised_prompt($firstImage) ?: extract_revised_prompt($result);
     $stmt->execute([
         $user['id'],
         $requestId,
@@ -1490,13 +1493,14 @@ try {
         if ($duration !== null) $params['durationSeconds'] = $duration;
         $sourceJobId = max(0, (int) ($body['sourceJobId'] ?? ($body['jobId'] ?? ($params['sourceJobId'] ?? 0))));
         $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? '未命名作品')));
+        $revisedPrompt = extract_revised_prompt($body);
         $stmt = pdo()->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, original_url, display_url, original_path, display_path, original_bytes, display_bytes, duration_seconds, params_json, source_job_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $user['id'] ?? null,
             $visitorId,
             $user['displayName'] ?? ($user['username'] ?? '未知艺术家'),
             $prompt ?: '未命名作品',
-            $body['revised_prompt'] ?? '',
+            $revisedPrompt !== '' ? $revisedPrompt : null,
             $storedImage['displayUrl'],
             null,
             $storedImage['imageMime'],

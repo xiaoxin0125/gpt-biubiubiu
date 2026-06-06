@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const HISTORY_KEY = 'gpt-biubiubiu:image-history';
+const DIRECT_API_KEY_CACHE_KEY = 'gpt-biubiubiu:direct-api-keys';
 const DEFAULT_DIRECT_API_BASE_URL = 'https://api.apiyi.com';
 const MAX_REFERENCE_IMAGES = 16;
 const MAX_REQUEST_TIMEOUT_SECONDS = 999;
@@ -112,7 +113,6 @@ const defaultForm = {
   background: 'auto',
   response_format: 'url',
   output_format: 'png',
-  output_compression: 85,
   moderation: 'auto',
 };
 
@@ -164,10 +164,10 @@ const normalizeBackground = (value) => (backgroundOptions.includes(value) ? valu
 const normalizeResponseFormat = (value) => (responseFormatOptions.some((item) => item.value === value) ? value : 'b64_json');
 const normalizeOutputFormat = (value) => (outputFormatOptions.includes(value) ? value : 'png');
 const normalizeModeration = (value) => (moderationOptions.includes(value) ? value : 'auto');
-const normalizeCompression = (value) => clampNumber(Number(value) || 0, 0, 100);
 const normalizeOutputCount = (value) => clampNumber(Math.round(Number(value) || defaultForm.n), 1, MAX_OUTPUT_IMAGES);
 const getQualityLabel = (value) => qualityOptions.find((item) => item.value === value)?.label || '自动';
 const getResponseFormatLabel = (value) => responseFormatOptions.find((item) => item.value === value)?.label || 'Base64';
+const normalizeRevisedPrompt = (...values) => values.map((value) => String(value || '').trim()).find(Boolean) || '';
 const normalizeForm = (value = {}) => {
   const nextForm = { ...defaultForm, ...value };
 
@@ -180,7 +180,6 @@ const normalizeForm = (value = {}) => {
     background: normalizeBackground(nextForm.background),
     response_format: normalizeResponseFormat(nextForm.response_format),
     output_format: normalizeOutputFormat(nextForm.output_format),
-    output_compression: normalizeCompression(nextForm.output_compression ?? defaultForm.output_compression),
     moderation: normalizeModeration(nextForm.moderation),
   };
 };
@@ -328,6 +327,41 @@ const saveHistory = (items) => {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 30)));
 };
 
+const readDirectApiKeyCache = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DIRECT_API_KEY_CACHE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const directApiConfigFingerprint = (config = {}) => [
+  normalizeApiBaseUrl(config.apiBaseUrl || config.api_base_url || defaultApiConfigItem.apiBaseUrl),
+  String(config.model || defaultApiConfigItem.model).trim(),
+  String(config.apiName || config.api_name || defaultApiConfigItem.apiName).trim(),
+].join('|');
+
+const getCachedDirectApiKey = (config = {}) => {
+  const cache = readDirectApiKeyCache();
+  return String(cache[String(config.id)] || cache[directApiConfigFingerprint(config)] || '').trim();
+};
+
+const rememberDirectApiKeys = (configs = []) => {
+  const cache = readDirectApiKeyCache();
+  let changed = false;
+
+  configs.forEach((config) => {
+    const apiKey = String(config?.apiKey || config?.api_key || '').trim();
+    if (!apiKey) return;
+    cache[String(config.id)] = apiKey;
+    cache[directApiConfigFingerprint(config)] = apiKey;
+    changed = true;
+  });
+
+  if (changed) localStorage.setItem(DIRECT_API_KEY_CACHE_KEY, JSON.stringify(cache));
+};
+
 const parseSize = (size) => {
   const [width, height] = String(size || '').split('x').map(Number);
   return { width: width || 1024, height: height || 1024 };
@@ -457,16 +491,20 @@ const normalizeApiBaseUrl = (value) => String(value || DEFAULT_DIRECT_API_BASE_U
 
 const createLocalApiConfigId = () => `api-config-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-const normalizeApiConfigItem = (value = {}, index = 0) => ({
-  id: value.id ?? value.configId ?? value.config_id ?? createLocalApiConfigId(),
-  apiName: String(value.apiName || value.api_name || (index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`)).trim() || defaultApiConfigItem.apiName,
-  apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url || defaultApiConfigItem.apiBaseUrl),
-  model: String(value.model || defaultApiConfigItem.model).trim() || defaultApiConfigItem.model,
-  apiKey: '',
-  hasApiKey: Boolean(value.hasApiKey || value.has_api_key),
-  apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),
-  requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
-});
+const normalizeApiConfigItem = (value = {}, index = 0) => {
+  const base = {
+    id: value.id ?? value.configId ?? value.config_id ?? createLocalApiConfigId(),
+    apiName: String(value.apiName || value.api_name || (index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`)).trim() || defaultApiConfigItem.apiName,
+    apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url || defaultApiConfigItem.apiBaseUrl),
+    model: String(value.model || defaultApiConfigItem.model).trim() || defaultApiConfigItem.model,
+    apiKey: String(value.apiKey || value.api_key || '').trim(),
+    hasApiKey: Boolean(value.hasApiKey || value.has_api_key || value.apiKey || value.api_key),
+    apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),
+    requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
+  };
+  const cachedApiKey = getCachedDirectApiKey(base);
+  return cachedApiKey ? { ...base, apiKey: cachedApiKey, hasApiKey: true } : base;
+};
 
 const normalizeServerSettings = (value = {}) => {
   const rawConfigs = Array.isArray(value.apiConfigs || value.api_configs)
@@ -479,7 +517,6 @@ const normalizeServerSettings = (value = {}) => {
 
   return {
     ...activeConfig,
-    apiKey: '',
     stream: Boolean(value.stream),
     activeApiConfigId: activeConfig.id,
     apiConfigs: safeConfigs,
@@ -500,7 +537,7 @@ const normalizeDirectImageItem = (image, index, outputFormat) => {
   const sourceValue = String(rawSourceValue || '');
   const dataImageMime = getDataImageMime(sourceValue);
   const imageMime = image?.imageMime || image?.mime || dataImageMime || imageMimeForOutputFormat(outputFormat);
-  const revisedPrompt = image?.revised_prompt || image?.revisedPrompt || image?.prompt_revised || '';
+  const revisedPrompt = normalizeRevisedPrompt(image?.revised_prompt, image?.revisedPrompt, image?.prompt_revised);
   const nextImage = {
     ...(image && typeof image === 'object' ? image : {}),
     id: image?.id || `${Date.now()}-${index}`,
@@ -539,7 +576,7 @@ const normalizeDirectImageResponse = (data, outputFormat) => {
     raw: data,
     data: rawItems.map((image, index) => {
       const normalized = normalizeDirectImageItem(image, index, outputFormat);
-      const topLevelRevisedPrompt = data?.revised_prompt || data?.revisedPrompt || data?.prompt_revised || '';
+      const topLevelRevisedPrompt = normalizeRevisedPrompt(data?.revised_prompt, data?.revisedPrompt, data?.prompt_revised);
       return normalized.revised_prompt || !topLevelRevisedPrompt ? normalized : { ...normalized, revised_prompt: topLevelRevisedPrompt };
     }),
   };
@@ -559,6 +596,105 @@ const requestJson = async (input, init) => {
 
   if (!response.ok) throw new Error(data.error || data.message || data.detail || '请求失败');
   return data;
+};
+
+const buildDirectImageApiUrl = (config = {}, path) => {
+  const baseUrl = normalizeApiBaseUrl(config.apiBaseUrl || config.api_base_url || defaultApiConfigItem.apiBaseUrl);
+  const base = new URL(baseUrl);
+  const normalizedPath = `/${String(path || '').replace(/^\/+/, '')}`;
+  const basePath = base.pathname.replace(/\/+$/, '');
+  base.pathname = basePath && normalizedPath.startsWith(`${basePath}/`) ? normalizedPath : `${basePath}${normalizedPath}`;
+  base.search = '';
+  base.hash = '';
+  return base.toString();
+};
+
+const parseDirectImageResponseText = (text) => {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return {};
+  if (/^data:(image\/[a-z0-9.+-]+);base64,/i.test(trimmed)) return { data: trimmed };
+
+  const payloads = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .filter((payload) => payload && payload !== '[DONE]');
+
+  if (payloads.length) {
+    const events = [];
+    let imagePayload = '';
+    payloads.forEach((payload) => {
+      if (/^data:(image\/[a-z0-9.+-]+);base64,/i.test(payload)) {
+        imagePayload = payload;
+        return;
+      }
+      try {
+        const decoded = JSON.parse(payload);
+        if (decoded && typeof decoded === 'object') events.push(decoded);
+      } catch {
+        // 忽略非 JSON 事件片段
+      }
+    });
+
+    if (imagePayload) return { data: imagePayload };
+
+    let imageEvent = events.find((event) => normalizeDirectImageResponse(event, 'png').data.length) || events.at(-1) || {};
+    const revisedPrompt = events.map((event) => normalizeRevisedPrompt(event?.revised_prompt, event?.revisedPrompt, event?.prompt_revised)).filter(Boolean).at(-1) || '';
+    if (revisedPrompt && imageEvent && typeof imageEvent === 'object') imageEvent = { ...imageEvent, revised_prompt: revisedPrompt };
+    return imageEvent;
+  }
+
+  return JSON.parse(trimmed);
+};
+
+const readDirectImageResponse = async (response) => {
+  const text = await response.text();
+  const contentType = response.headers.get('content-type') || '';
+  let data = {};
+
+  if (text && (contentType.includes('application/json') || contentType.includes('text/event-stream') || /^[\s\r\n]*(data:|[\[{])/.test(text))) {
+    try {
+      data = parseDirectImageResponseText(text);
+    } catch {
+      throw new Error('上游接口返回了无法解析的数据。');
+    }
+  } else if (text && /^[\s\r\n]*</.test(text)) {
+    throw new Error('上游接口返回了页面内容，请检查 API 地址是否正确。');
+  } else if (text) {
+    throw new Error(text.slice(0, 180) || '上游接口返回异常内容。');
+  }
+
+  if (!response.ok) {
+    const error = data?.error;
+    if (error && typeof error === 'object') throw new Error(error.message || '上游接口请求失败');
+    throw new Error(String(error || data?.message || data?.detail || '上游接口请求失败'));
+  }
+
+  return data;
+};
+
+const requestDirectImageJson = async (config, apiKey, payload) => {
+  const response = await fetch(buildDirectImageApiUrl(config, '/v1/images/generations'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  return readDirectImageResponse(response);
+};
+
+const requestDirectImageFormData = async (config, apiKey, payload) => {
+  const response = await fetch(buildDirectImageApiUrl(config, '/v1/images/edits'), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: payload,
+  });
+  return readDirectImageResponse(response);
 };
 
 function App() {
@@ -593,7 +729,6 @@ function App() {
   const hasReferenceImages = referenceImages.length > 0;
   const responseFormat = normalizeResponseFormat(form.response_format);
   const canUseOutputFormat = responseFormat === 'url';
-  const canCompressOutput = canUseOutputFormat && ['jpeg', 'webp'].includes(normalizeOutputFormat(form.output_format));
   const referenceNames = referenceImages.map((image, index) => `图${index + 1}:${image.name}`).join('，');
   const availableRatios = getAvailableRatios(sizeDraft.resolution);
   const activeSize = getDraftSize(sizeDraft);
@@ -687,7 +822,6 @@ function App() {
     if (useStream && responseFormat === 'url') payload.stream = true;
     if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
     if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
-    if (canUseOutputFormat && ['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
 
     return payload;
   };
@@ -708,7 +842,6 @@ function App() {
     if (normalized.size) payload.append('size', normalized.size);
     if (normalizeQuality(normalized.quality) !== 'auto') payload.append('quality', normalizeQuality(normalized.quality));
     if (normalizeBackground(normalized.background) !== 'auto') payload.append('background', normalizeBackground(normalized.background));
-    if (canUseOutputFormat && ['jpeg', 'webp'].includes(outputFormat)) payload.append('output_compression', String(normalizeCompression(normalized.output_compression)));
     if (maskImage?.file) payload.append('mask', maskImage.file, maskImage.name || maskImage.file.name || 'mask.png');
 
     return payload;
@@ -776,7 +909,13 @@ function App() {
         body: JSON.stringify({ activeApiConfigId: configId }),
       });
       const normalized = normalizeServerSettings(data.settings || {});
-      setApiConfigForm(normalized);
+      setApiConfigForm((current) => {
+        const currentKeys = new Map((current.apiConfigs || []).map((item) => [String(item.id), item.apiKey || '']));
+        return {
+          ...normalized,
+          apiConfigs: normalized.apiConfigs.map((item) => ({ ...item, apiKey: item.apiKey || currentKeys.get(String(item.id)) || getCachedDirectApiKey(item) })),
+        };
+      });
       setForm((current) => ({ ...current, model: normalized.model || current.model }));
       setStatus((current) => ({
         ...current,
@@ -1060,25 +1199,15 @@ function App() {
     setImages((items) => [pendingItem, ...items]);
 
     try {
-      if (!user) throw new Error('请先登录后再生成图片。');
       if (!status.configured) throw new Error('请先在参数设置里保存 API Key。');
+      const requestApiKey = String(requestConfig.apiKey || getCachedDirectApiKey(requestConfig)).trim();
+      if (!requestApiKey) throw new Error('前端直连需要在当前浏览器重新填写并保存 API Key。');
       const payload = hasReferenceImages
         ? buildEditPayload(prompt, requestConfig)
         : buildGenerationPayload(prompt, { ...requestConfig, stream: apiConfigForm.stream });
-      let data;
-      if (hasReferenceImages) {
-        payload.append('requestId', requestId);
-        data = await requestJson('/api/images/edits', {
-          method: 'POST',
-          body: payload,
-        });
-      } else {
-        data = await requestJson('/api/images/generations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ requestId, payload }),
-        });
-      }
+      const data = hasReferenceImages
+        ? await requestDirectImageFormData(requestConfig, requestApiKey, payload)
+        : await requestDirectImageJson(requestConfig, requestApiKey, payload);
       const outputFormat = hasReferenceImages
         ? (responseFormat === 'url' ? normalizeOutputFormat(form.output_format) : defaultForm.output_format)
         : payload.output_format || defaultForm.output_format;
@@ -1227,7 +1356,7 @@ function App() {
             mime: imageMime,
           },
           prompt: image.prompt || image.form?.prompt || form.prompt,
-          revised_prompt: image.revised_prompt || '',
+          revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
           durationSeconds: getElapsedSeconds(image),
           sourceJobId: image.sourceJobId || image.jobId || null,
           form: { ...(image.form || form), source: normalizeImageSource(image.source), sourceJobId: image.sourceJobId || image.jobId || null },
@@ -1296,6 +1425,7 @@ function App() {
       activeApiConfigId: apiConfigForm.activeApiConfigId,
       stream: apiConfigForm.stream,
     });
+    rememberDirectApiKeys(apiConfigForm.apiConfigs || []);
     try {
       const data = await requestJson('/api/settings', {
         method: 'POST',
@@ -1386,7 +1516,7 @@ function App() {
   const detailIsFailed = selectedImage?.status === 'failed' && !detailSrc;
   const detailIsPending = selectedImage?.status === 'pending' && !detailSrc;
   const detailInputPrompt = selectedImage?.prompt || detailParams.prompt || '';
-  const detailRevisedPrompt = selectedImage?.revised_prompt || '';
+  const detailRevisedPrompt = normalizeRevisedPrompt(selectedImage?.revised_prompt);
   const detailElapsedSeconds = selectedImage ? getElapsedSeconds(selectedImage) : null;
   const detailElapsed = detailElapsedSeconds === null ? '' : formatDuration(detailElapsedSeconds);
   const selectedWallItem = detailSrc ? findWallItem(selectedImage) : null;
@@ -1397,7 +1527,7 @@ function App() {
     const src = createImageSrc(image);
     const isPending = image.status === 'pending';
     const isFailed = image.status === 'failed';
-    const title = image.revised_prompt || image.prompt || image.form?.prompt || 'Generated image';
+    const title = normalizeRevisedPrompt(image.revised_prompt) || image.prompt || image.form?.prompt || 'Generated image';
     const apiName = image.apiName || status.apiName || activeApiConfig?.apiName || defaultApiConfigItem.apiName;
     const canDelete = view !== 'wall';
 
@@ -1609,11 +1739,6 @@ function App() {
                 className: 'control-field workbench-extra-control',
               })}
 
-              <label className={canCompressOutput ? 'control-field count-field workbench-extra-control' : 'control-field count-field is-disabled workbench-extra-control'}>
-                <span>压缩</span>
-                <input min="0" max="100" type="number" value={form.output_compression} disabled={!canCompressOutput} onChange={(event) => updateForm('output_compression', event.target.value)} />
-              </label>
-
               {renderSelect({
                 id: 'workbench-moderation',
                 label: '审核',
@@ -1713,7 +1838,7 @@ function App() {
                   <span>{detailParams.response_format === 'url' ? detailParams.output_format || 'png' : getResponseFormatLabel(detailParams.response_format)}</span>
                 </div>
                 {detailSrc ? (
-                  <img src={detailSrc} alt={selectedImage.revised_prompt || selectedImage.prompt || '图片详情'} />
+                  <img src={detailSrc} alt={detailRevisedPrompt || selectedImage.prompt || '图片详情'} />
                 ) : (
                   <div className="pending-preview detail-pending-preview">
                     <span className="loading-ring" aria-hidden="true" />
