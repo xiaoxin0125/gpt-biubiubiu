@@ -5,6 +5,7 @@ import express from 'express';
 import multer from 'multer';
 import mysql from 'mysql2/promise';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
+const imageRequestLogPath = path.join(distDir, 'image-requests.jsonl');
 
 const DEFAULT_REQUEST_TIMEOUT = 999;
 const MAX_REQUEST_TIMEOUT = 999;
@@ -93,6 +95,7 @@ const ensureSchema = async () => {
       username VARCHAR(64) NOT NULL UNIQUE,
       display_name VARCHAR(96) DEFAULT NULL,
       password_hash VARCHAR(255) NOT NULL,
+      is_admin TINYINT(1) NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
@@ -176,6 +179,7 @@ const ensureSchema = async () => {
   };
 
   await ensureColumn('users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
+  await ensureColumn('users', 'is_admin', 'is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER password_hash');
   await ensureColumn('user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
   await ensureColumn('user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
   await ensureColumn('user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');
@@ -239,6 +243,35 @@ const parseJsonText = (text) => {
 };
 
 const upstreamErrorMessage = (data, fallback) => data?.error?.message || data?.message || fallback;
+
+const imageRequestLogFiles = (files = []) =>
+  files.filter(Boolean).map((file) => ({
+    fieldname: file.fieldname || '',
+    originalname: file.originalname || '',
+    mimetype: file.mimetype || '',
+    size: Number(file.size || file.buffer?.length || 0),
+  }));
+
+const appendImageRequestLog = async ({ type, endpoint, jobId, request, response, responseStatus, error, files }) => {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    type,
+    endpoint,
+    jobId: jobId || null,
+    request,
+    files: files || [],
+    responseStatus,
+    response: response || null,
+    error: error || '',
+  };
+
+  try {
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.appendFile(imageRequestLogPath, `${JSON.stringify(entry)}\n`, 'utf8');
+  } catch (logError) {
+    console.warn('图片请求日志写入失败：', logError instanceof Error ? logError.message : String(logError));
+  }
+};
 
 const upstreamErrorPayload = (data, fallback, status) => {
   const message = upstreamErrorMessage(data, fallback);
@@ -325,9 +358,9 @@ const getCurrentUser = async (req) => {
   if (!userId || !pool) return null;
 
   await ensureSchema();
-  const [rows] = await pool.query('SELECT id, username, display_name, created_at FROM users WHERE id = ? LIMIT 1', [userId]);
+  const [rows] = await pool.query('SELECT id, username, display_name, is_admin, created_at FROM users WHERE id = ? LIMIT 1', [userId]);
   const user = rows[0];
-  return user ? { id: user.id, username: user.username, displayName: user.display_name || user.username, createdAt: user.created_at } : null;
+  return user ? { id: user.id, username: user.username, displayName: user.display_name || user.username, isAdmin: Boolean(user.is_admin), createdAt: user.created_at } : null;
 };
 
 const requireUser = async (req, res) => {
@@ -391,7 +424,6 @@ const toGenerationImagePayload = (body = {}) => {
     payload.output_compression = clampNumber(body.output_compression, 0, 100);
   }
   if (body.user) payload.user = String(body.user);
-  if (body.stream === true || body.stream === 'true' || body.stream === 1 || body.stream === '1') payload.stream = true;
 
   return payload;
 };
@@ -411,7 +443,6 @@ const toEditImagePayload = (body = {}) => {
     payload.output_compression = clampNumber(body.output_compression, 0, 100);
   }
   if (body.user) payload.user = String(body.user);
-  if (body.stream === true || body.stream === 'true' || body.stream === 1 || body.stream === '1') payload.stream = true;
 
   return payload;
 };
@@ -793,7 +824,7 @@ app.post('/api/auth/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
     const [result] = await pool.query('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)', [username, displayName, passwordHash]);
     setSessionUser(res, result.insertId);
-    res.json({ user: { id: result.insertId, username, displayName }, settings: null });
+    res.json({ user: { id: result.insertId, username, displayName, isAdmin: false }, settings: null });
   } catch (error) {
     const message = error?.code === 'ER_DUP_ENTRY' ? '用户名已存在' : '注册失败';
     res.status(400).json({ error: message });
@@ -815,7 +846,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   setSessionUser(res, user.id);
-  res.json({ user: { id: user.id, username: user.username, displayName: user.display_name || user.username, createdAt: user.created_at }, settings: await getSettingsForUser(user.id) });
+  res.json({ user: { id: user.id, username: user.username, displayName: user.display_name || user.username, isAdmin: Boolean(user.is_admin), createdAt: user.created_at }, settings: await getSettingsForUser(user.id) });
 });
 
 app.post('/api/auth/profile', async (req, res) => {
@@ -825,7 +856,7 @@ app.post('/api/auth/profile', async (req, res) => {
   try {
     const displayName = normalizeDisplayName(req.body?.displayName ?? req.body?.display_name, user.username);
     await pool.query('UPDATE users SET display_name = ? WHERE id = ?', [displayName, user.id]);
-    res.json({ user: { ...user, displayName } });
+    res.json({ user: { ...user, displayName, isAdmin: Boolean(user.isAdmin) } });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message || '保存账号信息失败' });
   }
@@ -1013,11 +1044,12 @@ app.delete('/api/wall/:id', async (req, res) => {
     return;
   }
 
-  const userId = getSessionUserId(req);
+  const user = await getCurrentUser(req);
   const visitorId = req.signedCookies?.visitor_id || '';
-  const isOwner = item.user_id ? Number(item.user_id) === Number(userId) : item.client_id && item.client_id === visitorId;
+  const isOwner = item.user_id ? Number(item.user_id) === Number(user?.id) : item.client_id && item.client_id === visitorId;
+  const canDelete = isOwner || Boolean(user?.isAdmin);
 
-  if (!isOwner) {
+  if (!canDelete) {
     res.status(403).json({ error: '只能取消自己上墙的作品' });
     return;
   }
@@ -1060,8 +1092,9 @@ app.post('/api/images/generations', async (req, res) => {
   const payload = toGenerationImagePayload(req.body);
   const effectiveBaseUrl = await getEffectiveApiBaseUrl(req);
   const requestTimeout = await getEffectiveRequestTimeout(req);
-  const runGeneration = async () => {
-    const response = await fetch(buildUpstreamUrl(effectiveBaseUrl, '/v1/images/generations'), {
+  const runGeneration = async (jobId = null) => {
+    const endpoint = buildUpstreamUrl(effectiveBaseUrl, '/v1/images/generations');
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${effectiveApiKey}`,
@@ -1073,6 +1106,15 @@ app.post('/api/images/generations', async (req, res) => {
 
     const text = await response.text();
     const data = parseJsonText(text);
+    await appendImageRequestLog({
+      type: 'generation',
+      endpoint,
+      jobId,
+      request: payload,
+      response: data,
+      responseStatus: response.status,
+      error: response.ok ? '' : upstreamErrorMessage(data, '生图接口请求失败'),
+    });
 
     if (!response.ok) {
       const payloadError = upstreamErrorPayload(data, '生图接口请求失败', response.status);
@@ -1098,7 +1140,7 @@ app.post('/api/images/generations', async (req, res) => {
     const jobId = await createPendingImageJob(req, res, payload, 'generation');
     res.status(202).json({ job: { id: jobId, jobId, status: 'running', mode: 'generation' } });
 
-    runGeneration()
+    runGeneration(jobId)
       .then((normalized) => completeImageJob(jobId, normalized, payload))
       .catch((error) => updateImageJobFailed(jobId, error instanceof Error ? error.message : String(error)));
     return;
@@ -1152,7 +1194,9 @@ app.post('/api/images/edits', upload.fields([
   const payload = toEditImagePayload(req.body);
   const effectiveBaseUrl = await getEffectiveApiBaseUrl(req);
   const requestTimeout = await getEffectiveRequestTimeout(req);
-  const runEdit = async () => {
+  const runEdit = async (jobId = null) => {
+    const endpoint = buildUpstreamUrl(effectiveBaseUrl, '/v1/images/edits');
+    const logFiles = imageRequestLogFiles([...editImages, maskFile]);
     const formData = new FormData();
 
     Object.entries(payload).forEach(([key, value]) => {
@@ -1169,7 +1213,7 @@ app.post('/api/images/edits', upload.fields([
       formData.append('mask', maskBlob, maskFile.originalname || 'mask.png');
     }
 
-    const response = await fetch(buildUpstreamUrl(effectiveBaseUrl, '/v1/images/edits'), {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${effectiveApiKey}`,
@@ -1180,6 +1224,16 @@ app.post('/api/images/edits', upload.fields([
 
     const text = await response.text();
     const data = parseJsonText(text);
+    await appendImageRequestLog({
+      type: 'edit',
+      endpoint,
+      jobId,
+      request: payload,
+      files: logFiles,
+      response: data,
+      responseStatus: response.status,
+      error: response.ok ? '' : upstreamErrorMessage(data, '图生图接口请求失败'),
+    });
 
     if (!response.ok) {
       const payloadError = upstreamErrorPayload(data, '图生图接口请求失败', response.status);
@@ -1205,7 +1259,7 @@ app.post('/api/images/edits', upload.fields([
     const jobId = await createPendingImageJob(req, res, payload, 'edit');
     res.status(202).json({ job: { id: jobId, jobId, status: 'running', mode: 'edit' } });
 
-    runEdit()
+    runEdit(jobId)
       .then((normalized) => completeImageJob(jobId, normalized, payload))
       .catch((error) => updateImageJobFailed(jobId, error instanceof Error ? error.message : String(error)));
     return;

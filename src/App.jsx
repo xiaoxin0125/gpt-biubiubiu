@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const HISTORY_KEY = 'gpt-biubiubiu:image-history';
 const MAX_REFERENCE_IMAGES = 16;
@@ -14,6 +14,11 @@ const qualityOptions = [
 const outputFormatOptions = ['png', 'jpeg', 'webp'];
 const backgroundOptions = ['auto', 'opaque'];
 const moderationOptions = ['auto', 'low'];
+const boardScopeOptions = [
+  { label: '本次生成', value: 'generate' },
+  { label: '历史记录', value: 'history' },
+  { label: '作品墙', value: 'wall' },
+];
 const boardFilterOptions = [
   { label: '全部状态', value: 'all' },
   { label: '已上墙', value: 'on-wall' },
@@ -160,6 +165,65 @@ const createImageSrc = (image) => {
   if (image?.url) return image.url;
   if (image?.b64_json) return `data:${image.imageMime || 'image/png'};base64,${image.b64_json}`;
   return '';
+};
+
+const normalizeImageSource = (source) => {
+  if (source === 'edit') return 'edit';
+  if (source === 'wall') return 'wall';
+  return 'generation';
+};
+
+const getImageIdentity = (image) => String(image?.jobId || image?.wallItemId || image?.id || createImageSrc(image) || '');
+
+const getEmptyBoardText = (scope) => {
+  if (scope === 'history') return '暂无历史记录';
+  if (scope === 'wall') return '暂无上墙作品';
+  return '输入提示词开始生成图片';
+};
+
+const normalizeBoardImage = (image, fallback = {}) => ({
+  ...image,
+  id: image?.id || fallback.id || `image-${Date.now()}`,
+  status: image?.status || 'completed',
+  form: normalizeForm(image?.form || fallback.form || {}),
+  prompt: image?.prompt || fallback.prompt || image?.form?.prompt || fallback.form?.prompt || '',
+  createdAt: image?.createdAt || fallback.createdAt || new Date().toISOString(),
+  source: normalizeImageSource(image?.source || fallback.source),
+});
+
+const flattenHistoryImages = (items) => items.flatMap((record) => {
+  const form = normalizeForm(record.form || {});
+  return (record.images || []).map((image) => normalizeBoardImage(image, {
+    form,
+    prompt: form.prompt || '',
+    createdAt: record.createdAt,
+    source: image.source || 'generation',
+    historyId: record.id,
+  })).map((image) => ({ ...image, historyId: record.id, source: normalizeImageSource(image.source) }));
+});
+
+const removeImageFromHistory = (items, target) => items
+  .map((record) => {
+    const nextImages = (record.images || []).filter((image) => {
+      const normalized = normalizeBoardImage(image, {
+        form: record.form,
+        createdAt: record.createdAt,
+        source: image.source || 'generation',
+      });
+      return !isSameImageIdentity(normalized, target);
+    });
+    return { ...record, images: nextImages };
+  })
+  .filter((record) => (record.images || []).length > 0);
+
+const isSameImageIdentity = (left, right) => {
+  if (!left || !right) return false;
+  if (left.jobId && right.jobId && Number(left.jobId) === Number(right.jobId)) return true;
+  if (left.wallItemId && right.wallItemId && Number(left.wallItemId) === Number(right.wallItemId)) return true;
+  if (left.id && right.id && String(left.id) === String(right.id)) return true;
+  const leftSrc = createImageSrc(left);
+  const rightSrc = createImageSrc(right);
+  return Boolean(leftSrc && rightSrc && leftSrc === rightSrc);
 };
 
 const readHistory = () => {
@@ -364,8 +428,10 @@ function App() {
   const [wallBusyId, setWallBusyId] = useState('');
   const [boardSearch, setBoardSearch] = useState('');
   const [boardFilter, setBoardFilter] = useState('all');
+  const [boardScope, setBoardScope] = useState('generate');
   const [openSelect, setOpenSelect] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
+  const deletedRequestIdsRef = useRef(new Set());
 
   const hasReferenceImages = referenceImages.length > 0;
   const canCompressOutput = ['jpeg', 'webp'].includes(normalizeOutputFormat(form.output_format));
@@ -375,7 +441,8 @@ function App() {
   const displaySize = activeSize || '自动';
   const userDisplayName = user?.displayName || user?.username || '';
   const visibleImages = useMemo(() => images.filter(canRenderBoardItem), [images]);
-  const sourceBoardItems = view === 'wall' ? wallItems : visibleImages;
+  const historyImages = useMemo(() => flattenHistoryImages(history).filter(canRenderBoardItem), [history]);
+  const sourceBoardItems = boardScope === 'wall' ? wallItems : boardScope === 'history' ? historyImages : visibleImages;
   const statusText = status.configured ? (status.apiName || status.message || defaultApiConfigForm.apiName) : status.message;
 
   const updateForm = (key, value) => {
@@ -441,7 +508,6 @@ function App() {
     if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
     if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
     if (['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
-    if (apiConfigForm.streamEnabled) payload.stream = true;
 
     return payload;
   };
@@ -459,7 +525,6 @@ function App() {
     if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
     if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
     if (['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
-    if (apiConfigForm.streamEnabled) payload.stream = true;
 
     return payload;
   };
@@ -592,20 +657,12 @@ function App() {
     if (keyword && !text.includes(keyword)) return false;
     if (boardFilter === 'on-wall') return Boolean(wallItem);
     if (boardFilter === 'off-wall') return !wallItem;
-    if (boardFilter === 'generation') return image.source === 'generated' || (!image.source || image.source === 'image');
-    if (boardFilter === 'edit') return image.source === 'edit';
+    if (boardFilter === 'generation') return normalizeImageSource(image.source) === 'generation';
+    if (boardFilter === 'edit') return normalizeImageSource(image.source) === 'edit';
     return true;
   });
 
-  const isSameImage = (left, right) => {
-    if (!left || !right) return false;
-    if (left.jobId && right.jobId && Number(left.jobId) === Number(right.jobId)) return true;
-    if (left.wallItemId && right.wallItemId && Number(left.wallItemId) === Number(right.wallItemId)) return true;
-    if (left.id && right.id && left.id === right.id) return true;
-    const leftSrc = createImageSrc(left);
-    const rightSrc = createImageSrc(right);
-    return Boolean(leftSrc && rightSrc && leftSrc === rightSrc);
-  };
+  const isSameImage = isSameImageIdentity;
 
   const openSizeDialog = () => {
     if (!form.size) {
@@ -632,21 +689,30 @@ function App() {
     const nextForm = normalizeForm(item.form);
 
     setForm(nextForm);
-    setImages((item.images || []).map((image) => ({
-      ...image,
-      form: nextForm,
-      prompt: item.form?.prompt || '',
-      createdAt: item.createdAt,
-      source: image.source || 'generated',
-    })));
+    setBoardScope('history');
     setView('generate');
     setError('');
     setActiveDialog(null);
   };
 
   const clearHistory = () => {
+    if (!history.length || !window.confirm('确认清空历史记录？')) return;
     setHistory([]);
     saveHistory([]);
+    if (boardScope === 'history') setSelectedImage(null);
+  };
+
+  const deleteImage = (image) => {
+    if (!image || !window.confirm('确认删除这张图片记录？')) return;
+
+    const requestId = image.requestId || image.id;
+    if (requestId) deletedRequestIdsRef.current.add(requestId);
+    setImages((items) => items.filter((item) => !isSameImage(item, image)));
+    const nextHistory = removeImageFromHistory(history, image);
+    setHistory(nextHistory);
+    saveHistory(nextHistory);
+    setSelectedImage((current) => (current && isSameImage(current, image) ? null : current));
+    if (selectedImage && isSameImage(selectedImage, image)) setActiveDialog(null);
   };
 
   const openDetail = (image) => {
@@ -741,19 +807,23 @@ function App() {
     setError('');
     setStatus((current) => ({ ...current, loading: true, message: hasReferenceImages ? 'Editing' : 'Generating' }));
     setView('generate');
+    setBoardScope('generate');
 
     const requestId = `request-${Date.now()}`;
+    deletedRequestIdsRef.current.delete(requestId);
     const startedAt = new Date().toISOString();
-    const imageForm = normalizeForm({ ...form, prompt, n: 1 });
+    const requestApiName = apiConfigForm.apiName || status.apiName || defaultApiConfigForm.apiName;
+    const imageForm = normalizeForm({ ...form, prompt, n: 1, apiName: requestApiName });
     const pendingItem = {
       id: requestId,
       requestId,
       status: 'pending',
       form: imageForm,
+      apiName: requestApiName,
       prompt,
       startedAt,
       createdAt: startedAt,
-      source: hasReferenceImages ? 'edit' : 'generated',
+      source: hasReferenceImages ? 'edit' : 'generation',
       referenceName: referenceNames,
     };
     setImages((items) => [pendingItem, ...items]);
@@ -772,18 +842,24 @@ function App() {
         : initialData;
 
       const finishedAt = new Date().toISOString();
+      if (deletedRequestIdsRef.current.has(requestId)) {
+        setStatus((current) => ({ ...current, loading: false, message: 'Done · 0' }));
+        return;
+      }
       const nextImages = Array.isArray(data.data)
-        ? data.data.map((image, index) => ({
+        ? data.data.map((image, index) => normalizeBoardImage({
             ...image,
             id: image.id || `${requestId}-${index}`,
             requestId,
+            jobId: image.jobId || data.job?.jobId || data.job?.id || image.job_id,
             status: 'completed',
             form: imageForm,
+            apiName: requestApiName,
             prompt,
             startedAt,
             finishedAt,
             createdAt: finishedAt,
-            source: hasReferenceImages ? 'edit' : 'generated',
+            source: hasReferenceImages ? 'edit' : 'generation',
             referenceName: referenceNames,
           }))
         : [];
@@ -809,6 +885,10 @@ function App() {
     } catch (requestError) {
       const failedAt = new Date().toISOString();
       const message = requestError instanceof Error ? requestError.message : '生成失败';
+      if (deletedRequestIdsRef.current.has(requestId)) {
+        setStatus((current) => ({ ...current, loading: false, message: current.configured ? '已删除' : current.message }));
+        return;
+      }
       setError(message);
       setImages((items) => items.map((item) => (
         item.requestId === requestId || item.id === requestId
@@ -848,6 +928,14 @@ function App() {
 
         setWallItems((items) => items.filter((item) => Number(item.id) !== Number(wallItem.id)));
         setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)));
+        setHistory((items) => {
+          const nextHistory = items.map((record) => ({
+            ...record,
+            images: (record.images || []).map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)),
+          }));
+          saveHistory(nextHistory);
+          return nextHistory;
+        });
         setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: null, isOnWall: false } : current));
         return;
       }
@@ -872,6 +960,14 @@ function App() {
       const nextWallItem = data.item;
       setWallItems((items) => [nextWallItem, ...items.filter((item) => Number(item.id) !== Number(nextWallItem.id))]);
       setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: nextWallItem.id, isOnWall: true } : item)));
+      setHistory((items) => {
+        const nextHistory = items.map((record) => ({
+          ...record,
+          images: (record.images || []).map((item) => (isSameImage(item, image) ? { ...item, wallItemId: nextWallItem.id, isOnWall: true } : item)),
+        }));
+        saveHistory(nextHistory);
+        return nextHistory;
+      });
       setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: nextWallItem.id, isOnWall: true } : current));
     } catch (wallError) {
       setError(wallError instanceof Error ? wallError.message : '作品墙操作失败');
@@ -995,16 +1091,26 @@ function App() {
     const src = createImageSrc(image);
     const isPending = image.status === 'pending';
     const isFailed = image.status === 'failed';
-    const wallItem = src ? findWallItem(image) : null;
-    const onWall = Boolean(wallItem);
-    const busyId = String(image.jobId || image.wallItemId || image.id || src);
-    const elapsed = formatDuration(getElapsedSeconds(image));
     const title = image.revised_prompt || image.prompt || image.form?.prompt || 'Generated image';
+    const apiName = image.apiName || settingsMeta?.apiName || status.apiName || defaultApiConfigForm.apiName;
+    const canDelete = boardScope !== 'wall';
 
     return (
-      <figure className={`${onWall ? 'result-card is-on-wall' : 'result-card'} ${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`.trim()} key={`${image.source || 'image'}-${image.id || image.wallItemId || image.jobId || src}`} onClick={() => openDetail(image)}>
+      <figure className={`result-card ${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`.trim()} key={`${image.source || 'image'}-${image.id || image.wallItemId || image.jobId || src}`} onClick={() => openDetail(image)}>
+        {canDelete ? (
+          <button
+            type="button"
+            className="result-delete-button"
+            onClick={(event) => {
+              event.stopPropagation();
+              deleteImage(image);
+            }}
+            aria-label="删除图片"
+          >
+            ×
+          </button>
+        ) : null}
         <div className="result-image-wrap">
-          <span className="timer-badge">◷ {elapsed}</span>
           {src ? (
             <img src={src} alt={title || '生成图片'} />
           ) : (
@@ -1013,32 +1119,8 @@ function App() {
               <strong>{isFailed ? '生成失败' : '生成中...'}</strong>
             </div>
           )}
-          {src ? (
-            <button
-              type="button"
-              className={onWall ? 'wall-icon is-active' : 'wall-icon'}
-              onClick={(event) => {
-                event.stopPropagation();
-                toggleWall(image);
-              }}
-              disabled={wallBusyId === busyId}
-              aria-label={onWall ? '取消上墙' : '上墙'}
-            >
-              {onWall ? '★' : '☆'}
-            </button>
-          ) : null}
         </div>
-        <figcaption>
-          <span>{title}</span>
-          {src ? (
-            <a href={src} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-              下载
-            </a>
-          ) : (
-            <small>{image.form?.size || '自动'} · {getQualityLabel(image.form?.quality)}</small>
-          )}
-        </figcaption>
-        {image.error ? <small className="author-line error-line">{image.error}</small> : image.authorName ? <small className="author-line">{image.authorName}</small> : null}
+        <figcaption className="result-api-name">{apiName}</figcaption>
       </figure>
     );
   };
@@ -1062,14 +1144,22 @@ function App() {
         </a>
 
         <nav className="mode-tabs" aria-label="工作台模式">
-          <button type="button" className={view === 'generate' ? 'is-active' : ''} onClick={() => setView('generate')}>
+          <button
+            type="button"
+            className={boardScope === 'generate' ? 'is-active' : ''}
+            onClick={() => {
+              setView('generate');
+              setBoardScope('generate');
+            }}
+          >
             生图
           </button>
           <button
             type="button"
-            className={view === 'wall' ? 'is-active' : ''}
+            className={boardScope === 'wall' ? 'is-active' : ''}
             onClick={() => {
-              setView('wall');
+              setView('generate');
+              setBoardScope('wall');
               loadWall();
             }}
           >
@@ -1082,20 +1172,29 @@ function App() {
           <button type="button" className="round-tool account-tool" onClick={() => { setAuthTab('profile'); setActiveDialog('auth'); }} aria-label="账号设置">
             {user ? userDisplayName : '登录'}
           </button>
-          <button type="button" className="round-tool" onClick={() => setActiveDialog('history')} aria-label="历史记录">
-            H
-          </button>
         </div>
       </header>
 
       <section className="canvas-stage">
         <div className="canvas-toolbar">
-          <button type="button" className="toolbar-icon-button" onClick={() => { setView('wall'); loadWall(); }} aria-label="刷新作品墙">
+          <button type="button" className="toolbar-icon-button" onClick={() => { setBoardScope('wall'); loadWall(); }} aria-label="刷新作品墙">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20 11a8 8 0 1 0-2.34 5.66" />
               <path d="M20 5v6h-6" />
             </svg>
           </button>
+          {renderSelect({
+            id: 'board-scope',
+            label: '',
+            value: boardScope,
+            options: boardScopeOptions,
+            onChange: (value) => {
+              setBoardScope(value);
+              if (value === 'wall') loadWall();
+            },
+            className: 'toolbar-scope',
+            menuDirection: 'down',
+          })}
           {renderSelect({
             id: 'board-filter',
             label: '',
@@ -1112,6 +1211,9 @@ function App() {
             </svg>
             <input value={boardSearch} onChange={(event) => setBoardSearch(event.target.value)} placeholder="搜索提示词、参数、作者..." />
           </label>
+          {boardScope === 'history' ? (
+            <button type="button" className="toolbar-text-button" onClick={clearHistory} disabled={!history.length}>清空历史</button>
+          ) : null}
         </div>
 
         <div className={boardItems.length ? 'image-board has-images' : 'image-board'}>
@@ -1128,7 +1230,7 @@ function App() {
                   <path d="M18 7h12" />
                 </svg>
               </span>
-              <p>输入提示词开始生成图片</p>
+              <p>{getEmptyBoardText(boardScope)}</p>
             </div>
           )}
         </div>
@@ -1295,6 +1397,9 @@ function App() {
                 <div className="detail-actions">
                   {detailSrc ? <a className="secondary-action" href={detailSrc} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer">下载</a> : null}
                   <button type="button" className="secondary-action" onClick={() => reuseConfig(selectedImage)}>复用配置</button>
+                  {selectedImage.source !== 'wall' ? (
+                    <button type="button" className="secondary-action danger-action" onClick={() => deleteImage(selectedImage)}>删除</button>
+                  ) : null}
                   {detailSrc ? (
                     <button type="button" className={selectedOnWall ? 'primary-action wall-button is-active' : 'primary-action wall-button'} onClick={() => toggleWall(selectedImage)} disabled={busySelected}>
                       {selectedOnWall ? '★ 取消上墙' : '☆ 上墙'}
@@ -1547,35 +1652,6 @@ function App() {
             </section>
           ) : null}
 
-          {activeDialog === 'history' ? (
-            <section className="modal-card history-modal" role="dialog" aria-modal="true" aria-label="生成历史">
-              <div className="modal-head">
-                <div>
-                  <h2>生成历史</h2>
-                  <p>最近 30 条记录保存在当前浏览器</p>
-                </div>
-                <button type="button" className="close-button" onClick={closeDialog}>×</button>
-              </div>
-
-              <div className="history-list modal-history-list">
-                {history.length ? (
-                  history.map((item) => (
-                    <button type="button" className="history-item" key={item.id} onClick={() => selectHistory(item)}>
-                      <span>{item.form.prompt}</span>
-                      <small>{item.form.size || '自动'} · {formatDate(item.createdAt)}</small>
-                    </button>
-                  ))
-                ) : (
-                  <div className="empty-history">暂无生成记录</div>
-                )}
-              </div>
-
-              <div className="modal-actions">
-                <button type="button" className="secondary-action" onClick={clearHistory} disabled={!history.length}>清空</button>
-                <button type="button" className="primary-action" onClick={closeDialog}>完成</button>
-              </div>
-            </section>
-          ) : null}
         </div>
       ) : null}
     </main>

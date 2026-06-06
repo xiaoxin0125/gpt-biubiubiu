@@ -137,6 +137,7 @@ function ensure_schema(): void
       username VARCHAR(64) NOT NULL UNIQUE,
       display_name VARCHAR(96) DEFAULT NULL,
       password_hash VARCHAR(255) NOT NULL,
+      is_admin TINYINT(1) NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
@@ -204,6 +205,7 @@ function ensure_schema(): void
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     ensure_column($db, 'users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
+    ensure_column($db, 'users', 'is_admin', 'is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER password_hash');
     ensure_column($db, 'user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
     ensure_column($db, 'user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
     ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');
@@ -295,13 +297,13 @@ function current_user(): ?array
     $id = session_user_id();
     if (!$id) return null;
 
-    $stmt = pdo()->prepare('SELECT id, username, display_name, created_at FROM users WHERE id = ? LIMIT 1');
+    $stmt = pdo()->prepare('SELECT id, username, display_name, is_admin, created_at FROM users WHERE id = ? LIMIT 1');
     $stmt->execute([$id]);
     $user = $stmt->fetch();
     if (!$user) return null;
 
     $displayName = trim((string) ($user['display_name'] ?? '')) ?: $user['username'];
-    return ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'createdAt' => $user['created_at']];
+    return ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'isAdmin' => !empty($user['is_admin']), 'createdAt' => $user['created_at']];
 }
 
 function require_user(): array
@@ -476,7 +478,6 @@ function generation_payload(array $body): array
         $payload['output_compression'] = clamp_int($body['output_compression'], 0, 100);
     }
     if (!empty($body['user'])) $payload['user'] = (string) $body['user'];
-    if (($body['stream'] ?? null) === true || ($body['stream'] ?? null) === 'true' || ($body['stream'] ?? null) === 1 || ($body['stream'] ?? null) === '1') $payload['stream'] = true;
 
     return $payload;
 }
@@ -497,7 +498,6 @@ function edit_payload(array $body): array
         $payload['output_compression'] = clamp_int($body['output_compression'], 0, 100);
     }
     if (!empty($body['user'])) $payload['user'] = (string) $body['user'];
-    if (($body['stream'] ?? null) === true || ($body['stream'] ?? null) === 'true' || ($body['stream'] ?? null) === 1 || ($body['stream'] ?? null) === '1') $payload['stream'] = true;
 
     return $payload;
 }
@@ -530,6 +530,46 @@ function parse_json_text(string $text): array
         'message' => '上游接口返回了非 JSON 内容，请检查 API 地址是否应填写到 /v1 或只填写域名。',
         'snippet' => substr($snippet, 0, 220),
     ];
+}
+
+function image_request_log_path(): string
+{
+    return dirname(__DIR__, 2) . '/dist/image-requests.jsonl';
+}
+
+function append_image_request_log(array $entry): void
+{
+    $payload = array_merge([
+        'timestamp' => gmdate('c'),
+        'type' => '',
+        'endpoint' => '',
+        'jobId' => null,
+        'request' => [],
+        'files' => [],
+        'responseStatus' => null,
+        'response' => null,
+        'error' => '',
+    ], $entry);
+
+    try {
+        $path = image_request_log_path();
+        $dir = dirname($path);
+        if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json !== false) @file_put_contents($path, $json . PHP_EOL, FILE_APPEND | LOCK_EX);
+    } catch (Throwable $error) {
+        error_log('图片请求日志写入失败：' . $error->getMessage());
+    }
+}
+
+function image_request_log_files(array $files): array
+{
+    return array_map(static fn($file) => [
+        'fieldname' => $file['fieldname'] ?? '',
+        'originalname' => $file['name'] ?? ($file['filename'] ?? ''),
+        'mimetype' => $file['type'] ?? '',
+        'size' => (int) ($file['size'] ?? 0),
+    ], $files);
 }
 
 function upstream_error_message(array $data, string $fallback): string
@@ -843,6 +883,7 @@ function uploaded_file_items(string $field): array
         foreach ($files['tmp_name'] as $index => $tmpName) {
             if (!$tmpName || (($files['error'][$index] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK)) continue;
             $items[] = [
+                'fieldname' => $field,
                 'tmp_name' => $tmpName,
                 'type' => $files['type'][$index] ?? 'image/png',
                 'name' => $files['name'][$index] ?? ('image-' . ($index + 1) . '.png'),
@@ -854,6 +895,7 @@ function uploaded_file_items(string $field): array
 
     if (($files['tmp_name'] ?? '') && (($files['error'] ?? UPLOAD_ERR_OK) === UPLOAD_ERR_OK)) {
         $items[] = [
+            'fieldname' => $field,
             'tmp_name' => $files['tmp_name'],
             'type' => $files['type'] ?? 'image/png',
             'name' => $files['name'] ?? 'image.png',
@@ -1016,7 +1058,7 @@ try {
             $stmt->execute([$username, $displayName, $hash]);
             $id = (int) pdo()->lastInsertId();
             set_signed_cookie('session_user', (string) $id, 30 * 24 * 60 * 60);
-            json_response(['user' => ['id' => $id, 'username' => $username, 'displayName' => $displayName], 'settings' => null]);
+            json_response(['user' => ['id' => $id, 'username' => $username, 'displayName' => $displayName, 'isAdmin' => false], 'settings' => null]);
         } catch (Throwable $error) {
             json_response(['error' => '用户名已存在'], 400);
         }
@@ -1031,7 +1073,7 @@ try {
 
         set_signed_cookie('session_user', (string) $user['id'], 30 * 24 * 60 * 60);
         $displayName = trim((string) ($user['display_name'] ?? '')) ?: $user['username'];
-        json_response(['user' => ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'createdAt' => $user['created_at']], 'settings' => settings_for_user((int) $user['id'])]);
+        json_response(['user' => ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'isAdmin' => !empty($user['is_admin']), 'createdAt' => $user['created_at']], 'settings' => settings_for_user((int) $user['id'])]);
     }
 
     if ($method === 'POST' && $route === '/auth/profile') {
@@ -1039,7 +1081,7 @@ try {
         $displayName = normalize_display_name((string) ($body['displayName'] ?? ($body['display_name'] ?? '')), $user['username']);
         $stmt = pdo()->prepare('UPDATE users SET display_name = ? WHERE id = ?');
         $stmt->execute([$displayName, $user['id']]);
-        json_response(['user' => ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'createdAt' => $user['createdAt'] ?? null]]);
+        json_response(['user' => ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'isAdmin' => !empty($user['isAdmin']), 'createdAt' => $user['createdAt'] ?? null]]);
     }
 
     if ($method === 'POST' && $route === '/auth/password') {
@@ -1164,10 +1206,11 @@ try {
         $stmt->execute([(int) $matches[1]]);
         $item = $stmt->fetch();
         if (!$item) json_response(['error' => '作品不存在'], 404);
-        $userId = session_user_id();
+        $user = current_user();
         $currentVisitor = unsign_value($_COOKIE['visitor_id'] ?? '');
-        $isOwner = $item['user_id'] ? ((int) $item['user_id'] === (int) $userId) : (!empty($item['client_id']) && $item['client_id'] === $currentVisitor);
-        if (!$isOwner) json_response(['error' => '只能取消自己上墙的作品'], 403);
+        $isOwner = $item['user_id'] ? ((int) $item['user_id'] === (int) ($user['id'] ?? 0)) : (!empty($item['client_id']) && $item['client_id'] === $currentVisitor);
+        $canDelete = $isOwner || !empty($user['isAdmin']);
+        if (!$canDelete) json_response(['error' => '只能取消自己上墙的作品'], 403);
         $stmt = pdo()->prepare('DELETE FROM wall_items WHERE id = ?');
         $stmt->execute([(int) $matches[1]]);
         json_response(['ok' => true]);
@@ -1201,11 +1244,21 @@ try {
         respond_json_and_continue(['job' => ['id' => $jobId, 'jobId' => $jobId, 'status' => 'running', 'mode' => 'generation']], 202);
 
         try {
-            [$status, $text] = curl_json(upstream_url('/v1/images/generations'), [
+            $endpoint = upstream_url('/v1/images/generations');
+            [$status, $text] = curl_json($endpoint, [
                 'Authorization: Bearer ' . $apiKey,
                 'Content-Type: application/json',
             ], json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             $data = parse_json_text($text);
+            append_image_request_log([
+                'type' => 'generation',
+                'endpoint' => $endpoint,
+                'jobId' => $jobId,
+                'request' => $payload,
+                'responseStatus' => $status,
+                'response' => $data,
+                'error' => ($status >= 200 && $status < 300) ? '' : upstream_error_message($data, '生图接口请求失败'),
+            ]);
             if ($status < 200 || $status >= 300) {
                 $errorPayload = upstream_error_payload($data, '生图接口请求失败', $status);
                 update_image_job_failed($jobId, (string) ($errorPayload['error'] ?? '生图接口请求失败'));
@@ -1259,8 +1312,19 @@ try {
                 ];
             }
             [$multipartBody, $multipartHeader] = build_multipart_body($parts);
-            [$status, $text] = curl_multipart(upstream_url('/v1/images/edits'), ['Authorization: Bearer ' . $apiKey, $multipartHeader], $multipartBody);
+            $endpoint = upstream_url('/v1/images/edits');
+            [$status, $text] = curl_multipart($endpoint, ['Authorization: Bearer ' . $apiKey, $multipartHeader], $multipartBody);
             $data = parse_json_text($text);
+            append_image_request_log([
+                'type' => 'edit',
+                'endpoint' => $endpoint,
+                'jobId' => $jobId,
+                'request' => $payload,
+                'files' => image_request_log_files(array_merge($editImages, $maskFile ? [$maskFile] : [])),
+                'responseStatus' => $status,
+                'response' => $data,
+                'error' => ($status >= 200 && $status < 300) ? '' : upstream_error_message($data, '图生图接口请求失败'),
+            ]);
             if ($status < 200 || $status >= 300) {
                 $errorPayload = upstream_error_payload($data, '图生图接口请求失败', $status);
                 update_image_job_failed($jobId, (string) ($errorPayload['error'] ?? '图生图接口请求失败'));

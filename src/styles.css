@@ -81,7 +81,8 @@ button {
 .canvas-toolbar,
 .workbench-actions,
 .modal-actions,
-.detail-actions {
+.detail-actions,
+.board-scope-tabs {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -268,7 +269,7 @@ button:disabled {
   top: 16px;
   left: 50%;
   display: grid;
-  grid-template-columns: 38px minmax(116px, 150px) minmax(0, 1fr);
+  grid-template-columns: 38px minmax(116px, 140px) minmax(116px, 150px) minmax(0, 1fr) auto;
   width: min(860px, calc(100% - 24px));
   min-width: 0;
   padding: 10px;
@@ -277,14 +278,17 @@ button:disabled {
 }
 
 .toolbar-icon-button,
+.toolbar-scope,
 .toolbar-filter,
 .toolbar-search,
-.toolbar-search input {
+.toolbar-search input,
+.toolbar-text-button {
   min-width: 0;
 }
 
 .toolbar-icon-button,
-.toolbar-search input {
+.toolbar-search input,
+.toolbar-text-button {
   min-height: 34px;
   border: 2px solid var(--line);
   border-radius: var(--radius-sm);
@@ -335,6 +339,19 @@ button:disabled {
   padding: 0 12px 0 36px;
   font-size: 0.82rem;
   font-weight: 820;
+}
+
+.toolbar-text-button {
+  padding: 0 12px;
+  font-size: 0.78rem;
+  font-weight: 950;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.toolbar-text-button:hover:not(:disabled) {
+  background: var(--black);
+  color: var(--white);
 }
 
 .soft-chip {
@@ -401,6 +418,7 @@ button:disabled {
 }
 
 .result-card {
+  position: relative;
   display: inline-grid;
   width: 100%;
   margin: 0 0 12px;
@@ -415,13 +433,43 @@ button:disabled {
     box-shadow 160ms ease;
 }
 
+.result-delete-button {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--black);
+  font-size: 1rem;
+  font-weight: 950;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.result-delete-button:hover {
+  background: var(--black);
+  color: var(--white);
+}
+
+.danger-action {
+  border-color: #8f1d1d;
+  color: #8f1d1d;
+}
+
+.danger-action:hover:not(:disabled) {
+  background: #8f1d1d;
+  color: var(--white);
+}
+
 .result-card:hover {
   transform: translate(-3px, -3px);
   box-shadow: var(--shadow-hard);
-}
-
-.result-card.is-on-wall {
-  border-style: dashed;
 }
 
 .result-card.is-pending,
@@ -442,7 +490,7 @@ button:disabled {
 .result-card img {
   display: block;
   width: 100%;
-  max-height: 190px;
+  max-height: 220px;
   object-fit: cover;
   background: #ecece6;
 }
@@ -482,88 +530,21 @@ button:disabled {
   animation: spin 900ms linear infinite;
 }
 
-.timer-badge {
-  position: absolute;
-  z-index: 2;
-  top: 6px;
-  left: 6px;
-  padding: 3px 6px;
-  border: 2px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--black);
-  color: var(--white);
-  font-size: 0.66rem;
-  font-weight: 950;
-}
-
 @keyframes spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-.wall-icon {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  font-size: 0.86rem;
-  font-weight: 950;
-}
-
-.result-card figcaption {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px;
-}
-
-.result-card figcaption span {
+.result-api-name {
   overflow: hidden;
+  padding: 7px 9px;
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 760;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.result-card figcaption small {
-  flex: 0 0 auto;
-  padding: 4px 7px;
-  border: 2px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--paper-2);
-  color: var(--black);
-  font-size: 0.72rem;
-  font-weight: 900;
-}
-
-.result-card a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
-  font-size: 0.72rem;
-  font-weight: 900;
-  text-decoration: none;
-}
-
-.author-line {
-  display: block;
-  padding: 0 7px 7px;
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 820;
-}
-
-.error-line {
-  color: #a40000;
 }
 
 .bottom-workbench {
