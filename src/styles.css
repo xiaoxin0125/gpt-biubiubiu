@@ -1593,10 +1593,15 @@ select option {
   margin: 0;
   padding: 0;
   appearance: none;
-  border: 2px solid var(--black);
+  border: 2px solid var(--line);
   border-radius: 999px;
-  background: var(--black);
+  background: #e2e2db;
   cursor: pointer;
+}
+
+.toggle-row input[type="checkbox"]:checked {
+  border-color: var(--black);
+  background: var(--black);
 }
 
 .toggle-row input[type="checkbox"]::after {

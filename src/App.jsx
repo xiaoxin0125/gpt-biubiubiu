@@ -110,7 +110,7 @@ const defaultForm = {
   n: 1,
   quality: 'auto',
   background: 'auto',
-  response_format: 'b64_json',
+  response_format: 'url',
   output_format: 'png',
   output_compression: 85,
   moderation: 'auto',
@@ -406,6 +406,7 @@ const imageMimeForOutputFormat = (format) => {
 
 const normalizeDirectImageItem = (image, index, outputFormat) => {
   const imageMime = image?.imageMime || image?.mime || imageMimeForOutputFormat(outputFormat);
+  const revisedPrompt = image?.revised_prompt || image?.revisedPrompt || image?.prompt_revised || '';
   const sourceValue = typeof image === 'string'
     ? image
     : image?.b64_json || image?.url || image?.data_url || image?.data || image?.image || image?.content || '';
@@ -414,6 +415,8 @@ const normalizeDirectImageItem = (image, index, outputFormat) => {
     id: image?.id || `${Date.now()}-${index}`,
     imageMime,
   };
+
+  if (revisedPrompt && !nextImage.revised_prompt) nextImage.revised_prompt = revisedPrompt;
 
   if (sourceValue && typeof sourceValue === 'string') {
     if (sourceValue.startsWith('data:image/')) {
@@ -442,7 +445,11 @@ const normalizeDirectImageResponse = (data, outputFormat) => {
     created: data?.created || Math.floor(Date.now() / 1000),
     usage: data?.usage || null,
     raw: data,
-    data: rawItems.map((image, index) => normalizeDirectImageItem(image, index, outputFormat)),
+    data: rawItems.map((image, index) => {
+      const normalized = normalizeDirectImageItem(image, index, outputFormat);
+      const topLevelRevisedPrompt = data?.revised_prompt || data?.revisedPrompt || data?.prompt_revised || '';
+      return normalized.revised_prompt || !topLevelRevisedPrompt ? normalized : { ...normalized, revised_prompt: topLevelRevisedPrompt };
+    }),
   };
 };
 
@@ -492,10 +499,27 @@ const parseDirectResponseText = (text) => {
         }
       })
       .filter(Boolean);
-    return events.find((event) => Array.isArray(event?.data) && event.data.length)
+    const imageEvent = events.find((event) => Array.isArray(event?.data) && event.data.length)
       || events.find((event) => event?.b64_json || event?.url || event?.image || event?.data_url)
       || events.at(-1)
       || {};
+    const textEvent = [...events].reverse().find((event) => event?.revised_prompt || event?.revisedPrompt || event?.prompt_revised || event?.data?.some?.((item) => item?.revised_prompt || item?.revisedPrompt || item?.prompt_revised));
+    const revisedPrompt = textEvent?.revised_prompt
+      || textEvent?.revisedPrompt
+      || textEvent?.prompt_revised
+      || textEvent?.data?.find?.((item) => item?.revised_prompt || item?.revisedPrompt || item?.prompt_revised)?.revised_prompt
+      || textEvent?.data?.find?.((item) => item?.revised_prompt || item?.revisedPrompt || item?.prompt_revised)?.revisedPrompt
+      || textEvent?.data?.find?.((item) => item?.revised_prompt || item?.revisedPrompt || item?.prompt_revised)?.prompt_revised
+      || '';
+
+    if (!revisedPrompt) return imageEvent;
+    if (Array.isArray(imageEvent?.data)) {
+      return {
+        ...imageEvent,
+        data: imageEvent.data.map((item, index) => (index === 0 && !item?.revised_prompt ? { ...item, revised_prompt: revisedPrompt } : item)),
+      };
+    }
+    return imageEvent?.revised_prompt ? imageEvent : { ...imageEvent, revised_prompt: revisedPrompt };
   }
 
   try {
@@ -540,12 +564,28 @@ const requestDirectImageJson = async (path, payload, config) => {
   }
 };
 
-const fileToDataUrl = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(new Error('读取参考图失败'));
-  reader.readAsDataURL(file);
-});
+const requestDirectImageFormData = async (path, body, config) => {
+  const controller = new AbortController();
+  const timeoutMs = clampNumber(Number(config.requestTimeout) || MAX_REQUEST_TIMEOUT_SECONDS, 10, MAX_REQUEST_TIMEOUT_SECONDS) * 1000;
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(buildDirectApiUrl(config.apiBaseUrl, path), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body,
+      signal: controller.signal,
+    });
+    return await readDirectImageResponse(response);
+  } catch (requestError) {
+    if (requestError?.name === 'AbortError') throw new Error('图生图请求超时，请压缩参考图、降低尺寸/质量或调高请求超时后重试。');
+    throw requestError;
+  } finally {
+    window.clearTimeout(timer);
+  }
+};
 
 function App() {
   const [view, setView] = useState('generate');
@@ -651,7 +691,7 @@ function App() {
 
   const buildGenerationPayload = (prompt) => {
     const normalized = normalizeForm({ ...form, prompt, model: apiConfigForm.model || form.model });
-    const responseFormat = normalizeResponseFormat(normalized.response_format);
+    const responseFormat = apiConfigForm.stream ? 'url' : normalizeResponseFormat(normalized.response_format);
     const outputFormat = normalizeOutputFormat(normalized.output_format);
     const canUseOutputFormat = responseFormat === 'url';
     const payload = {
@@ -664,7 +704,7 @@ function App() {
 
     if (canUseOutputFormat) payload.output_format = outputFormat;
     if (normalized.size) payload.size = normalized.size;
-    if (apiConfigForm.stream) payload.stream = true;
+    if (apiConfigForm.stream && responseFormat === 'url') payload.stream = true;
     if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
     if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
     if (canUseOutputFormat && ['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
@@ -672,27 +712,24 @@ function App() {
     return payload;
   };
 
-  const buildEditPayload = async (prompt) => {
+  const buildEditPayload = (prompt) => {
     const normalized = normalizeForm({ ...form, prompt, model: apiConfigForm.model || form.model });
-    const responseFormat = normalizeResponseFormat(normalized.response_format);
     const outputFormat = normalizeOutputFormat(normalized.output_format);
     const canUseOutputFormat = responseFormat === 'url';
-    const images = await Promise.all(referenceImages.map((image) => fileToDataUrl(image.file)));
-    const payload = {
-      model: normalized.model || defaultForm.model,
-      prompt,
-      n: normalizeOutputCount(normalized.n),
-      image: images,
-      response_format: responseFormat,
-    };
+    const payload = new FormData();
 
-    if (canUseOutputFormat) payload.output_format = outputFormat;
-    if (normalized.size) payload.size = normalized.size;
-    if (apiConfigForm.stream) payload.stream = true;
-    if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
-    if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
-    if (canUseOutputFormat && ['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
-    if (maskImage?.file) payload.mask = await fileToDataUrl(maskImage.file);
+    payload.append('model', normalized.model || defaultForm.model);
+    payload.append('prompt', prompt);
+    referenceImages.forEach((image) => {
+      payload.append('image[]', image.file, image.name || image.file.name || 'reference-image');
+    });
+
+    if (canUseOutputFormat) payload.append('output_format', outputFormat);
+    if (normalized.size) payload.append('size', normalized.size);
+    if (normalizeQuality(normalized.quality) !== 'auto') payload.append('quality', normalizeQuality(normalized.quality));
+    if (normalizeBackground(normalized.background) !== 'auto') payload.append('background', normalizeBackground(normalized.background));
+    if (canUseOutputFormat && ['jpeg', 'webp'].includes(outputFormat)) payload.append('output_compression', String(normalizeCompression(normalized.output_compression)));
+    if (maskImage?.file) payload.append('mask', maskImage.file, maskImage.name || maskImage.file.name || 'mask.png');
 
     return payload;
   };
@@ -981,14 +1018,14 @@ function App() {
       if (!user) throw new Error('请先登录后再生成图片。');
       const directConfig = await loadDirectSettings();
       const payload = hasReferenceImages
-        ? await buildEditPayload(prompt)
+        ? buildEditPayload(prompt)
         : buildGenerationPayload(prompt);
-      const data = await requestDirectImageJson(
-        hasReferenceImages ? '/v1/images/edits' : '/v1/images/generations',
-        payload,
-        directConfig,
-      );
-      const outputFormat = payload.output_format || defaultForm.output_format;
+      const data = hasReferenceImages
+        ? await requestDirectImageFormData('/v1/images/edits', payload, directConfig)
+        : await requestDirectImageJson('/v1/images/generations', payload, directConfig);
+      const outputFormat = hasReferenceImages
+        ? (responseFormat === 'url' ? normalizeOutputFormat(form.output_format) : defaultForm.output_format)
+        : payload.output_format || defaultForm.output_format;
       const normalizedData = normalizeDirectImageResponse(data, outputFormat);
 
       const finishedAt = new Date().toISOString();
@@ -1568,7 +1605,7 @@ function App() {
                   </div>
                   <div>
                     <span>优化提示词</span>
-                    <p>{detailRevisedPrompt || '上游未返回 revised_prompt'}</p>
+                    <p>{detailRevisedPrompt || '该接口未返回优化提示词'}</p>
                   </div>
                 </div>
 
@@ -1708,7 +1745,7 @@ function App() {
                 <label className="toggle-row full-field">
                   <input type="checkbox" checked={apiConfigForm.stream} onChange={(event) => setApiConfigForm((current) => ({ ...current, stream: event.target.checked }))} />
                   <span>启用流式传输功能</span>
-                  <small>关闭后请求不使用 stream；保存后对当前账号生效。</small>
+                  <small>开启后文生图强制使用 URL 返回，避免大 Base64 响应被浏览器或网关清理；图生图始终不使用 stream。</small>
                 </label>
                 <div className="modal-actions full-field">
                   <button type="button" className="secondary-action" onClick={resetDirectSettings}>重置</button>
