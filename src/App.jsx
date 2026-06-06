@@ -13,6 +13,11 @@ const qualityOptions = [
   { label: 'high', value: 'high' },
 ];
 const outputFormatOptions = ['png', 'jpeg', 'webp'];
+const responseFormatOptions = [
+  { label: 'URL', value: 'url' },
+  { label: 'Base64', value: 'b64_json' },
+];
+const MAX_OUTPUT_IMAGES = 10;
 const backgroundOptions = ['auto', 'opaque'];
 const moderationOptions = ['auto', 'low'];
 const boardScopeOptions = [
@@ -105,6 +110,7 @@ const defaultForm = {
   n: 1,
   quality: 'auto',
   background: 'auto',
+  response_format: 'b64_json',
   output_format: 'png',
   output_compression: 85,
   moderation: 'auto',
@@ -148,10 +154,13 @@ const defaultApiConfigForm = {
 
 const normalizeQuality = (value) => (qualityOptions.some((item) => item.value === value) ? value : 'auto');
 const normalizeBackground = (value) => (backgroundOptions.includes(value) ? value : 'auto');
+const normalizeResponseFormat = (value) => (responseFormatOptions.some((item) => item.value === value) ? value : 'b64_json');
 const normalizeOutputFormat = (value) => (outputFormatOptions.includes(value) ? value : 'png');
 const normalizeModeration = (value) => (moderationOptions.includes(value) ? value : 'auto');
 const normalizeCompression = (value) => clampNumber(Number(value) || 0, 0, 100);
+const normalizeOutputCount = (value) => clampNumber(Math.round(Number(value) || defaultForm.n), 1, MAX_OUTPUT_IMAGES);
 const getQualityLabel = (value) => qualityOptions.find((item) => item.value === value)?.label || '自动';
+const getResponseFormatLabel = (value) => responseFormatOptions.find((item) => item.value === value)?.label || 'Base64';
 const normalizeForm = (value = {}) => {
   const nextForm = { ...defaultForm, ...value };
 
@@ -159,9 +168,10 @@ const normalizeForm = (value = {}) => {
     model: String(nextForm.model || defaultForm.model).trim() || defaultForm.model,
     prompt: String(nextForm.prompt || ''),
     size: String(nextForm.size || ''),
-    n: 1,
+    n: normalizeOutputCount(nextForm.n),
     quality: normalizeQuality(nextForm.quality),
     background: normalizeBackground(nextForm.background),
+    response_format: normalizeResponseFormat(nextForm.response_format),
     output_format: normalizeOutputFormat(nextForm.output_format),
     output_compression: normalizeCompression(nextForm.output_compression ?? defaultForm.output_compression),
     moderation: normalizeModeration(nextForm.moderation),
@@ -180,7 +190,7 @@ const normalizeImageSource = (source) => {
   return 'generation';
 };
 
-const getImageIdentity = (image) => String(image?.jobId || image?.wallItemId || image?.id || createImageSrc(image) || '');
+const getImageIdentity = (image) => String(image?.wallItemId || image?.id || createImageSrc(image) || '');
 
 const getEmptyBoardText = (scope, view = 'generate') => {
   if (view === 'wall') return '暂无上墙作品';
@@ -189,15 +199,18 @@ const getEmptyBoardText = (scope, view = 'generate') => {
   return '输入提示词开始生成图片';
 };
 
-const normalizeBoardImage = (image, fallback = {}) => ({
-  ...image,
-  id: image?.id || fallback.id || `image-${Date.now()}`,
-  status: image?.status || 'completed',
-  form: normalizeForm(image?.form || fallback.form || {}),
-  prompt: image?.prompt || fallback.prompt || image?.form?.prompt || fallback.form?.prompt || '',
-  createdAt: image?.createdAt || fallback.createdAt || new Date().toISOString(),
-  source: normalizeImageSource(image?.source || fallback.source),
-});
+const normalizeBoardImage = (image, fallback = {}) => {
+  const hasRenderableImage = Boolean(createImageSrc(image));
+  return {
+    ...image,
+    id: image?.id || fallback.id || `image-${Date.now()}`,
+    status: hasRenderableImage ? 'completed' : image?.status || 'completed',
+    form: normalizeForm(image?.form || fallback.form || {}),
+    prompt: image?.prompt || fallback.prompt || image?.form?.prompt || fallback.form?.prompt || '',
+    createdAt: image?.createdAt || fallback.createdAt || new Date().toISOString(),
+    source: normalizeImageSource(image?.source || fallback.source),
+  };
+};
 
 const flattenHistoryImages = (items) => items.flatMap((record) => {
   const form = normalizeForm(record.form || {});
@@ -226,7 +239,6 @@ const removeImageFromHistory = (items, target) => items
 
 const isSameImageIdentity = (left, right) => {
   if (!left || !right) return false;
-  if (left.jobId && right.jobId && Number(left.jobId) === Number(right.jobId)) return true;
   if (left.wallItemId && right.wallItemId && Number(left.wallItemId) === Number(right.wallItemId)) return true;
   if (left.id && right.id && String(left.id) === String(right.id)) return true;
   const leftSrc = createImageSrc(left);
@@ -386,8 +398,6 @@ const normalizeServerSettings = (value = {}) => ({
   form: normalizeForm({ model: value.model || defaultForm.model }),
 });
 
-const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-
 const imageMimeForOutputFormat = (format) => {
   if (format === 'jpeg') return 'image/jpeg';
   if (format === 'webp') return 'image/webp';
@@ -452,23 +462,90 @@ const requestJson = async (input, init) => {
   return data;
 };
 
-const isPendingJob = (data) => ['queued', 'running', 'pending'].includes(data?.job?.status);
+const buildDirectApiUrl = (apiBaseUrl, path) => {
+  const baseUrl = normalizeApiBaseUrl(apiBaseUrl);
+  const basePath = new URL(baseUrl).pathname.replace(/\/+$/, '');
+  const normalizedPath = `/${String(path || '').replace(/^\/+/, '')}`;
+  const finalPath = basePath && normalizedPath.startsWith(`${basePath}/`)
+    ? normalizedPath.slice(basePath.length)
+    : normalizedPath;
+  return `${baseUrl}${finalPath}`;
+};
 
-const pollImageJob = async (jobId, onProgress) => {
-  const startedAt = Date.now();
+const parseDirectResponseText = (text) => {
+  if (!text) return {};
+  const trimmed = text.trim();
+  const eventPayloads = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .filter((line) => line && line !== '[DONE]');
 
-  while (Date.now() - startedAt < (MAX_REQUEST_TIMEOUT_SECONDS + 30) * 1000) {
-    await sleep(2000);
-    const data = await requestJson(`/api/image-jobs/${jobId}`);
-    const status = data?.job?.status;
-    onProgress?.(status === 'running' ? 'Generating' : status || 'Waiting');
-
-    if (Array.isArray(data?.data) && data.data.length) return data;
-    if (status === 'failed') throw new Error(data?.job?.error || '生成失败');
+  if (eventPayloads.length) {
+    const events = eventPayloads
+      .map((payload) => {
+        try {
+          return JSON.parse(payload);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+    return events.find((event) => Array.isArray(event?.data) && event.data.length)
+      || events.find((event) => event?.b64_json || event?.url || event?.image || event?.data_url)
+      || events.at(-1)
+      || {};
   }
 
-  throw new Error('生成任务超时，请稍后刷新历史记录。');
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (/^[\s\r\n]*</.test(text)) throw new Error('上游接口返回了页面内容，请检查 API 地址。');
+    throw new Error(text.slice(0, 180) || '上游接口返回异常内容。');
+  }
 };
+
+const readDirectImageResponse = async (response) => {
+  const text = await response.text();
+  const data = parseDirectResponseText(text);
+  if (!response.ok) {
+    const message = data?.error?.message || data?.error || data?.message || '生图接口请求失败';
+    throw new Error(message);
+  }
+  return data;
+};
+
+const requestDirectImageJson = async (path, payload, config) => {
+  const controller = new AbortController();
+  const timeoutMs = clampNumber(Number(config.requestTimeout) || MAX_REQUEST_TIMEOUT_SECONDS, 10, MAX_REQUEST_TIMEOUT_SECONDS) * 1000;
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(buildDirectApiUrl(config.apiBaseUrl, path), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    return await readDirectImageResponse(response);
+  } catch (requestError) {
+    if (requestError?.name === 'AbortError') throw new Error('生图请求超时，请调高请求超时或降低尺寸/质量后重试。');
+    throw requestError;
+  } finally {
+    window.clearTimeout(timer);
+  }
+};
+
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ''));
+  reader.onerror = () => reject(new Error('读取参考图失败'));
+  reader.readAsDataURL(file);
+});
 
 function App() {
   const [view, setView] = useState('generate');
@@ -499,7 +576,9 @@ function App() {
   const deletedRequestIdsRef = useRef(new Set());
 
   const hasReferenceImages = referenceImages.length > 0;
-  const canCompressOutput = ['jpeg', 'webp'].includes(normalizeOutputFormat(form.output_format));
+  const responseFormat = normalizeResponseFormat(form.response_format);
+  const canUseOutputFormat = responseFormat === 'url';
+  const canCompressOutput = canUseOutputFormat && ['jpeg', 'webp'].includes(normalizeOutputFormat(form.output_format));
   const referenceNames = referenceImages.map((image, index) => `图${index + 1}:${image.name}`).join('，');
   const availableRatios = getAvailableRatios(sizeDraft.resolution);
   const activeSize = getDraftSize(sizeDraft);
@@ -571,41 +650,60 @@ function App() {
   };
 
   const buildGenerationPayload = (prompt) => {
-    const normalized = normalizeForm({ ...form, prompt, n: 1 });
+    const normalized = normalizeForm({ ...form, prompt, model: apiConfigForm.model || form.model });
+    const responseFormat = normalizeResponseFormat(normalized.response_format);
     const outputFormat = normalizeOutputFormat(normalized.output_format);
+    const canUseOutputFormat = responseFormat === 'url';
     const payload = {
       model: normalized.model || defaultForm.model,
       prompt,
-      n: 1,
-      output_format: outputFormat,
+      n: normalizeOutputCount(normalized.n),
+      response_format: responseFormat,
       moderation: normalizeModeration(normalized.moderation),
     };
 
+    if (canUseOutputFormat) payload.output_format = outputFormat;
     if (normalized.size) payload.size = normalized.size;
     if (apiConfigForm.stream) payload.stream = true;
     if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
     if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
-    if (['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
+    if (canUseOutputFormat && ['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
 
     return payload;
   };
 
-  const buildEditPayload = (prompt) => {
-    const normalized = normalizeForm({ ...form, prompt, n: 1 });
+  const buildEditPayload = async (prompt) => {
+    const normalized = normalizeForm({ ...form, prompt, model: apiConfigForm.model || form.model });
+    const responseFormat = normalizeResponseFormat(normalized.response_format);
     const outputFormat = normalizeOutputFormat(normalized.output_format);
+    const canUseOutputFormat = responseFormat === 'url';
+    const images = await Promise.all(referenceImages.map((image) => fileToDataUrl(image.file)));
     const payload = {
       model: normalized.model || defaultForm.model,
       prompt,
-      output_format: outputFormat,
+      n: normalizeOutputCount(normalized.n),
+      image: images,
+      response_format: responseFormat,
     };
 
+    if (canUseOutputFormat) payload.output_format = outputFormat;
     if (normalized.size) payload.size = normalized.size;
     if (apiConfigForm.stream) payload.stream = true;
     if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
     if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
-    if (['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
+    if (canUseOutputFormat && ['jpeg', 'webp'].includes(outputFormat)) payload.output_compression = normalizeCompression(normalized.output_compression);
+    if (maskImage?.file) payload.mask = await fileToDataUrl(maskImage.file);
 
     return payload;
+  };
+
+  const loadDirectSettings = async () => {
+    const data = await requestJson('/api/settings/direct');
+    const settings = normalizeServerSettings(data.settings || {});
+    const apiKey = String(data.apiKey || data.api_key || '');
+    if (!apiKey) throw new Error('请先在参数设置里保存 API Key。');
+    setApiConfigForm((current) => ({ ...current, ...settings, apiKey: current.apiKey, hasApiKey: true }));
+    return { ...settings, apiKey };
   };
 
   const applyServerSettings = (settings, nextUser = user) => {
@@ -691,7 +789,6 @@ function App() {
 
     const src = createImageSrc(image);
     return wallItems.find((item) => {
-      if (image.jobId && item.sourceJobId && Number(image.jobId) === Number(item.sourceJobId)) return true;
       const wallSrc = createImageSrc(item);
       return src && wallSrc && src === wallSrc;
     }) || null;
@@ -865,7 +962,7 @@ function App() {
     deletedRequestIdsRef.current.delete(requestId);
     const startedAt = new Date().toISOString();
     const requestApiName = apiConfigForm.apiName || status.apiName || defaultApiConfigForm.apiName;
-    const imageForm = normalizeForm({ ...form, prompt, n: 1, apiName: requestApiName });
+    const imageForm = normalizeForm({ ...form, prompt, apiName: requestApiName });
     const pendingItem = {
       id: requestId,
       requestId,
@@ -882,28 +979,17 @@ function App() {
 
     try {
       if (!user) throw new Error('请先登录后再生成图片。');
-      if (!apiConfigForm.hasApiKey) throw new Error('请先在参数设置里保存 API Key。');
-
+      const directConfig = await loadDirectSettings();
       const payload = hasReferenceImages
-        ? buildEditRequestBody(prompt)
+        ? await buildEditPayload(prompt)
         : buildGenerationPayload(prompt);
-      const rawData = hasReferenceImages
-        ? await requestJson('/api/images/edits', {
-            method: 'POST',
-            body: payload,
-          })
-        : await requestJson('/api/images/generations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-      const data = isPendingJob(rawData)
-        ? await pollImageJob(rawData.job.jobId || rawData.job.id, (message) => {
-            setStatus((current) => ({ ...current, loading: true, message }));
-          })
-        : rawData;
-      const outputFormat = hasReferenceImages ? form.output_format : payload.output_format;
-      const normalizedData = normalizeDirectImageResponse(data, outputFormat || form.output_format);
+      const data = await requestDirectImageJson(
+        hasReferenceImages ? '/v1/images/edits' : '/v1/images/generations',
+        payload,
+        directConfig,
+      );
+      const outputFormat = payload.output_format || defaultForm.output_format;
+      const normalizedData = normalizeDirectImageResponse(data, outputFormat);
 
       const finishedAt = new Date().toISOString();
       if (deletedRequestIdsRef.current.has(requestId)) {
@@ -915,7 +1001,6 @@ function App() {
             ...image,
             id: image.id || `${requestId}-${index}`,
             requestId,
-            jobId: image.jobId || normalizedData.job?.jobId || normalizedData.job?.id || image.job_id,
             status: 'completed',
             form: imageForm,
             apiName: requestApiName,
@@ -927,6 +1012,10 @@ function App() {
             referenceName: referenceNames,
           }))
         : [];
+
+      if (!nextImages.some((image) => Boolean(createImageSrc(image)))) {
+        throw new Error('上游接口未返回可展示图片。');
+      }
 
       setImages((items) => [
         ...nextImages,
@@ -943,8 +1032,13 @@ function App() {
       };
 
       const nextHistory = [record, ...history].slice(0, 30);
-      setHistory(nextHistory);
-      saveHistory(nextHistory);
+      try {
+        setHistory(nextHistory);
+        saveHistory(nextHistory);
+      } catch {
+        setHistory(nextHistory);
+        setError('图片已生成，但本地历史记录保存失败。');
+      }
       setStatus((current) => ({ ...current, loading: false, message: `Done · ${nextImages.length}` }));
     } catch (requestError) {
       const failedAt = new Date().toISOString();
@@ -964,21 +1058,9 @@ function App() {
     }
   };
 
-  const buildEditRequestBody = (prompt) => {
-    const payload = buildEditPayload(prompt);
-    const body = new FormData();
-
-    Object.entries(payload).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') body.append(key, String(value));
-    });
-    referenceImages.forEach((image) => body.append('image[]', image.file, image.name));
-    if (maskImage?.file) body.append('mask', maskImage.file, maskImage.name);
-    return body;
-  };
-
   const toggleWall = async (image) => {
     const wallItem = findWallItem(image);
-    const busyId = String(image.jobId || image.wallItemId || image.id || createImageSrc(image));
+    const busyId = String(image.wallItemId || image.id || createImageSrc(image));
     setWallBusyId(busyId);
     setError('');
 
@@ -1013,7 +1095,6 @@ function App() {
           revised_prompt: image.revised_prompt || '',
           form: { ...(image.form || form), source: normalizeImageSource(image.source) },
           params: { ...(image.form || form), source: normalizeImageSource(image.source) },
-          jobId: image.jobId || null,
         }),
       });
 
@@ -1149,10 +1230,14 @@ function App() {
 
   const detailParams = selectedImage?.form || form;
   const detailSrc = createImageSrc(selectedImage);
+  const detailIsFailed = selectedImage?.status === 'failed' && !detailSrc;
+  const detailIsPending = selectedImage?.status === 'pending' && !detailSrc;
+  const detailInputPrompt = selectedImage?.prompt || detailParams.prompt || '';
+  const detailRevisedPrompt = selectedImage?.revised_prompt || '';
   const detailElapsed = selectedImage ? formatDuration(getElapsedSeconds(selectedImage)) : '00:00';
   const selectedWallItem = detailSrc ? findWallItem(selectedImage) : null;
   const selectedOnWall = Boolean(selectedWallItem);
-  const busySelected = selectedImage && wallBusyId === String(selectedImage.jobId || selectedImage.wallItemId || selectedImage.id || detailSrc);
+  const busySelected = selectedImage && wallBusyId === String(selectedImage.wallItemId || selectedImage.id || detailSrc);
 
   const renderImageCard = (image) => {
     const src = createImageSrc(image);
@@ -1163,7 +1248,7 @@ function App() {
     const canDelete = view !== 'wall';
 
     return (
-      <figure className={`result-card ${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`.trim()} key={`${image.source || 'image'}-${image.id || image.wallItemId || image.jobId || src}`} onClick={() => openDetail(image)}>
+      <figure className={`result-card ${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`.trim()} key={`${image.source || 'image'}-${image.id || image.wallItemId || src}`} onClick={() => openDetail(image)}>
         {canDelete ? (
           <button
             type="button"
@@ -1234,9 +1319,6 @@ function App() {
 
         <div className="topbar-actions">
           <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>
-          <button type="button" className="round-tool account-tool" onClick={() => { if (user) setActiveDialog('direct-settings'); else { setAuthTab('profile'); setActiveDialog('auth'); } }} aria-label="参数设置">
-            参数设置
-          </button>
           <button type="button" className="round-tool account-tool" onClick={() => { setAuthTab('profile'); setActiveDialog('auth'); }} aria-label="账号设置">
             {user ? userDisplayName : '登录'}
           </button>
@@ -1338,11 +1420,21 @@ function App() {
               })}
 
               {renderSelect({
+                id: 'workbench-response-format',
+                label: '返回格式',
+                value: responseFormat,
+                options: responseFormatOptions,
+                onChange: (value) => updateForm('response_format', value),
+                className: 'control-field response-format-control',
+              })}
+
+              {renderSelect({
                 id: 'workbench-output-format',
                 label: '格式',
                 value: form.output_format,
                 options: outputFormatOptions.map((format) => ({ label: format.toUpperCase(), value: format })),
                 onChange: (value) => updateForm('output_format', value),
+                disabled: !canUseOutputFormat,
                 className: 'control-field',
               })}
 
@@ -1361,25 +1453,54 @@ function App() {
                 className: 'control-field',
               })}
 
-              <label className="control-field count-field is-disabled">
+              <label className="control-field count-field">
                 <span>数量</span>
-                <input min="1" max="1" type="number" value="1" disabled readOnly />
+                <input min="1" max={MAX_OUTPUT_IMAGES} type="number" value={form.n} onChange={(event) => updateForm('n', normalizeOutputCount(event.target.value))} />
               </label>
 
-              <label className={hasReferenceImages ? 'control-field file-control has-file' : 'control-field file-control'} title={referenceNames || '上传参考图'} aria-label="上传参考图">
+              <label className={hasReferenceImages ? 'control-field file-control has-file icon-file-control' : 'control-field file-control icon-file-control'} title={referenceNames || '上传参考图'} aria-label="上传参考图">
                 <span>参考图</span>
                 <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleReferenceChange} />
-                <strong>{hasReferenceImages ? `${referenceImages.length} 张` : '上传'}</strong>
+                <strong>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="4" y="5" width="16" height="14" rx="3" />
+                    <path d="m7 15 3.2-3.2 2.6 2.6 1.7-1.7L18 16" />
+                    <circle cx="15.5" cy="9.5" r="1.5" />
+                    <path d="M18 4v4" />
+                    <path d="M16 6h4" />
+                  </svg>
+                  <em>{hasReferenceImages ? referenceImages.length : ''}</em>
+                </strong>
               </label>
 
-              <label className={hasReferenceImages ? 'control-field file-control mask-control' : 'control-field file-control mask-control is-disabled'} title={maskImage?.name || '上传 mask'} aria-label="上传 mask">
+              <label className={hasReferenceImages ? 'control-field file-control mask-control icon-file-control' : 'control-field file-control mask-control icon-file-control is-disabled'} title={maskImage?.name || '上传 mask'} aria-label="上传 mask">
                 <span>Mask</span>
                 <input type="file" accept="image/png" disabled={!hasReferenceImages} onChange={handleMaskChange} />
-                <strong>{maskImage ? '已选择' : hasReferenceImages ? '可选' : '先传图'}</strong>
+                <strong>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5 5h14v7c0 4.2-2.8 6.9-7 8-4.2-1.1-7-3.8-7-8V5Z" />
+                    <path d="M8 10h3" />
+                    <path d="M13 10h3" />
+                    <path d="M9 15c1.8 1.2 4.2 1.2 6 0" />
+                    <path d="M19 5 5 19" />
+                  </svg>
+                  <em>{maskImage ? '1' : ''}</em>
+                </strong>
               </label>
 
               <button type="submit" className="send-button" disabled={status.loading} aria-label="生成图片">
-                {status.loading ? '...' : '→'}
+                {status.loading ? (
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="loading-dots-icon">
+                    <circle cx="6" cy="12" r="1.8" />
+                    <circle cx="12" cy="12" r="1.8" />
+                    <circle cx="18" cy="12" r="1.8" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 12 20 5l-5.4 14-3.1-6.5L4 12Z" />
+                    <path d="m11.5 12.5 4.2-4.2" />
+                  </svg>
+                )}
               </button>
             </div>
 
@@ -1420,14 +1541,14 @@ function App() {
                 <div className="detail-badges">
                   <span>◷ {detailElapsed}</span>
                   <span>{detailParams.size || '自动'}</span>
-                  <span>{detailParams.output_format || 'png'}</span>
+                  <span>{detailParams.response_format === 'url' ? detailParams.output_format || 'png' : getResponseFormatLabel(detailParams.response_format)}</span>
                 </div>
                 {detailSrc ? (
                   <img src={detailSrc} alt={selectedImage.revised_prompt || selectedImage.prompt || '图片详情'} />
                 ) : (
                   <div className="pending-preview detail-pending-preview">
                     <span className="loading-ring" aria-hidden="true" />
-                    <strong>{selectedImage.status === 'failed' ? '生成失败' : '生成中...'}</strong>
+                    <strong>{detailIsFailed ? '生成失败' : '生成中...'}</strong>
                     {selectedImage.error ? <p>{selectedImage.error}</p> : null}
                   </div>
                 )}
@@ -1436,25 +1557,32 @@ function App() {
               <div className="detail-panel">
                 <div className="modal-head">
                   <div>
-                    <h2>{selectedImage.status === 'pending' ? '请求详情' : selectedImage.status === 'failed' ? '失败详情' : '图片详情'}</h2>
-                    <p>{selectedImage.status === 'pending' ? '生成中' : selectedImage.status === 'failed' ? '请求失败' : selectedImage.authorName || (selectedOnWall ? '已上墙' : '本地生成')}</p>
+                    <h2>{detailIsPending ? '请求详情' : detailIsFailed ? '失败详情' : '图片详情'}</h2>
+                    <p>{detailIsPending ? '生成中' : detailIsFailed ? '请求失败' : selectedImage.authorName || (selectedOnWall ? '已上墙' : '本地生成')}</p>
                   </div>
                   <button type="button" className="close-button" onClick={closeDialog}>×</button>
                 </div>
 
-                <div className="prompt-detail">
-                  <span>输入内容</span>
-                  <p>{selectedImage.revised_prompt || selectedImage.prompt || detailParams.prompt || '无提示词'}</p>
+                <div className="prompt-detail prompt-detail-stack">
+                  <div>
+                    <span>输入提示词</span>
+                    <p>{detailInputPrompt || '无提示词'}</p>
+                  </div>
+                  <div>
+                    <span>优化提示词</span>
+                    <p>{detailRevisedPrompt || '上游未返回 revised_prompt'}</p>
+                  </div>
                 </div>
 
                 <div className="detail-meta-grid">
                   <div><span>来源</span><strong>{getSourceLabel(selectedImage)}</strong></div>
                   <div><span>尺寸</span><strong>{detailParams.size || '自动'}</strong></div>
                   <div><span>质量</span><strong>{getQualityLabel(detailParams.quality)}</strong></div>
-                  <div><span>格式</span><strong>{detailParams.output_format || 'png'}</strong></div>
+                  <div><span>返回格式</span><strong>{getResponseFormatLabel(detailParams.response_format)}</strong></div>
+                  <div><span>格式</span><strong>{detailParams.response_format === 'url' ? detailParams.output_format || 'png' : '禁用'}</strong></div>
                   <div><span>背景</span><strong>{detailParams.background || 'auto'}</strong></div>
                   {selectedImage.source === 'edit' ? null : <div><span>审核</span><strong>{detailParams.moderation || 'auto'}</strong></div>}
-                  <div><span>数量</span><strong>1</strong></div>
+                  <div><span>数量</span><strong>{detailParams.n || 1}</strong></div>
                 </div>
 
                 <p className="created-line">创建于 {formatDate(selectedImage.createdAt)} · 耗时 {detailElapsed}</p>
@@ -1489,7 +1617,7 @@ function App() {
                 <div className="account-panel">
                   <div className="segmented-control two-tabs account-tabs">
                     <button type="button" className="is-active" onClick={() => setAuthTab('profile')}>账号信息</button>
-                    <button type="button" onClick={() => setActiveDialog('direct-settings')}>生图参数</button>
+                    <button type="button" onClick={() => setActiveDialog('direct-settings')}>参数设置</button>
                   </div>
 
                   {authTab === 'profile' ? (
@@ -1549,7 +1677,7 @@ function App() {
               <div className="modal-head">
                 <div>
                   <h2>参数设置</h2>
-                  <p>参数保存到当前登录账号，生成时由服务器读取密钥并请求上游接口。</p>
+                  <p>配置保存到当前登录账号；生成时浏览器按 API 地址直连上游并使用 API Key。</p>
                 </div>
                 <button type="button" className="close-button" onClick={closeDialog}>×</button>
               </div>

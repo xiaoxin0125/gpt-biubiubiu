@@ -268,8 +268,10 @@ button:disabled {
   z-index: 3;
   top: 16px;
   left: 50%;
-  display: grid;
-  grid-template-columns: 38px minmax(116px, 140px) minmax(116px, 150px) minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   width: min(860px, calc(100% - 24px));
   min-width: 0;
   padding: 10px;
@@ -284,6 +286,19 @@ button:disabled {
 .toolbar-search input,
 .toolbar-text-button {
   min-width: 0;
+}
+
+.toolbar-scope,
+.toolbar-filter {
+  flex: 0 1 150px;
+}
+
+.toolbar-search {
+  flex: 1 1 240px;
+}
+
+.toolbar-text-button {
+  flex: 0 0 auto;
 }
 
 .toolbar-icon-button,
@@ -648,6 +663,10 @@ input::placeholder {
   flex-basis: 92px;
 }
 
+.response-format-control {
+  flex-basis: 106px;
+}
+
 .control-field input,
 .control-field select,
 .custom-select-trigger,
@@ -776,9 +795,10 @@ input::placeholder {
 }
 
 .file-control strong {
-  display: inline-flex;
+  position: relative;
+  display: inline-grid;
   align-items: center;
-  justify-content: center;
+  justify-items: center;
   min-height: 32px;
   padding: 0 10px;
   border: 2px solid var(--line);
@@ -791,10 +811,45 @@ input::placeholder {
   white-space: nowrap;
 }
 
+.icon-file-control strong,
 .file-control.has-file strong,
 .mask-control:not(.is-disabled) strong {
   background: var(--black);
   color: var(--white);
+}
+
+.icon-file-control strong svg,
+.send-button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.icon-file-control strong em {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0 5px;
+  border: 2px solid var(--white);
+  border-radius: 999px;
+  background: var(--black);
+  color: var(--white);
+  font-size: 0.66rem;
+  font-style: normal;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.icon-file-control strong em:empty {
+  display: none;
 }
 
 .send-button {
@@ -808,6 +863,16 @@ input::placeholder {
   color: var(--white);
   font-size: 1.2rem;
   font-weight: 950;
+}
+
+.send-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.send-button .loading-dots-icon {
+  fill: currentColor;
+  stroke: none;
 }
 
 .reference-preview {
@@ -1050,6 +1115,20 @@ input::placeholder {
   display: grid;
   gap: 8px;
   padding: 12px;
+}
+
+.prompt-detail-stack {
+  gap: 12px;
+}
+
+.prompt-detail-stack div {
+  display: grid;
+  gap: 6px;
+}
+
+.prompt-detail-stack div + div {
+  padding-top: 10px;
+  border-top: 2px solid var(--line);
 }
 
 .prompt-detail span,
@@ -1625,18 +1704,19 @@ select option {
 
   .canvas-toolbar {
     position: static;
-    grid-template-columns: 38px minmax(0, 1fr);
     width: 100%;
     margin: 0 0 12px;
     transform: none;
   }
 
-  .toolbar-filter {
-    min-width: 0;
+  .toolbar-scope,
+  .toolbar-filter,
+  .toolbar-search {
+    flex: 1 1 100%;
   }
 
-  .toolbar-search {
-    grid-column: 1 / -1;
+  .toolbar-text-button {
+    flex: 1 1 auto;
   }
 
   .empty-canvas h1 {
