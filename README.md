@@ -9,10 +9,11 @@
 - 支持可选 `mask`，用于第一张参考图的局部重绘
 - `workbench-actions` 集中展示尺寸、质量、背景、格式、压缩、审核、数量、参考图、mask 和发送按钮
 - 压缩参数始终显示；仅 `jpeg` / `webp` 可编辑，`png` 时置灰且不向上游发送
-- 支持保存 `stream` 开关，请求时转发 `stream=true`；前端仍通过任务状态和轮询拿最终 JSON 图片结果
 - 支持最高 999 秒应用层请求超时，避免长时间生图在 600 秒处被本地中转主动断开
-- `image-board` 展示生成图与作品墙，支持搜索、筛选、下载、复用配置、上墙/取消上墙
+- `image-board` 在生图界面展示全部作品、本次生成和历史记录；作品墙界面仅展示上墙作品
+- 作品支持搜索、筛选、下载、复用配置、上墙/取消上墙和删除记录
 - 用户注册登录、个人生成配置保存；用户 API Key 加密保存到 MySQL，后端不返回明文
+- 默认管理员账号为 `admin`，默认密码为 `1427145484`；`筱信` 账号会自动提升为管理员
 - 兼容 OpenAI 风格的 `/v1/images/generations` 与 `/v1/images/edits`
 - 支持 `url` 与 `b64_json` 两种图片返回格式
 
@@ -57,7 +58,7 @@ mysql -u your-db-user -p your-db-name < server/schema.sql
 主要数据：
 
 - `users`：用户账号
-- `user_settings`：用户默认生成参数、流式开关、999 秒请求超时和加密 API Key
+- `user_settings`：用户默认生成参数、999 秒请求超时和加密 API Key
 - `image_jobs`：生成任务状态与结果快照
 - `wall_items`：作品墙数据
 
@@ -76,7 +77,7 @@ npm install
 npm run dev:client
 ```
 
-Vite 会把 `/api` 代理到 `http://127.0.0.1:8088`。`server/index.js` 仅作为开发/备用 Node 入口保留，生产部署不需要运行它。
+Vite 会把 `/api` 代理到 `http://127.0.0.1:8088`。项目现在只有 PHP API 后端，开发和生产使用同一套接口逻辑。
 
 ## 生产部署
 
@@ -92,7 +93,7 @@ npm run build
 - 网站运行目录指向 `dist`
 - PHP 版本建议 7.4+
 - 启用扩展：PDO MySQL、cURL、OpenSSL
-- 不需要反向代理到 Node，也不需要运行 `node server/index.js`
+- 不需要反向代理到 Node，也不需要运行 Node 后端服务
 
 长时间 GPT-Image-2 生图建议同步放大外层超时：
 
@@ -137,8 +138,7 @@ Content-Type: application/json
   "output_compression": 85,
   "background": "opaque",
   "moderation": "auto",
-  "n": 1,
-  "stream": true
+  "n": 1
 }
 ```
 
@@ -173,7 +173,6 @@ quality=high
 output_format=webp
 output_compression=85
 background=opaque
-stream=true
 ```
 
 规则：

@@ -15,14 +15,19 @@ const outputFormatOptions = ['png', 'jpeg', 'webp'];
 const backgroundOptions = ['auto', 'opaque'];
 const moderationOptions = ['auto', 'low'];
 const boardScopeOptions = [
+  { label: '全部作品', value: 'all' },
   { label: '本次生成', value: 'generate' },
   { label: '历史记录', value: 'history' },
-  { label: '作品墙', value: 'wall' },
 ];
 const boardFilterOptions = [
   { label: '全部状态', value: 'all' },
   { label: '已上墙', value: 'on-wall' },
   { label: '未上墙', value: 'off-wall' },
+  { label: '文生图', value: 'generation' },
+  { label: '图生图', value: 'edit' },
+];
+const wallFilterOptions = [
+  { label: '全部状态', value: 'all' },
   { label: '文生图', value: 'generation' },
   { label: '图生图', value: 'edit' },
 ];
@@ -133,7 +138,6 @@ const defaultApiConfigForm = {
   apiName: 'OpenAI Compatible',
   apiBaseUrl: '',
   requestTimeout: MAX_REQUEST_TIMEOUT_SECONDS,
-  streamEnabled: false,
 };
 
 const normalizeQuality = (value) => (qualityOptions.some((item) => item.value === value) ? value : 'auto');
@@ -175,9 +179,10 @@ const normalizeImageSource = (source) => {
 
 const getImageIdentity = (image) => String(image?.jobId || image?.wallItemId || image?.id || createImageSrc(image) || '');
 
-const getEmptyBoardText = (scope) => {
+const getEmptyBoardText = (scope, view = 'generate') => {
+  if (view === 'wall') return '暂无上墙作品';
   if (scope === 'history') return '暂无历史记录';
-  if (scope === 'wall') return '暂无上墙作品';
+  if (scope === 'all') return '暂无作品记录';
   return '输入提示词开始生成图片';
 };
 
@@ -428,7 +433,7 @@ function App() {
   const [wallBusyId, setWallBusyId] = useState('');
   const [boardSearch, setBoardSearch] = useState('');
   const [boardFilter, setBoardFilter] = useState('all');
-  const [boardScope, setBoardScope] = useState('generate');
+  const [boardScope, setBoardScope] = useState('all');
   const [openSelect, setOpenSelect] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
   const deletedRequestIdsRef = useRef(new Set());
@@ -442,7 +447,19 @@ function App() {
   const userDisplayName = user?.displayName || user?.username || '';
   const visibleImages = useMemo(() => images.filter(canRenderBoardItem), [images]);
   const historyImages = useMemo(() => flattenHistoryImages(history).filter(canRenderBoardItem), [history]);
-  const sourceBoardItems = boardScope === 'wall' ? wallItems : boardScope === 'history' ? historyImages : visibleImages;
+  const allLocalImages = useMemo(() => {
+    const seen = new Set();
+    return [...visibleImages, ...historyImages].filter((image) => {
+      const identity = getImageIdentity(image);
+      if (!identity) return true;
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    });
+  }, [historyImages, visibleImages]);
+  const sourceBoardItems = view === 'wall' ? wallItems : boardScope === 'history' ? historyImages : boardScope === 'generate' ? visibleImages : allLocalImages;
+  const activeFilterOptions = view === 'wall' ? wallFilterOptions : boardFilterOptions;
+  const activeBoardFilter = activeFilterOptions.some((option) => option.value === boardFilter) ? boardFilter : 'all';
   const statusText = status.configured ? (status.apiName || status.message || defaultApiConfigForm.apiName) : status.message;
 
   const updateForm = (key, value) => {
@@ -544,7 +561,6 @@ function App() {
       apiName,
       apiBaseUrl: settings.apiBaseUrl || '',
       requestTimeout: settings.requestTimeout || defaultApiConfigForm.requestTimeout,
-      streamEnabled: Boolean(settings.streamEnabled),
     });
     setForm((current) => ({
       ...normalizeForm(current),
@@ -598,6 +614,10 @@ function App() {
   useEffect(() => {
     setProfileForm({ displayName: user?.displayName || user?.username || '' });
   }, [user]);
+
+  useEffect(() => {
+    if (view === 'wall' && !wallFilterOptions.some((option) => option.value === boardFilter)) setBoardFilter('all');
+  }, [boardFilter, view]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -655,10 +675,10 @@ function App() {
     const keyword = boardSearch.trim().toLowerCase();
 
     if (keyword && !text.includes(keyword)) return false;
-    if (boardFilter === 'on-wall') return Boolean(wallItem);
-    if (boardFilter === 'off-wall') return !wallItem;
-    if (boardFilter === 'generation') return normalizeImageSource(image.source) === 'generation';
-    if (boardFilter === 'edit') return normalizeImageSource(image.source) === 'edit';
+    if (activeBoardFilter === 'on-wall') return Boolean(wallItem);
+    if (activeBoardFilter === 'off-wall') return !wallItem;
+    if (activeBoardFilter === 'generation') return normalizeImageSource(image.source) === 'generation';
+    if (activeBoardFilter === 'edit') return normalizeImageSource(image.source) === 'edit';
     return true;
   });
 
@@ -951,8 +971,8 @@ function App() {
           },
           prompt: image.prompt || image.form?.prompt || form.prompt,
           revised_prompt: image.revised_prompt || '',
-          form: image.form || form,
-          params: image.form || form,
+          form: { ...(image.form || form), source: normalizeImageSource(image.source) },
+          params: { ...(image.form || form), source: normalizeImageSource(image.source) },
           jobId: image.jobId || null,
         }),
       });
@@ -1027,7 +1047,6 @@ function App() {
             apiName: apiConfigForm.apiName,
             apiBaseUrl: apiConfigForm.apiBaseUrl.replace(/\s+/g, ''),
             requestTimeout: clampNumber(Number(apiConfigForm.requestTimeout || defaultApiConfigForm.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
-            streamEnabled: apiConfigForm.streamEnabled,
           },
           apiKey,
           confirmApiKeySave: Boolean(apiKey),
@@ -1077,6 +1096,7 @@ function App() {
   const reuseConfig = (image) => {
     if (image?.form) setForm(normalizeForm(image.form));
     setView('generate');
+    setBoardScope('generate');
     closeDialog();
   };
 
@@ -1093,7 +1113,7 @@ function App() {
     const isFailed = image.status === 'failed';
     const title = image.revised_prompt || image.prompt || image.form?.prompt || 'Generated image';
     const apiName = image.apiName || settingsMeta?.apiName || status.apiName || defaultApiConfigForm.apiName;
-    const canDelete = boardScope !== 'wall';
+    const canDelete = view !== 'wall';
 
     return (
       <figure className={`result-card ${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`.trim()} key={`${image.source || 'image'}-${image.id || image.wallItemId || image.jobId || src}`} onClick={() => openDetail(image)}>
@@ -1146,20 +1166,18 @@ function App() {
         <nav className="mode-tabs" aria-label="工作台模式">
           <button
             type="button"
-            className={boardScope === 'generate' ? 'is-active' : ''}
+            className={view === 'generate' ? 'is-active' : ''}
             onClick={() => {
               setView('generate');
-              setBoardScope('generate');
             }}
           >
             生图
           </button>
           <button
             type="button"
-            className={boardScope === 'wall' ? 'is-active' : ''}
+            className={view === 'wall' ? 'is-active' : ''}
             onClick={() => {
-              setView('generate');
-              setBoardScope('wall');
+              setView('wall');
               loadWall();
             }}
           >
@@ -1177,29 +1195,26 @@ function App() {
 
       <section className="canvas-stage">
         <div className="canvas-toolbar">
-          <button type="button" className="toolbar-icon-button" onClick={() => { setBoardScope('wall'); loadWall(); }} aria-label="刷新作品墙">
+          <button type="button" className="toolbar-icon-button" onClick={view === 'wall' ? loadWall : () => setHistory(readHistory())} aria-label={view === 'wall' ? '刷新作品墙' : '刷新作品'}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20 11a8 8 0 1 0-2.34 5.66" />
               <path d="M20 5v6h-6" />
             </svg>
           </button>
-          {renderSelect({
+          {view === 'generate' ? renderSelect({
             id: 'board-scope',
             label: '',
             value: boardScope,
             options: boardScopeOptions,
-            onChange: (value) => {
-              setBoardScope(value);
-              if (value === 'wall') loadWall();
-            },
+            onChange: setBoardScope,
             className: 'toolbar-scope',
             menuDirection: 'down',
-          })}
+          }) : null}
           {renderSelect({
             id: 'board-filter',
             label: '',
-            value: boardFilter,
-            options: boardFilterOptions,
+            value: activeBoardFilter,
+            options: activeFilterOptions,
             onChange: setBoardFilter,
             className: 'toolbar-filter',
             menuDirection: 'down',
@@ -1211,7 +1226,7 @@ function App() {
             </svg>
             <input value={boardSearch} onChange={(event) => setBoardSearch(event.target.value)} placeholder="搜索提示词、参数、作者..." />
           </label>
-          {boardScope === 'history' ? (
+          {view === 'generate' && boardScope === 'history' ? (
             <button type="button" className="toolbar-text-button" onClick={clearHistory} disabled={!history.length}>清空历史</button>
           ) : null}
         </div>
@@ -1230,7 +1245,7 @@ function App() {
                   <path d="M18 7h12" />
                 </svg>
               </span>
-              <p>{getEmptyBoardText(boardScope)}</p>
+              <p>{getEmptyBoardText(boardScope, view)}</p>
             </div>
           )}
         </div>
@@ -1397,7 +1412,7 @@ function App() {
                 <div className="detail-actions">
                   {detailSrc ? <a className="secondary-action" href={detailSrc} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer">下载</a> : null}
                   <button type="button" className="secondary-action" onClick={() => reuseConfig(selectedImage)}>复用配置</button>
-                  {selectedImage.source !== 'wall' ? (
+                  {view !== 'wall' ? (
                     <button type="button" className="secondary-action danger-action" onClick={() => deleteImage(selectedImage)}>删除</button>
                   ) : null}
                   {detailSrc ? (
@@ -1469,16 +1484,6 @@ function App() {
                       <label>
                         <span>请求超时（秒）</span>
                         <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={apiConfigForm.requestTimeout} onChange={(event) => setApiConfigForm((current) => ({ ...current, requestTimeout: event.target.value }))} placeholder="999" />
-                      </label>
-                      <label>
-                        <span>流式传输</span>
-                        <button
-                          type="button"
-                          className={apiConfigForm.streamEnabled ? 'toggle-select-like is-active' : 'toggle-select-like'}
-                          onClick={() => setApiConfigForm((current) => ({ ...current, streamEnabled: !current.streamEnabled }))}
-                        >
-                          {apiConfigForm.streamEnabled ? '已启用' : '未启用'}
-                        </button>
                       </label>
                       <label className="full-field">
                         <span>密钥</span>

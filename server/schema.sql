@@ -7,13 +7,18 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+INSERT INTO users (username, display_name, password_hash, is_admin)
+VALUES ('admin', 'admin', '$2y$12$lRL.W37YSEeEj9Ak.lTGrObzpwvBlswc2SqMfzBveWlSUS5Zd8Sw6', 1)
+ON DUPLICATE KEY UPDATE is_admin = 1;
+
+UPDATE users SET is_admin = 1 WHERE username = '筱信' OR display_name = '筱信';
+
 CREATE TABLE IF NOT EXISTS user_settings (
   user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
   model VARCHAR(128) DEFAULT NULL,
   api_name VARCHAR(128) DEFAULT NULL,
   api_base_url VARCHAR(255) DEFAULT NULL,
   request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
-  stream_enabled TINYINT(1) NOT NULL DEFAULT 0,
   size VARCHAR(64) DEFAULT NULL,
   quality VARCHAR(64) DEFAULT NULL,
   style VARCHAR(64) DEFAULT NULL,
