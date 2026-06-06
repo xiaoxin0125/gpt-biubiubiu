@@ -178,7 +178,8 @@ const normalizeForm = (value = {}) => {
   };
 };
 
-const DATA_IMAGE_URL_PATTERN = /^data:(image\/[a-z0-9.+-]+);base64,/i;
+const DATA_IMAGE_URL_PATTERN = /^data[:：](image\/[a-z0-9.+-]+);base64,/i;
+const objectImageUrlCache = new Map();
 
 const getDataImageMime = (value) => String(value || '').match(DATA_IMAGE_URL_PATTERN)?.[1] || '';
 
@@ -186,14 +187,57 @@ const isDataImageValue = (value) => DATA_IMAGE_URL_PATTERN.test(String(value || 
 
 const stripDataImagePrefix = (value) => String(value || '').replace(DATA_IMAGE_URL_PATTERN, '');
 
+const toCompactBase64 = (value) => stripDataImagePrefix(value).replace(/\s+/g, '');
+
+const createObjectImageUrl = (value, fallbackMime = 'image/png') => {
+  const compactBase64 = toCompactBase64(value);
+  if (!compactBase64) return '';
+
+  const mime = getDataImageMime(value) || fallbackMime || 'image/png';
+  const cacheKey = `${mime}:${compactBase64}`;
+  const cachedUrl = objectImageUrlCache.get(cacheKey);
+  if (cachedUrl) return cachedUrl;
+
+  if (typeof window === 'undefined' || typeof window.atob !== 'function' || !window.URL?.createObjectURL) {
+    return `data:${mime};base64,${compactBase64}`;
+  }
+
+  try {
+    const binary = window.atob(compactBase64);
+    const chunkSize = 8192;
+    const chunks = [];
+
+    for (let offset = 0; offset < binary.length; offset += chunkSize) {
+      const chunk = binary.slice(offset, offset + chunkSize);
+      const bytes = new Uint8Array(chunk.length);
+      for (let index = 0; index < chunk.length; index += 1) bytes[index] = chunk.charCodeAt(index);
+      chunks.push(bytes);
+    }
+
+    const objectUrl = window.URL.createObjectURL(new Blob(chunks, { type: mime }));
+    objectImageUrlCache.set(cacheKey, objectUrl);
+    return objectUrl;
+  } catch {
+    return `data:${mime};base64,${compactBase64}`;
+  }
+};
+
+const revokeObjectImageUrls = () => {
+  if (typeof window === 'undefined' || !window.URL?.revokeObjectURL) return;
+  objectImageUrlCache.forEach((objectUrl) => window.URL.revokeObjectURL(objectUrl));
+  objectImageUrlCache.clear();
+};
+
+if (typeof window !== 'undefined') window.addEventListener('beforeunload', revokeObjectImageUrls);
+
 const createImageSrc = (image) => {
-  if (image?.url) return image.url;
+  const url = String(image?.url || image?.image_url || '');
+  if (url) return isDataImageValue(url) ? createObjectImageUrl(url, getDataImageMime(url) || image?.imageMime || 'image/png') : url;
 
-  const b64Json = String(image?.b64_json || '');
+  const b64Json = String(image?.b64_json || image?.image_b64 || '');
   if (!b64Json) return '';
-  if (isDataImageValue(b64Json)) return b64Json;
 
-  return `data:${image.imageMime || 'image/png'};base64,${b64Json}`;
+  return createObjectImageUrl(b64Json, getDataImageMime(b64Json) || image?.imageMime || image?.image_mime || 'image/png');
 };
 
 const normalizeImageSource = (source) => {
@@ -452,7 +496,7 @@ const normalizeDirectImageResponse = (data, outputFormat) => {
     ? data.data
     : Array.isArray(data?.images)
       ? data.images
-      : data?.b64_json || data?.url || data?.image || data?.data_url
+      : data?.b64_json || data?.url || data?.image || data?.data_url || (typeof data?.data === 'string' && data.data)
         ? [data]
         : [];
 
@@ -497,12 +541,19 @@ const buildDirectApiUrl = (apiBaseUrl, path) => {
 const parseDirectResponseText = (text) => {
   if (!text) return {};
   const trimmed = text.trim();
+  if (isDataImageValue(trimmed)) return { data: trimmed };
   const eventPayloads = trimmed
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trim())
+    .map((line) => {
+      const payload = line.slice(5).trim();
+      return isDataImageValue(line) && !isDataImageValue(payload) ? line : payload;
+    })
     .filter((line) => line && line !== '[DONE]');
+
+  const imagePayload = eventPayloads.find(isDataImageValue);
+  if (imagePayload) return { data: imagePayload };
 
   if (eventPayloads.length) {
     const events = eventPayloads

@@ -388,10 +388,12 @@ button:disabled {
 
 .image-board.has-images {
   display: block;
-  column-width: 150px;
-  column-gap: 12px;
-  max-width: min(1180px, 100%);
+  width: 100%;
+  max-width: min(1280px, 100%);
   margin: 0 auto;
+  column-width: 220px;
+  column-gap: 14px;
+  column-fill: balance;
 }
 
 .empty-canvas {
@@ -434,11 +436,12 @@ button:disabled {
 
 .result-card {
   position: relative;
-  display: inline-grid;
+  display: inline-block;
   width: 100%;
-  margin: 0 0 12px;
+  margin: 0 0 14px;
   overflow: hidden;
   break-inside: avoid;
+  page-break-inside: avoid;
   border: 2px solid var(--line);
   border-radius: var(--radius);
   background: var(--white);
@@ -505,8 +508,8 @@ button:disabled {
 .result-card img {
   display: block;
   width: 100%;
-  max-height: 220px;
-  object-fit: cover;
+  height: auto;
+  object-fit: contain;
   background: #ecece6;
 }
 
@@ -1740,7 +1743,7 @@ select option {
   }
 
   .image-board.has-images {
-    column-width: 140px;
+    column-width: 180px;
   }
 
   .image-detail-modal {
