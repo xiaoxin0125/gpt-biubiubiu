@@ -178,10 +178,22 @@ const normalizeForm = (value = {}) => {
   };
 };
 
+const DATA_IMAGE_URL_PATTERN = /^data:(image\/[a-z0-9.+-]+);base64,/i;
+
+const getDataImageMime = (value) => String(value || '').match(DATA_IMAGE_URL_PATTERN)?.[1] || '';
+
+const isDataImageValue = (value) => DATA_IMAGE_URL_PATTERN.test(String(value || ''));
+
+const stripDataImagePrefix = (value) => String(value || '').replace(DATA_IMAGE_URL_PATTERN, '');
+
 const createImageSrc = (image) => {
   if (image?.url) return image.url;
-  if (image?.b64_json) return `data:${image.imageMime || 'image/png'};base64,${image.b64_json}`;
-  return '';
+
+  const b64Json = String(image?.b64_json || '');
+  if (!b64Json) return '';
+  if (isDataImageValue(b64Json)) return b64Json;
+
+  return `data:${image.imageMime || 'image/png'};base64,${b64Json}`;
 };
 
 const normalizeImageSource = (source) => {
@@ -405,11 +417,13 @@ const imageMimeForOutputFormat = (format) => {
 };
 
 const normalizeDirectImageItem = (image, index, outputFormat) => {
-  const imageMime = image?.imageMime || image?.mime || imageMimeForOutputFormat(outputFormat);
-  const revisedPrompt = image?.revised_prompt || image?.revisedPrompt || image?.prompt_revised || '';
-  const sourceValue = typeof image === 'string'
+  const rawSourceValue = typeof image === 'string'
     ? image
     : image?.b64_json || image?.url || image?.data_url || image?.data || image?.image || image?.content || '';
+  const sourceValue = String(rawSourceValue || '');
+  const dataImageMime = getDataImageMime(sourceValue);
+  const imageMime = image?.imageMime || image?.mime || dataImageMime || imageMimeForOutputFormat(outputFormat);
+  const revisedPrompt = image?.revised_prompt || image?.revisedPrompt || image?.prompt_revised || '';
   const nextImage = {
     ...(image && typeof image === 'object' ? image : {}),
     id: image?.id || `${Date.now()}-${index}`,
@@ -418,10 +432,11 @@ const normalizeDirectImageItem = (image, index, outputFormat) => {
 
   if (revisedPrompt && !nextImage.revised_prompt) nextImage.revised_prompt = revisedPrompt;
 
-  if (sourceValue && typeof sourceValue === 'string') {
-    if (sourceValue.startsWith('data:image/')) {
-      nextImage.b64_json = sourceValue.split(',')[1] || '';
-      nextImage.imageMime = sourceValue.slice(5, sourceValue.indexOf(';')) || imageMime;
+  if (sourceValue) {
+    if (isDataImageValue(sourceValue)) {
+      nextImage.b64_json = stripDataImagePrefix(sourceValue);
+      nextImage.imageMime = dataImageMime || imageMime;
+      delete nextImage.url;
     } else if (/^https?:\/\//.test(sourceValue)) {
       nextImage.url = sourceValue;
     } else if (!nextImage.b64_json) {
@@ -1119,14 +1134,16 @@ function App() {
         return;
       }
 
+      const imageMime = getDataImageMime(image.b64_json) || image.imageMime || 'image/png';
+      const imageB64 = isDataImageValue(image.b64_json) ? stripDataImagePrefix(image.b64_json) : image.b64_json || '';
       const data = await requestJson('/api/wall', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           image: {
             url: image.url || '',
-            b64_json: image.b64_json || '',
-            mime: image.imageMime || 'image/png',
+            b64_json: imageB64,
+            mime: imageMime,
           },
           prompt: image.prompt || image.form?.prompt || form.prompt,
           revised_prompt: image.revised_prompt || '',
