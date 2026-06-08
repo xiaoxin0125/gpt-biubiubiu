@@ -469,7 +469,7 @@ button:disabled {
 .image-board.has-images {
   display: block;
   width: 100%;
-  max-width: min(1180px, 96vw);
+  max-width: 70%;
   margin: 10px auto;
   overflow-y: auto;
   overflow-x: hidden;
@@ -602,10 +602,6 @@ button:disabled {
   color: var(--white);
 }
 
-.result-card:hover {
-  transform: translate(-3px, -3px);
-  box-shadow: var(--shadow-hard);
-}
 
 .result-card.is-pending,
 .result-card.is-failed {
