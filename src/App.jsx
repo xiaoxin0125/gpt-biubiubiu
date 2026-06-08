@@ -1602,7 +1602,11 @@ function App() {
     setError('');
 
     try {
+      if (!user) throw new Error('请先登录后再操作上墙。');
+
       if (wallItem?.id) {
+        const ownerId = image.userId || image.user_id || wallItem.userId || wallItem.user_id;
+        if (!user.isAdmin && ownerId && Number(ownerId) !== Number(user.id)) throw new Error('只能取消自己上墙的作品。');
         await requestJson(`/api/wall/${wallItem.id}`, { method: 'DELETE' });
 
         setWallItems((items) => items.filter((item) => Number(item.id) !== Number(wallItem.id)));
@@ -1619,38 +1623,35 @@ function App() {
         return;
       }
 
-      const imageMime = getDataImageMime(image.b64_json) || image.imageMime || 'image/png';
-      const imageB64 = isDataImageValue(image.b64_json) ? stripDataImagePrefix(image.b64_json) : image.b64_json || '';
+      const sourceJobId = getGeneratedImageJobId(image);
+      if (!sourceJobId) throw new Error('请等待作品保存到服务器后再上墙。');
+
+      const wallForm = { ...(image.form || form), apiName: image.apiName || activeApiConfig?.apiName || status.apiName || defaultApiConfigItem.apiName, source: normalizeImageSource(image.source), sourceJobId };
       const data = await requestJson('/api/wall', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          image: {
-            url: createImageDownloadSrc(image) || image.url || '',
-            b64_json: imageB64,
-            mime: imageMime,
-          },
           prompt: image.prompt || image.form?.prompt || form.prompt,
           revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
           durationSeconds: getElapsedSeconds(image),
-          sourceJobId: image.sourceJobId || image.jobId || null,
-          form: { ...(image.form || form), apiName: image.apiName || activeApiConfig?.apiName || status.apiName || defaultApiConfigItem.apiName, source: normalizeImageSource(image.source), sourceJobId: image.sourceJobId || image.jobId || null },
-          params: { ...(image.form || form), apiName: image.apiName || activeApiConfig?.apiName || status.apiName || defaultApiConfigItem.apiName, source: normalizeImageSource(image.source), durationSeconds: getElapsedSeconds(image), sourceJobId: image.sourceJobId || image.jobId || null },
+          sourceJobId,
+          form: wallForm,
+          params: { ...wallForm, durationSeconds: getElapsedSeconds(image) },
         }),
       });
 
       const nextWallItem = data.item;
       setWallItems((items) => [nextWallItem, ...items.filter((item) => Number(item.id) !== Number(nextWallItem.id))]);
-      setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: nextWallItem.id, isOnWall: true } : item)));
+      setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: nextWallItem.id, isOnWall: true, userId: nextWallItem.userId } : item)));
       setHistory((items) => {
         const nextHistory = items.map((record) => ({
           ...record,
-          images: (record.images || []).map((item) => (isSameImage(item, image) ? { ...item, wallItemId: nextWallItem.id, isOnWall: true } : item)),
+          images: (record.images || []).map((item) => (isSameImage(item, image) ? { ...item, wallItemId: nextWallItem.id, isOnWall: true, userId: nextWallItem.userId } : item)),
         }));
         saveHistory(nextHistory);
         return nextHistory;
       });
-      setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: nextWallItem.id, isOnWall: true } : current));
+      setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: nextWallItem.id, isOnWall: true, userId: nextWallItem.userId } : current));
     } catch (wallError) {
       setError(wallError instanceof Error ? wallError.message : '作品墙操作失败');
     } finally {
@@ -1812,6 +1813,9 @@ function App() {
   const detailElapsed = detailElapsedSeconds === null ? '' : formatDuration(detailElapsedSeconds);
   const selectedWallItem = detailSrc ? findWallItem(selectedImage) : null;
   const selectedOnWall = Boolean(selectedWallItem);
+  const selectedOwnerId = selectedImage?.userId || selectedImage?.user_id || selectedWallItem?.userId || selectedWallItem?.user_id || null;
+  const selectedJobId = getGeneratedImageJobId(selectedImage);
+  const canManageSelectedWall = Boolean(user && (user.isAdmin || (selectedOwnerId && Number(selectedOwnerId) === Number(user.id)) || (!selectedOnWall && selectedJobId)));
   const busySelected = selectedImage && wallBusyId === String(selectedImage.wallItemId || selectedImage.id || detailSrc);
 
   const renderImageCard = (image) => {
@@ -2246,7 +2250,7 @@ function App() {
                   {view !== 'wall' ? (
                     <button type="button" className="secondary-action danger-action" onClick={() => deleteImage(selectedImage)}>删除</button>
                   ) : null}
-                  {detailSrc ? (
+                  {detailSrc && canManageSelectedWall ? (
                     <button type="button" className={selectedOnWall ? 'primary-action wall-button is-active' : 'primary-action wall-button'} onClick={() => toggleWall(selectedImage)} disabled={busySelected}>
                       {selectedOnWall ? '★ 取消上墙' : '☆ 上墙'}
                     </button>

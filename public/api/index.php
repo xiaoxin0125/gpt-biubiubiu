@@ -817,17 +817,14 @@ function compress_display_image(string $binary, string $originalMime, string $ta
     }
 
     $image = create_image_resource($binary, $originalMime);
-    if (!$image) {
-        file_put_contents($targetPath, $binary);
-        return ['path' => $targetPath, 'mime' => $originalMime, 'bytes' => filesize($targetPath) ?: strlen($binary)];
-    }
+    if (!$image) throw new RuntimeException('无法压缩展示图，请检查服务器 GD 图片扩展。');
 
     $targetMime = function_exists('imagewebp') ? 'image/webp' : 'image/jpeg';
     $targetPath = preg_replace('/\.[a-z0-9]+$/i', '.' . extension_for_mime($targetMime), $targetPath) ?: $targetPath;
     $width = imagesx($image);
     $height = imagesy($image);
-    $qualities = [88, 80, 72, 64, 56, 48, 40, 32];
-    $scales = [1, 0.9, 0.8, 0.7, 0.6, 0.5];
+    $qualities = [88, 80, 72, 64, 56, 48, 40, 32, 24, 18, 12];
+    $scales = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.42, 0.36, 0.3, 0.24, 0.18, 0.12];
     $bestPath = '';
     $bestBytes = PHP_INT_MAX;
 
@@ -858,9 +855,10 @@ function compress_display_image(string $binary, string $originalMime, string $ta
     }
 
     imagedestroy($image);
-    if ($bestPath === '') {
-        file_put_contents($targetPath, $binary);
-        return ['path' => $targetPath, 'mime' => $originalMime, 'bytes' => filesize($targetPath) ?: strlen($binary)];
+    if ($bestPath === '') throw new RuntimeException('展示图压缩失败。');
+    if ($bestBytes > WALL_DISPLAY_MAX_BYTES) {
+        if (is_file($bestPath)) @unlink($bestPath);
+        throw new RuntimeException('展示图无法压缩到 1M 以下。');
     }
 
     return ['path' => $bestPath, 'mime' => $targetMime, 'bytes' => $bestBytes];
@@ -1291,23 +1289,43 @@ function delete_generated_image_files(array $row): void
 
 function handle_delete_generated_image(array $user, int $id): array
 {
-    $stmt = pdo()->prepare('SELECT id, image_url, original_url, display_url FROM image_jobs WHERE id = ? AND user_id = ? LIMIT 1');
-    $stmt->execute([$id, (int) $user['id']]);
+    if (!empty($user['isAdmin'])) {
+        $stmt = pdo()->prepare('SELECT id, user_id, image_url, original_url, display_url, wall_item_id FROM image_jobs WHERE id = ? LIMIT 1');
+        $stmt->execute([$id]);
+    } else {
+        $stmt = pdo()->prepare('SELECT id, user_id, image_url, original_url, display_url, wall_item_id FROM image_jobs WHERE id = ? AND user_id = ? LIMIT 1');
+        $stmt->execute([$id, (int) $user['id']]);
+    }
     $row = $stmt->fetch();
     if (!$row) return ['ok' => true, 'deleted' => false];
 
+    if (!empty($row['wall_item_id'])) {
+        $stmt = pdo()->prepare('DELETE FROM wall_items WHERE id = ?');
+        $stmt->execute([(int) $row['wall_item_id']]);
+    }
+    $stmt = pdo()->prepare('DELETE FROM wall_items WHERE source_job_id = ?');
+    $stmt->execute([$id]);
+
     delete_generated_image_files($row);
-    $stmt = pdo()->prepare('DELETE FROM image_jobs WHERE id = ? AND user_id = ?');
-    $stmt->execute([$id, (int) $user['id']]);
+    $stmt = pdo()->prepare(!empty($user['isAdmin']) ? 'DELETE FROM image_jobs WHERE id = ?' : 'DELETE FROM image_jobs WHERE id = ? AND user_id = ?');
+    $stmt->execute(!empty($user['isAdmin']) ? [$id] : [$id, (int) $user['id']]);
     return ['ok' => true, 'deleted' => $stmt->rowCount() > 0];
 }
 
 function handle_clear_generated_images(array $user): array
 {
-    $stmt = pdo()->prepare('SELECT id, image_url, original_url, display_url FROM image_jobs WHERE user_id = ? AND status = ?');
+    $stmt = pdo()->prepare('SELECT id, image_url, original_url, display_url, wall_item_id FROM image_jobs WHERE user_id = ? AND status = ?');
     $stmt->execute([(int) $user['id'], 'completed']);
     $rows = $stmt->fetchAll();
-    foreach ($rows as $row) delete_generated_image_files($row);
+    foreach ($rows as $row) {
+        if (!empty($row['wall_item_id'])) {
+            $deleteWall = pdo()->prepare('DELETE FROM wall_items WHERE id = ?');
+            $deleteWall->execute([(int) $row['wall_item_id']]);
+        }
+        $deleteWall = pdo()->prepare('DELETE FROM wall_items WHERE source_job_id = ?');
+        $deleteWall->execute([(int) $row['id']]);
+        delete_generated_image_files($row);
+    }
 
     $stmt = pdo()->prepare('DELETE FROM image_jobs WHERE user_id = ? AND status = ?');
     $stmt->execute([(int) $user['id'], 'completed']);
@@ -1340,6 +1358,148 @@ function handle_save_generated_image(array $user, array $body): array
     $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? AND user_id = ? LIMIT 1');
     $stmt->execute([$jobId, (int) $user['id']]);
     return ['item' => client_generated_image($stmt->fetch())];
+}
+
+function image_job_params(array $job): array
+{
+    if (empty($job['params_json'])) return [];
+    $decoded = is_string($job['params_json']) ? json_decode($job['params_json'], true) : $job['params_json'];
+    if (!is_array($decoded)) return [];
+    if (is_array($decoded['form'] ?? null)) return $decoded['form'];
+    if (is_array($decoded['params'] ?? null)) return $decoded['params'];
+    if (is_array($decoded['payload'] ?? null)) return $decoded['payload'];
+    if (is_array($decoded['fields'] ?? null)) return $decoded['fields'];
+    return $decoded;
+}
+
+function wall_image_from_job(array $job): array
+{
+    $displayUrl = trim((string) (($job['display_url'] ?? '') ?: ($job['image_url'] ?? '')));
+    $originalUrl = trim((string) (($job['original_url'] ?? '') ?: $displayUrl));
+    if ($displayUrl === '' || $originalUrl === '') json_response(['error' => '作品没有可上墙的服务器图片'], 400);
+
+    $displayPath = local_public_file_from_url($displayUrl);
+    $originalPath = local_public_file_from_url($originalUrl);
+    $displayBytes = isset($job['display_bytes']) ? (int) $job['display_bytes'] : null;
+    $originalBytes = isset($job['original_bytes']) ? (int) $job['original_bytes'] : null;
+    if (!$displayBytes && $displayPath !== '' && is_file($displayPath)) $displayBytes = filesize($displayPath) ?: null;
+    if (!$originalBytes && $originalPath !== '' && is_file($originalPath)) $originalBytes = filesize($originalPath) ?: null;
+
+    return [
+        'imageMime' => (string) (($job['image_mime'] ?? '') ?: 'image/png'),
+        'originalPath' => $originalPath,
+        'displayPath' => $displayPath,
+        'originalUrl' => $originalUrl,
+        'displayUrl' => $displayUrl,
+        'originalBytes' => $originalBytes,
+        'displayBytes' => $displayBytes,
+    ];
+}
+
+function image_job_for_wall(array $user, int $sourceJobId): array
+{
+    if ($sourceJobId <= 0) json_response(['error' => '请先生成并保存作品后再上墙'], 400);
+
+    if (!empty($user['isAdmin'])) {
+        $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? AND status = ? LIMIT 1');
+        $stmt->execute([$sourceJobId, 'completed']);
+    } else {
+        $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? AND user_id = ? AND status = ? LIMIT 1');
+        $stmt->execute([$sourceJobId, (int) $user['id'], 'completed']);
+    }
+
+    $job = $stmt->fetch();
+    if (!$job) json_response(['error' => '只能上墙自己的已保存作品'], 403);
+    return $job;
+}
+
+function image_job_author_name(array $job, array $fallbackUser): string
+{
+    $userId = (int) ($job['user_id'] ?? 0);
+    if ($userId > 0) {
+        $stmt = pdo()->prepare('SELECT username, display_name FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([$userId]);
+        $row = $stmt->fetch();
+        if ($row) return trim((string) ($row['display_name'] ?? '')) ?: (string) $row['username'];
+    }
+
+    return (string) ($fallbackUser['displayName'] ?? ($fallbackUser['username'] ?? '未知艺术家'));
+}
+
+function handle_create_wall_item(array $user, array $body): array
+{
+    $sourceJobId = max(0, (int) ($body['sourceJobId'] ?? ($body['jobId'] ?? (($body['params']['sourceJobId'] ?? 0) ?: 0))));
+    $job = image_job_for_wall($user, $sourceJobId);
+
+    if (!empty($job['wall_item_id'])) {
+        $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
+        $stmt->execute([(int) $job['wall_item_id']]);
+        $existing = $stmt->fetch();
+        if ($existing) return ['item' => client_wall_item($existing)];
+    }
+
+    $storedImage = wall_image_from_job($job);
+    $form = is_array($body['form'] ?? null) ? $body['form'] : [];
+    $bodyParams = is_array($body['params'] ?? null) ? $body['params'] : $form;
+    $params = $bodyParams ?: image_job_params($job);
+    $duration = isset($body['durationSeconds']) ? max(0, (int) $body['durationSeconds']) : (isset($params['durationSeconds']) ? max(0, (int) $params['durationSeconds']) : null);
+    if ($duration !== null) $params['durationSeconds'] = $duration;
+    $params['sourceJobId'] = $sourceJobId;
+    $params['source'] = normalize_job_mode((string) ($job['mode'] ?? ($params['source'] ?? 'generation')));
+
+    $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? ($job['prompt'] ?? '未命名作品'))));
+    $revisedPrompt = extract_revised_prompt($body) ?: trim((string) ($job['revised_prompt'] ?? ''));
+    $ownerId = (int) ($job['user_id'] ?? $user['id']);
+    $authorName = image_job_author_name($job, $user);
+
+    $stmt = pdo()->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, original_url, display_url, original_path, display_path, original_bytes, display_bytes, duration_seconds, params_json, source_job_id) VALUES (?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([
+        $ownerId ?: null,
+        $authorName,
+        $prompt ?: '未命名作品',
+        $revisedPrompt !== '' ? $revisedPrompt : null,
+        $storedImage['displayUrl'],
+        $storedImage['imageMime'],
+        $storedImage['originalUrl'],
+        $storedImage['displayUrl'],
+        $storedImage['originalPath'] ?: null,
+        $storedImage['displayPath'] ?: null,
+        $storedImage['originalBytes'],
+        $storedImage['displayBytes'],
+        $duration,
+        json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        $sourceJobId,
+    ]);
+
+    $wallItemId = (int) pdo()->lastInsertId();
+    $stmt = pdo()->prepare('UPDATE image_jobs SET wall_item_id = ? WHERE id = ?');
+    $stmt->execute([$wallItemId, $sourceJobId]);
+
+    $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
+    $stmt->execute([$wallItemId]);
+    return ['item' => client_wall_item($stmt->fetch())];
+}
+
+function handle_delete_wall_item(array $user, int $id): array
+{
+    $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
+    $stmt->execute([$id]);
+    $item = $stmt->fetch();
+    if (!$item) json_response(['error' => '作品不存在'], 404);
+
+    $isOwner = !empty($item['user_id']) && (int) $item['user_id'] === (int) $user['id'];
+    if (!$isOwner && empty($user['isAdmin'])) json_response(['error' => '只能取消自己上墙的作品'], 403);
+
+    if (!empty($item['source_job_id'])) {
+        $stmt = pdo()->prepare('UPDATE image_jobs SET wall_item_id = NULL WHERE id = ?');
+        $stmt->execute([(int) $item['source_job_id']]);
+    }
+    $stmt = pdo()->prepare('UPDATE image_jobs SET wall_item_id = NULL WHERE wall_item_id = ?');
+    $stmt->execute([$id]);
+
+    $stmt = pdo()->prepare('DELETE FROM wall_items WHERE id = ?');
+    $stmt->execute([$id]);
+    return ['ok' => true];
 }
 
 function normalize_job_mode(string $mode): string
@@ -1447,12 +1607,16 @@ function client_wall_item(array $item): array
     return [
         'id' => (int) ($item['id'] ?? 0),
         'wallItemId' => (int) ($item['id'] ?? 0),
+        'userId' => isset($item['user_id']) ? (int) $item['user_id'] : null,
+        'sourceJobId' => isset($item['source_job_id']) ? (int) $item['source_job_id'] : null,
         'url' => $displayUrl,
         'image_url' => $displayUrl,
         'downloadUrl' => $originalUrl,
         'originalUrl' => $originalUrl,
         'b64_json' => $displayUrl ? '' : (string) ($item['image_b64'] ?? ''),
         'imageMime' => (string) (($item['image_mime'] ?? '') ?: 'image/png'),
+        'originalBytes' => isset($item['original_bytes']) ? (int) $item['original_bytes'] : null,
+        'displayBytes' => isset($item['display_bytes']) ? (int) $item['display_bytes'] : null,
         'prompt' => (string) (($item['prompt'] ?? '') ?: ''),
         'revised_prompt' => (string) (($item['revised_prompt'] ?? '') ?: ''),
         'form' => $params,
@@ -1715,70 +1879,13 @@ try {
     }
 
     if ($method === 'POST' && $route === '/wall') {
-        require_database();
-        $image = is_array($body['image'] ?? null) ? $body['image'] : [];
-        $storedImage = save_wall_image($image);
-        $user = current_user();
-        $visitorId = $user ? null : visitor_id();
-        $form = is_array($body['form'] ?? null) ? $body['form'] : [];
-        $params = is_array($body['params'] ?? null) ? $body['params'] : $form;
-        $duration = isset($body['durationSeconds']) ? max(0, (int) $body['durationSeconds']) : (isset($params['durationSeconds']) ? max(0, (int) $params['durationSeconds']) : null);
-        if ($duration !== null) $params['durationSeconds'] = $duration;
-        $sourceJobId = max(0, (int) ($body['sourceJobId'] ?? ($body['jobId'] ?? ($params['sourceJobId'] ?? 0))));
-        $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? '未命名作品')));
-        $revisedPrompt = extract_revised_prompt($body);
-        $stmt = pdo()->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, original_url, display_url, original_path, display_path, original_bytes, display_bytes, duration_seconds, params_json, source_job_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        $stmt->execute([
-            $user['id'] ?? null,
-            $visitorId,
-            $user['displayName'] ?? ($user['username'] ?? '未知艺术家'),
-            $prompt ?: '未命名作品',
-            $revisedPrompt !== '' ? $revisedPrompt : null,
-            $storedImage['displayUrl'],
-            null,
-            $storedImage['imageMime'],
-            $storedImage['originalUrl'],
-            $storedImage['displayUrl'],
-            $storedImage['originalPath'],
-            $storedImage['displayPath'],
-            $storedImage['originalBytes'],
-            $storedImage['displayBytes'],
-            $duration,
-            json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-            $sourceJobId > 0 ? $sourceJobId : null,
-        ]);
-        $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
-        $wallItemId = (int) pdo()->lastInsertId();
-        if ($sourceJobId > 0 && $user) {
-            $updateJob = pdo()->prepare('UPDATE image_jobs SET wall_item_id = ? WHERE id = ? AND user_id = ?');
-            $updateJob->execute([$wallItemId, $sourceJobId, (int) $user['id']]);
-        }
-        $stmt->execute([$wallItemId]);
-        json_response(['item' => client_wall_item($stmt->fetch())]);
+        $user = require_user();
+        json_response(handle_create_wall_item($user, $body));
     }
 
     if ($method === 'DELETE' && preg_match('#^/wall/(\d+)$#', $route, $matches)) {
-        require_database();
-        $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
-        $stmt->execute([(int) $matches[1]]);
-        $item = $stmt->fetch();
-        if (!$item) json_response(['error' => '作品不存在'], 404);
-        $user = current_user();
-        $currentVisitor = unsign_value($_COOKIE['visitor_id'] ?? '');
-        $isOwner = $item['user_id'] ? ((int) $item['user_id'] === (int) ($user['id'] ?? 0)) : (!empty($item['client_id']) && $item['client_id'] === $currentVisitor);
-        $canDelete = $isOwner || !empty($user['isAdmin']);
-        if (!$canDelete) json_response(['error' => '只能取消自己上墙的作品'], 403);
-        foreach (['original_path', 'display_path'] as $pathKey) {
-            $path = (string) ($item[$pathKey] ?? '');
-            if ($path && is_file($path)) @unlink($path);
-        }
-        if (!empty($item['source_job_id'])) {
-            $stmt = pdo()->prepare('UPDATE image_jobs SET wall_item_id = NULL WHERE id = ?');
-            $stmt->execute([(int) $item['source_job_id']]);
-        }
-        $stmt = pdo()->prepare('DELETE FROM wall_items WHERE id = ?');
-        $stmt->execute([(int) $matches[1]]);
-        json_response(['ok' => true]);
+        $user = require_user();
+        json_response(handle_delete_wall_item($user, (int) $matches[1]));
     }
 
     json_response(['error' => '接口不存在', 'route' => $route], 404);
