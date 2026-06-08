@@ -12,6 +12,9 @@ define('MAX_REQUEST_TIMEOUT', 999);
 define('REQUEST_TIMEOUT_BUFFER', 60);
 define('WALL_DISPLAY_MAX_BYTES', 1048576);
 define('IMAGE_REQUEST_LOG_LIMIT', 5);
+define('DEFAULT_API_NAME', 'OpenAI gpt-image-2');
+define('DEFAULT_API_BASE_URL', 'https://api.openai.com');
+define('DEFAULT_IMAGE_MODEL', 'gpt-image-2');
 
 @ini_set('max_execution_time', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
 @ini_set('default_socket_timeout', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
@@ -172,8 +175,8 @@ function ensure_schema(): void
     $db->exec("CREATE TABLE IF NOT EXISTS user_api_configs (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       user_id BIGINT UNSIGNED NOT NULL,
-      api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI Compatible',
-      api_base_url VARCHAR(255) NOT NULL DEFAULT '',
+      api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
+      api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
       model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
       request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
       api_key_ciphertext TEXT DEFAULT NULL,
@@ -197,6 +200,12 @@ function ensure_schema(): void
       revised_prompt TEXT DEFAULT NULL,
       error_message TEXT DEFAULT NULL,
       image_url TEXT DEFAULT NULL,
+      original_url TEXT DEFAULT NULL,
+      display_url TEXT DEFAULT NULL,
+      image_mime VARCHAR(80) DEFAULT 'image/png',
+      original_bytes BIGINT UNSIGNED DEFAULT NULL,
+      display_bytes BIGINT UNSIGNED DEFAULT NULL,
+      wall_item_id BIGINT UNSIGNED DEFAULT NULL,
       image_b64 LONGTEXT DEFAULT NULL,
       params_json JSON DEFAULT NULL,
       result_json JSON DEFAULT NULL,
@@ -238,6 +247,22 @@ function ensure_schema(): void
     ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');
     ensure_column($db, 'user_settings', 'stream', 'stream TINYINT(1) NOT NULL DEFAULT 0 AFTER request_timeout');
     ensure_column($db, 'user_settings', 'active_api_config_id', 'active_api_config_id BIGINT UNSIGNED DEFAULT NULL AFTER stream');
+    ensure_column($db, 'user_settings', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER active_api_config_id');
+    ensure_column($db, 'user_settings', 'api_key_iv', 'api_key_iv VARCHAR(64) DEFAULT NULL AFTER api_key_ciphertext');
+    ensure_column($db, 'user_settings', 'api_key_tag', 'api_key_tag VARCHAR(64) DEFAULT NULL AFTER api_key_iv');
+    ensure_column($db, 'user_settings', 'api_key_hint', 'api_key_hint VARCHAR(24) DEFAULT NULL AFTER api_key_tag');
+    ensure_column($db, 'user_api_configs', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER request_timeout');
+    ensure_column($db, 'user_api_configs', 'api_key_iv', 'api_key_iv VARCHAR(64) DEFAULT NULL AFTER api_key_ciphertext');
+    ensure_column($db, 'user_api_configs', 'api_key_tag', 'api_key_tag VARCHAR(64) DEFAULT NULL AFTER api_key_iv');
+    ensure_column($db, 'user_api_configs', 'api_key_hint', 'api_key_hint VARCHAR(24) DEFAULT NULL AFTER api_key_tag');
+    ensure_column($db, 'wall_items', 'user_id', 'user_id BIGINT UNSIGNED DEFAULT NULL AFTER id');
+    ensure_column($db, 'wall_items', 'client_id', 'client_id VARCHAR(80) DEFAULT NULL AFTER user_id');
+    ensure_column($db, 'wall_items', 'author_name', 'author_name VARCHAR(96) NOT NULL DEFAULT ' . $db->quote('未知艺术家') . ' AFTER client_id');
+    ensure_column($db, 'wall_items', 'prompt', 'prompt TEXT DEFAULT NULL AFTER author_name');
+    ensure_column($db, 'wall_items', 'revised_prompt', 'revised_prompt TEXT DEFAULT NULL AFTER prompt');
+    ensure_column($db, 'wall_items', 'image_url', 'image_url TEXT DEFAULT NULL AFTER revised_prompt');
+    ensure_column($db, 'wall_items', 'image_b64', 'image_b64 LONGTEXT DEFAULT NULL AFTER image_url');
+    ensure_column($db, 'wall_items', 'image_mime', 'image_mime VARCHAR(80) DEFAULT ' . $db->quote('image/png') . ' AFTER image_b64');
     ensure_column($db, 'wall_items', 'original_url', 'original_url TEXT DEFAULT NULL AFTER image_mime');
     ensure_column($db, 'wall_items', 'display_url', 'display_url TEXT DEFAULT NULL AFTER original_url');
     ensure_column($db, 'wall_items', 'original_path', 'original_path TEXT DEFAULT NULL AFTER display_url');
@@ -245,7 +270,28 @@ function ensure_schema(): void
     ensure_column($db, 'wall_items', 'original_bytes', 'original_bytes BIGINT UNSIGNED DEFAULT NULL AFTER display_path');
     ensure_column($db, 'wall_items', 'display_bytes', 'display_bytes BIGINT UNSIGNED DEFAULT NULL AFTER original_bytes');
     ensure_column($db, 'wall_items', 'duration_seconds', 'duration_seconds INT UNSIGNED DEFAULT NULL AFTER display_bytes');
+    ensure_column($db, 'wall_items', 'params_json', 'params_json JSON DEFAULT NULL AFTER duration_seconds');
     ensure_column($db, 'wall_items', 'source_job_id', 'source_job_id BIGINT UNSIGNED DEFAULT NULL AFTER params_json');
+    ensure_column($db, 'wall_items', 'created_at', 'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER source_job_id');
+    ensure_column($db, 'image_jobs', 'user_id', 'user_id BIGINT UNSIGNED DEFAULT NULL AFTER id');
+    ensure_column($db, 'image_jobs', 'request_id', 'request_id VARCHAR(80) DEFAULT NULL AFTER user_id');
+    ensure_column($db, 'image_jobs', 'mode', 'mode VARCHAR(32) NOT NULL DEFAULT ' . $db->quote('generation') . ' AFTER request_id');
+    ensure_column($db, 'image_jobs', 'status', 'status VARCHAR(32) NOT NULL DEFAULT ' . $db->quote('completed') . ' AFTER mode');
+    ensure_column($db, 'image_jobs', 'prompt', 'prompt TEXT DEFAULT NULL AFTER status');
+    ensure_column($db, 'image_jobs', 'revised_prompt', 'revised_prompt TEXT DEFAULT NULL AFTER prompt');
+    ensure_column($db, 'image_jobs', 'error_message', 'error_message TEXT DEFAULT NULL AFTER revised_prompt');
+    ensure_column($db, 'image_jobs', 'image_url', 'image_url TEXT DEFAULT NULL AFTER error_message');
+    ensure_column($db, 'image_jobs', 'original_url', 'original_url TEXT DEFAULT NULL AFTER image_url');
+    ensure_column($db, 'image_jobs', 'display_url', 'display_url TEXT DEFAULT NULL AFTER original_url');
+    ensure_column($db, 'image_jobs', 'image_mime', 'image_mime VARCHAR(80) DEFAULT ' . $db->quote('image/png') . ' AFTER display_url');
+    ensure_column($db, 'image_jobs', 'original_bytes', 'original_bytes BIGINT UNSIGNED DEFAULT NULL AFTER image_mime');
+    ensure_column($db, 'image_jobs', 'display_bytes', 'display_bytes BIGINT UNSIGNED DEFAULT NULL AFTER original_bytes');
+    ensure_column($db, 'image_jobs', 'wall_item_id', 'wall_item_id BIGINT UNSIGNED DEFAULT NULL AFTER display_bytes');
+    ensure_column($db, 'image_jobs', 'image_b64', 'image_b64 LONGTEXT DEFAULT NULL AFTER wall_item_id');
+    ensure_column($db, 'image_jobs', 'params_json', 'params_json JSON DEFAULT NULL AFTER image_b64');
+    ensure_column($db, 'image_jobs', 'result_json', 'result_json JSON DEFAULT NULL AFTER params_json');
+    ensure_column($db, 'image_jobs', 'created_at', 'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER result_json');
+    ensure_column($db, 'image_jobs', 'completed_at', 'completed_at TIMESTAMP NULL DEFAULT NULL AFTER created_at');
     ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
 
@@ -411,9 +457,9 @@ function config_from_row(array $row): array
 {
     return [
         'id' => (int) $row['id'],
-        'apiName' => $row['api_name'] ?: 'OpenAI Compatible',
-        'apiBaseUrl' => $row['api_base_url'] ?: '',
-        'model' => $row['model'] ?: 'gpt-image-2',
+        'apiName' => $row['api_name'] ?: DEFAULT_API_NAME,
+        'apiBaseUrl' => $row['api_base_url'] ?: DEFAULT_API_BASE_URL,
+        'model' => $row['model'] ?: DEFAULT_IMAGE_MODEL,
         'requestTimeout' => (int) ($row['request_timeout'] ?: DEFAULT_REQUEST_TIMEOUT),
         'hasApiKey' => !empty($row['api_key_ciphertext']),
         'apiKeyHint' => $row['api_key_hint'] ?: '',
@@ -424,9 +470,9 @@ function config_from_row(array $row): array
 function legacy_settings_config(array $settings): array
 {
     return [
-        'apiName' => trim((string) ($settings['api_name'] ?? '')) ?: 'OpenAI Compatible',
-        'apiBaseUrl' => trim((string) ($settings['api_base_url'] ?? '')),
-        'model' => trim((string) ($settings['model'] ?? '')) ?: 'gpt-image-2',
+        'apiName' => trim((string) ($settings['api_name'] ?? '')) ?: DEFAULT_API_NAME,
+        'apiBaseUrl' => trim((string) ($settings['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
+        'model' => trim((string) ($settings['model'] ?? '')) ?: DEFAULT_IMAGE_MODEL,
         'requestTimeout' => normalize_request_timeout($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
         'api_key_ciphertext' => $settings['api_key_ciphertext'] ?? null,
         'api_key_iv' => $settings['api_key_iv'] ?? null,
@@ -519,9 +565,9 @@ function settings_for_user(int $userId): ?array
         'activeApiConfigId' => $activeClient['id'] ?? null,
         'apiConfigs' => array_map('config_from_row', $configs),
         'activeConfig' => $activeClient,
-        'model' => $activeClient['model'] ?? 'gpt-image-2',
-        'apiName' => $activeClient['apiName'] ?? 'OpenAI Compatible',
-        'apiBaseUrl' => $activeClient['apiBaseUrl'] ?? '',
+        'model' => $activeClient['model'] ?? DEFAULT_IMAGE_MODEL,
+        'apiName' => $activeClient['apiName'] ?? DEFAULT_API_NAME,
+        'apiBaseUrl' => $activeClient['apiBaseUrl'] ?? DEFAULT_API_BASE_URL,
         'requestTimeout' => $activeClient['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT,
         'hasApiKey' => $activeClient['hasApiKey'] ?? false,
         'apiKeyHint' => $activeClient['apiKeyHint'] ?? '',
@@ -1137,9 +1183,11 @@ function proxy_result_images(array $normalized, string $outputFormat): array
 
 function save_image_job(array $user, string $requestId, string $mode, string $prompt, array $params, array $result, ?string $error = null): int
 {
-    $stmt = pdo()->prepare('INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, revised_prompt, error_message, image_url, image_b64, params_json, result_json, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
     $firstImage = $result['data'][0] ?? [];
     $revisedPrompt = extract_revised_prompt($firstImage) ?: extract_revised_prompt($result);
+    $displayUrl = (string) ($firstImage['url'] ?? ($firstImage['image_url'] ?? ''));
+    $originalUrl = (string) ($firstImage['downloadUrl'] ?? ($firstImage['originalUrl'] ?? ($firstImage['original_url'] ?? $displayUrl)));
+    $stmt = pdo()->prepare('INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, revised_prompt, error_message, image_url, original_url, display_url, image_mime, original_bytes, display_bytes, image_b64, params_json, result_json, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
     $stmt->execute([
         $user['id'],
         $requestId,
@@ -1148,12 +1196,160 @@ function save_image_job(array $user, string $requestId, string $mode, string $pr
         $prompt,
         $revisedPrompt,
         $error,
-        $firstImage['url'] ?? '',
+        $displayUrl,
+        $originalUrl,
+        $displayUrl,
+        $firstImage['imageMime'] ?? ($firstImage['image_mime'] ?? 'image/png'),
+        isset($firstImage['originalBytes']) ? (int) $firstImage['originalBytes'] : null,
+        isset($firstImage['displayBytes']) ? (int) $firstImage['displayBytes'] : null,
         '',
         json_encode(sanitize_log_payload($params), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         json_encode(sanitize_log_payload($result), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
     ]);
     return (int) pdo()->lastInsertId();
+}
+
+function client_generated_image(array $item): array
+{
+    $params = [];
+    if (!empty($item['params_json'])) {
+        $decoded = is_string($item['params_json']) ? json_decode($item['params_json'], true) : $item['params_json'];
+        $params = is_array($decoded) ? $decoded : [];
+    }
+
+    $result = [];
+    if (!empty($item['result_json'])) {
+        $decoded = is_string($item['result_json']) ? json_decode($item['result_json'], true) : $item['result_json'];
+        $result = is_array($decoded) ? $decoded : [];
+    }
+
+    $id = (int) ($item['id'] ?? 0);
+    $firstImage = $result['data'][0] ?? [];
+    $directImageUrl = (string) (($item['display_url'] ?? '') ?: (($item['image_url'] ?? '') ?: ''));
+    $displayUrl = (string) ($directImageUrl ?: ($firstImage['url'] ?? ($firstImage['image_url'] ?? '')));
+    $originalUrl = (string) (($item['original_url'] ?? '') ?: ($firstImage['downloadUrl'] ?? ($firstImage['originalUrl'] ?? ($firstImage['original_url'] ?? $displayUrl))));
+    $imageParams = is_array($params['form'] ?? null) ? $params['form'] : (is_array($params['payload'] ?? null) ? $params['payload'] : (is_array($params['fields'] ?? null) ? $params['fields'] : $params));
+    $completedAt = (string) (($item['completed_at'] ?? '') ?: '');
+    $createdAt = $completedAt ?: (string) (($item['created_at'] ?? '') ?: date(DATE_ATOM));
+
+    return [
+        'id' => 'job-' . $id,
+        'jobId' => $id,
+        'sourceJobId' => $id,
+        'wallItemId' => !empty($item['wall_item_id']) ? (int) $item['wall_item_id'] : null,
+        'requestId' => (string) (($item['request_id'] ?? '') ?: ('job-' . $id)),
+        'status' => (string) (($item['status'] ?? '') ?: 'completed'),
+        'url' => $displayUrl,
+        'image_url' => $displayUrl,
+        'downloadUrl' => $originalUrl,
+        'originalUrl' => $originalUrl,
+        'b64_json' => '',
+        'imageMime' => (string) (($item['image_mime'] ?? '') ?: ($firstImage['imageMime'] ?? 'image/png')),
+        'originalBytes' => isset($item['original_bytes']) ? (int) $item['original_bytes'] : ($firstImage['originalBytes'] ?? null),
+        'displayBytes' => isset($item['display_bytes']) ? (int) $item['display_bytes'] : ($firstImage['displayBytes'] ?? null),
+        'prompt' => (string) (($item['prompt'] ?? '') ?: ($imageParams['prompt'] ?? '')),
+        'revised_prompt' => (string) (($item['revised_prompt'] ?? '') ?: ($firstImage['revised_prompt'] ?? '')),
+        'form' => $imageParams,
+        'apiName' => (string) ($imageParams['apiName'] ?? ($imageParams['api_name'] ?? '')),
+        'authorName' => '',
+        'createdAt' => $createdAt,
+        'finishedAt' => $completedAt ?: null,
+        'isOnWall' => !empty($item['wall_item_id']),
+        'source' => ($item['mode'] ?? '') === 'edit' ? 'edit' : 'generation',
+    ];
+}
+
+function handle_generated_images(array $user): array
+{
+    $stmt = pdo()->prepare("SELECT id, user_id, request_id, mode, status, prompt, revised_prompt, image_url, original_url, display_url, image_mime, original_bytes, display_bytes, wall_item_id, params_json, created_at, completed_at FROM image_jobs WHERE user_id = ? AND status = ? AND CONCAT(COALESCE(display_url, ''), COALESCE(image_url, ''), COALESCE(original_url, '')) <> '' ORDER BY completed_at DESC, created_at DESC LIMIT 80");
+    $stmt->execute([(int) $user['id'], 'completed']);
+    return ['items' => array_map('client_generated_image', $stmt->fetchAll())];
+}
+
+function local_public_file_from_url(string $url): string
+{
+    $path = parse_url($url, PHP_URL_PATH) ?: $url;
+    if ($path === '') return '';
+    $candidate = realpath(public_base_dir() . '/' . ltrim($path, '/'));
+    $root = realpath(public_base_dir());
+    if (!$candidate || !$root || strpos(str_replace('\\', '/', $candidate), rtrim(str_replace('\\', '/', $root), '/') . '/') !== 0) return '';
+    return is_file($candidate) ? $candidate : '';
+}
+
+function delete_generated_image_files(array $row): void
+{
+    $seen = [];
+    foreach (['display_url', 'original_url', 'image_url'] as $key) {
+        $url = trim((string) ($row[$key] ?? ''));
+        if ($url === '' || preg_match('#^https?://#i', $url)) continue;
+        $path = local_public_file_from_url($url);
+        if ($path === '' || isset($seen[$path])) continue;
+        $seen[$path] = true;
+        @unlink($path);
+    }
+}
+
+function handle_delete_generated_image(array $user, int $id): array
+{
+    $stmt = pdo()->prepare('SELECT id, image_url, original_url, display_url FROM image_jobs WHERE id = ? AND user_id = ? LIMIT 1');
+    $stmt->execute([$id, (int) $user['id']]);
+    $row = $stmt->fetch();
+    if (!$row) return ['ok' => true, 'deleted' => false];
+
+    delete_generated_image_files($row);
+    $stmt = pdo()->prepare('DELETE FROM image_jobs WHERE id = ? AND user_id = ?');
+    $stmt->execute([$id, (int) $user['id']]);
+    return ['ok' => true, 'deleted' => $stmt->rowCount() > 0];
+}
+
+function handle_clear_generated_images(array $user): array
+{
+    $stmt = pdo()->prepare('SELECT id, image_url, original_url, display_url FROM image_jobs WHERE user_id = ? AND status = ?');
+    $stmt->execute([(int) $user['id'], 'completed']);
+    $rows = $stmt->fetchAll();
+    foreach ($rows as $row) delete_generated_image_files($row);
+
+    $stmt = pdo()->prepare('DELETE FROM image_jobs WHERE user_id = ? AND status = ?');
+    $stmt->execute([(int) $user['id'], 'completed']);
+    return ['ok' => true, 'deleted' => $stmt->rowCount()];
+}
+
+function handle_save_generated_image(array $user, array $body): array
+{
+    $image = is_array($body['image'] ?? null) ? $body['image'] : [];
+    $form = is_array($body['form'] ?? null) ? $body['form'] : [];
+    $params = is_array($body['params'] ?? null) ? $body['params'] : $form;
+    $stored = save_wall_image($image);
+    $requestId = preg_replace('/[^a-zA-Z0-9_.-]/', '-', (string) ($body['requestId'] ?? ($body['request_id'] ?? ('request-' . time()))));
+    $mode = normalize_job_mode((string) ($body['mode'] ?? ($params['source'] ?? 'generation')));
+    $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? ($params['prompt'] ?? ''))));
+    $revisedPrompt = normalize_revised_prompt($body);
+    $resultImage = [
+        'url' => $stored['displayUrl'],
+        'image_url' => $stored['displayUrl'],
+        'downloadUrl' => $stored['originalUrl'],
+        'originalUrl' => $stored['originalUrl'],
+        'imageMime' => $stored['imageMime'],
+        'originalBytes' => $stored['originalBytes'],
+        'displayBytes' => $stored['displayBytes'],
+    ];
+    if ($revisedPrompt !== '') $resultImage['revised_prompt'] = $revisedPrompt;
+
+    $result = ['data' => [$resultImage]];
+    $jobId = save_image_job($user, $requestId, $mode, $prompt ?: '未命名作品', ['form' => $form, 'params' => $params], $result);
+    $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? AND user_id = ? LIMIT 1');
+    $stmt->execute([$jobId, (int) $user['id']]);
+    return ['item' => client_generated_image($stmt->fetch())];
+}
+
+function normalize_job_mode(string $mode): string
+{
+    return $mode === 'edit' ? 'edit' : 'generation';
+}
+
+function normalize_revised_prompt(array $body): string
+{
+    return extract_revised_prompt($body);
 }
 
 function handle_proxy_generation(array $user, array $body): array
@@ -1243,24 +1439,26 @@ function client_wall_item(array $item): array
         $params = is_array($decoded) ? $decoded : [];
     }
 
-    $displayUrl = $item['display_url'] ?: ($item['image_url'] ?: '');
-    $originalUrl = $item['original_url'] ?: ($item['image_url'] ?: $displayUrl);
+    $displayUrl = (string) (($item['display_url'] ?? '') ?: ($item['image_url'] ?? ''));
+    $originalUrl = (string) (($item['original_url'] ?? '') ?: (($item['image_url'] ?? '') ?: $displayUrl));
     $duration = $item['duration_seconds'] ?? ($params['durationSeconds'] ?? null);
+    $createdAt = (string) (($item['created_at'] ?? '') ?: date(DATE_ATOM));
 
     return [
-        'id' => (int) $item['id'],
-        'wallItemId' => (int) $item['id'],
+        'id' => (int) ($item['id'] ?? 0),
+        'wallItemId' => (int) ($item['id'] ?? 0),
         'url' => $displayUrl,
         'image_url' => $displayUrl,
         'downloadUrl' => $originalUrl,
         'originalUrl' => $originalUrl,
-        'b64_json' => $displayUrl ? '' : ($item['image_b64'] ?: ''),
-        'imageMime' => $item['image_mime'] ?: 'image/png',
-        'prompt' => $item['prompt'] ?: '',
-        'revised_prompt' => $item['revised_prompt'] ?: '',
+        'b64_json' => $displayUrl ? '' : (string) ($item['image_b64'] ?? ''),
+        'imageMime' => (string) (($item['image_mime'] ?? '') ?: 'image/png'),
+        'prompt' => (string) (($item['prompt'] ?? '') ?: ''),
+        'revised_prompt' => (string) (($item['revised_prompt'] ?? '') ?: ''),
         'form' => $params,
-        'authorName' => $item['author_name'] ?: '未知艺术家',
-        'createdAt' => $item['created_at'],
+        'apiName' => (string) ($params['apiName'] ?? ($params['api_name'] ?? '')),
+        'authorName' => (string) (($item['author_name'] ?? '') ?: '未知艺术家'),
+        'createdAt' => $createdAt,
         'durationSeconds' => $duration !== null && $duration !== '' ? (int) $duration : null,
         'isOnWall' => true,
         'source' => $params['source'] ?? (($params['referenceName'] ?? '') !== '' ? 'edit' : 'generation'),
@@ -1320,11 +1518,19 @@ function save_request_log(array $body): array
 function route_path(): string
 {
     $route = $_GET['route'] ?? '';
+    if ($route === '') {
+        $query = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_QUERY) ?: '';
+        if ($query !== '') {
+            parse_str($query, $queryParams);
+            $route = $queryParams['route'] ?? '';
+        }
+    }
     if ($route !== '') return '/' . ltrim((string) $route, '/');
 
     $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
     $pos = strpos($uri, '/api');
-    return $pos === false ? '/' : '/' . ltrim(substr($uri, $pos + 4), '/');
+    $path = $pos === false ? $uri : '/' . ltrim(substr($uri, $pos + 4), '/');
+    return $path === '/index.php' ? '/' : $path;
 }
 
 try {
@@ -1335,7 +1541,7 @@ try {
 
     if ($method === 'GET' && $route === '/health') {
         $configured = false;
-        $apiName = 'OpenAI Compatible';
+        $apiName = DEFAULT_API_NAME;
         try {
             ensure_schema();
             $settings = stored_user_settings();
@@ -1351,8 +1557,8 @@ try {
             'configured' => $configured,
             'mysqlConfigured' => true,
             'apiName' => $apiName,
-            'baseUrl' => rtrim((string) cfg('openai_base_url', 'https://api.openai.com'), '/'),
-            'defaultImageModel' => cfg('openai_image_model', 'gpt-image-2'),
+            'baseUrl' => rtrim((string) cfg('openai_base_url', DEFAULT_API_BASE_URL), '/'),
+            'defaultImageModel' => cfg('openai_image_model', DEFAULT_IMAGE_MODEL),
         ]);
     }
 
@@ -1466,6 +1672,33 @@ try {
         json_response(save_request_log($body));
     }
 
+    if ($method === 'GET' && $route === '/generated-images') {
+        $user = require_user();
+        json_response(handle_generated_images($user));
+    }
+
+    if ($method === 'POST' && $route === '/generated-images') {
+        $user = require_user();
+        json_response(handle_save_generated_image($user, $body));
+    }
+
+    if ($method === 'DELETE' && $route === '/generated-images') {
+        $user = require_user();
+        json_response(handle_clear_generated_images($user));
+    }
+
+    if ($method === 'DELETE' && preg_match('#^/generated-images/(\d+)$#', $route, $matches)) {
+        $user = require_user();
+        json_response(handle_delete_generated_image($user, (int) $matches[1]));
+    }
+
+    if ($method === 'GET' && $route === '/wall/mine') {
+        $user = require_user();
+        $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE user_id = ? ORDER BY created_at DESC LIMIT 80');
+        $stmt->execute([(int) $user['id']]);
+        json_response(['items' => array_map('client_wall_item', $stmt->fetchAll())]);
+    }
+
     if ($method === 'GET' && $route === '/wall') {
         require_database();
         $rows = pdo()->query('SELECT * FROM wall_items ORDER BY created_at DESC LIMIT 80')->fetchAll();
@@ -1515,7 +1748,12 @@ try {
             $sourceJobId > 0 ? $sourceJobId : null,
         ]);
         $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
-        $stmt->execute([(int) pdo()->lastInsertId()]);
+        $wallItemId = (int) pdo()->lastInsertId();
+        if ($sourceJobId > 0 && $user) {
+            $updateJob = pdo()->prepare('UPDATE image_jobs SET wall_item_id = ? WHERE id = ? AND user_id = ?');
+            $updateJob->execute([$wallItemId, $sourceJobId, (int) $user['id']]);
+        }
+        $stmt->execute([$wallItemId]);
         json_response(['item' => client_wall_item($stmt->fetch())]);
     }
 
@@ -1533,6 +1771,10 @@ try {
         foreach (['original_path', 'display_path'] as $pathKey) {
             $path = (string) ($item[$pathKey] ?? '');
             if ($path && is_file($path)) @unlink($path);
+        }
+        if (!empty($item['source_job_id'])) {
+            $stmt = pdo()->prepare('UPDATE image_jobs SET wall_item_id = NULL WHERE id = ?');
+            $stmt->execute([(int) $item['source_job_id']]);
         }
         $stmt = pdo()->prepare('DELETE FROM wall_items WHERE id = ?');
         $stmt->execute([(int) $matches[1]]);

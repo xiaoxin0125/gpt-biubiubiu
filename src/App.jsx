@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const HISTORY_KEY = 'gpt-biubiubiu:image-history';
-const DIRECT_API_KEY_CACHE_KEY = 'gpt-biubiubiu:direct-api-keys';
-const DEFAULT_DIRECT_API_BASE_URL = 'https://api.apiyi.com';
+const DEFAULT_DIRECT_API_BASE_URL = 'https://api.openai.com';
 const MAX_REFERENCE_IMAGES = 16;
 const MAX_REQUEST_TIMEOUT_SECONDS = 999;
 const MAX_MASK_SIZE_BYTES = 4 * 1024 * 1024;
+const BOARD_PAGE_SIZE = 20;
+const BOARD_LOAD_DELAY_MS = 280;
+const MASONRY_CARD_TEXT_HEIGHT_RATIO = 0.22;
+const MASONRY_CARD_GAP_RATIO = 0.08;
 
 const qualityOptions = [
   { label: 'auto', value: 'auto' },
@@ -143,7 +146,7 @@ const emptyPasswordForm = {
 
 const defaultApiConfigItem = {
   id: 'default-api-config',
-  apiName: 'API易 gpt-image-2',
+  apiName: 'OpenAI gpt-image-2',
   apiBaseUrl: DEFAULT_DIRECT_API_BASE_URL,
   model: defaultForm.model,
   apiKey: '',
@@ -260,6 +263,12 @@ const normalizeImageSource = (source) => {
 
 const getImageIdentity = (image) => String(image?.wallItemId || image?.id || createImageSrc(image) || '');
 
+const getGeneratedImageJobId = (image) => {
+  const value = image?.sourceJobId || image?.jobId || image?.source_job_id || image?.job_id || image?.id;
+  const matched = String(value || '').match(/^(?:job-)?(\d+)$/);
+  return matched ? Number(matched[1]) : 0;
+};
+
 const getEmptyBoardText = (scope, view = 'generate') => {
   if (view === 'wall') return '暂无上墙作品';
   if (scope === 'history') return '暂无历史记录';
@@ -331,41 +340,6 @@ const prependHistoryRecord = (record) => {
   const nextHistory = [record, ...readHistory().filter((item) => item.id !== record.id)].slice(0, 30);
   saveHistory(nextHistory);
   return nextHistory;
-};
-
-const readDirectApiKeyCache = () => {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(DIRECT_API_KEY_CACHE_KEY) || '{}');
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-};
-
-const directApiConfigFingerprint = (config = {}) => [
-  normalizeApiBaseUrl(config.apiBaseUrl || config.api_base_url || defaultApiConfigItem.apiBaseUrl),
-  String(config.model || defaultApiConfigItem.model).trim(),
-  String(config.apiName || config.api_name || defaultApiConfigItem.apiName).trim(),
-].join('|');
-
-const getCachedDirectApiKey = (config = {}) => {
-  const cache = readDirectApiKeyCache();
-  return String(cache[String(config.id)] || cache[directApiConfigFingerprint(config)] || '').trim();
-};
-
-const rememberDirectApiKeys = (configs = []) => {
-  const cache = readDirectApiKeyCache();
-  let changed = false;
-
-  configs.forEach((config) => {
-    const apiKey = String(config?.apiKey || config?.api_key || '').trim();
-    if (!apiKey) return;
-    cache[String(config.id)] = apiKey;
-    cache[directApiConfigFingerprint(config)] = apiKey;
-    changed = true;
-  });
-
-  if (changed) localStorage.setItem(DIRECT_API_KEY_CACHE_KEY, JSON.stringify(cache));
 };
 
 const parseSize = (size) => {
@@ -472,6 +446,36 @@ const getDraftSize = (draft) => {
   return `${size.width}x${size.height}`;
 };
 
+const estimateImageAspectRatio = (image, meta = {}) => {
+  if (meta.aspectRatio) return clampNumber(Number(meta.aspectRatio) || 1, 0.28, 3.2);
+  const size = parseSize(image?.form?.size || image?.size || '1024x1024');
+  return clampNumber(size.width / size.height, 0.28, 3.2);
+};
+
+const getMasonryColumns = (items, columnCount, imageMeta) => {
+  const safeColumnCount = Math.max(1, Number(columnCount) || 1);
+  const columns = Array.from({ length: safeColumnCount }, (_, index) => ({ id: `masonry-column-${index}`, height: 0, items: [] }));
+
+  items.forEach((image) => {
+    const identity = getImageIdentity(image);
+    const meta = imageMeta[identity] || {};
+    const aspectRatio = estimateImageAspectRatio(image, meta);
+    const estimatedHeight = 1 / aspectRatio + MASONRY_CARD_TEXT_HEIGHT_RATIO + MASONRY_CARD_GAP_RATIO;
+    const target = columns.reduce((shortest, column) => (column.height < shortest.height ? column : shortest), columns[0]);
+    target.items.push(image);
+    target.height += estimatedHeight;
+  });
+
+  return columns;
+};
+
+const getResponsiveMasonryColumnCount = () => {
+  if (typeof window === 'undefined') return 4;
+  if (window.innerWidth <= 640) return 1;
+  if (window.innerWidth <= 1024) return 2;
+  return 4;
+};
+
 const readApiResponse = async (response) => {
   const text = await response.text();
   const contentType = response.headers.get('content-type') || '';
@@ -497,20 +501,16 @@ const normalizeApiBaseUrl = (value) => String(value || DEFAULT_DIRECT_API_BASE_U
 
 const createLocalApiConfigId = () => `api-config-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-const normalizeApiConfigItem = (value = {}, index = 0) => {
-  const base = {
-    id: value.id ?? value.configId ?? value.config_id ?? createLocalApiConfigId(),
-    apiName: String(value.apiName || value.api_name || (index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`)).trim() || defaultApiConfigItem.apiName,
-    apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url || defaultApiConfigItem.apiBaseUrl),
-    model: String(value.model || defaultApiConfigItem.model).trim() || defaultApiConfigItem.model,
-    apiKey: String(value.apiKey || value.api_key || '').trim(),
-    hasApiKey: Boolean(value.hasApiKey || value.has_api_key || value.apiKey || value.api_key),
-    apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),
-    requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
-  };
-  const cachedApiKey = getCachedDirectApiKey(base);
-  return cachedApiKey ? { ...base, apiKey: cachedApiKey, hasApiKey: true } : base;
-};
+const normalizeApiConfigItem = (value = {}, index = 0) => ({
+  id: value.id ?? value.configId ?? value.config_id ?? createLocalApiConfigId(),
+  apiName: String(value.apiName || value.api_name || (index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`)).trim() || defaultApiConfigItem.apiName,
+  apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url || defaultApiConfigItem.apiBaseUrl),
+  model: String(value.model || defaultApiConfigItem.model).trim() || defaultApiConfigItem.model,
+  apiKey: String(value.apiKey || value.api_key || '').trim(),
+  hasApiKey: Boolean(value.hasApiKey || value.has_api_key || value.apiKey || value.api_key),
+  apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),
+  requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
+});
 
 const normalizeServerSettings = (value = {}) => {
   const rawConfigs = Array.isArray(value.apiConfigs || value.api_configs)
@@ -720,6 +720,7 @@ function App() {
   const [apiConfigForm, setApiConfigForm] = useState(defaultApiConfigForm);
   const [selectedImage, setSelectedImage] = useState(null);
   const [status, setStatus] = useState({ loading: true, configured: false, message: '检查接口中' });
+  const [apiKeySyncing, setApiKeySyncing] = useState(false);
   const [runningGenerations, setRunningGenerations] = useState(0);
   const [error, setError] = useState('');
   const [activeDialog, setActiveDialog] = useState(null);
@@ -727,17 +728,23 @@ function App() {
   const [wallBusyId, setWallBusyId] = useState('');
   const [boardSearch, setBoardSearch] = useState('');
   const [boardFilter, setBoardFilter] = useState('all');
-  const [boardScope, setBoardScope] = useState('all');
+  const [boardScope, setBoardScope] = useState('generate');
   const [openSelect, setOpenSelect] = useState('');
   const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
+  const [boardVisibleCount, setBoardVisibleCount] = useState(BOARD_PAGE_SIZE);
+  const [boardLoadingMore, setBoardLoadingMore] = useState(false);
+  const [masonryColumnCount, setMasonryColumnCount] = useState(getResponsiveMasonryColumnCount);
+  const [imageLayoutMeta, setImageLayoutMeta] = useState({});
+  const boardRef = useRef(null);
+  const boardLoadSentinelRef = useRef(null);
   const deletedRequestIdsRef = useRef(new Set());
 
   const hasReferenceImages = referenceImages.length > 0;
   const responseFormat = normalizeResponseFormat(form.response_format);
   const canUseOutputFormat = responseFormat === 'url';
   const isGenerating = runningGenerations > 0;
-  const canSubmitGeneration = status.configured;
+  const canSubmitGeneration = status.configured && !apiKeySyncing;
   const referenceNames = referenceImages.map((image, index) => `图${index + 1}:${image.name}`).join('，');
   const availableRatios = getAvailableRatios(sizeDraft.resolution);
   const activeSize = getDraftSize(sizeDraft);
@@ -890,12 +897,54 @@ function App() {
     });
   };
 
+  const mergeDirectApiKey = (settings, apiKey) => {
+    const normalized = normalizeServerSettings(settings || {});
+    const directApiKey = String(apiKey || '').trim();
+
+    setApiConfigForm((current) => {
+      const currentKeys = new Map((current.apiConfigs || []).map((item) => [String(item.id), item.apiKey || '']));
+      const apiConfigs = normalized.apiConfigs.map((item) => {
+        const isActive = String(item.id) === String(normalized.activeApiConfigId);
+        const nextApiKey = isActive && directApiKey ? directApiKey : currentKeys.get(String(item.id)) || item.apiKey || '';
+        return { ...item, apiKey: nextApiKey, hasApiKey: item.hasApiKey || Boolean(nextApiKey) };
+      });
+      return { ...normalized, apiConfigs };
+    });
+    setStatus((current) => ({
+      ...current,
+      loading: false,
+      configured: Boolean(normalized.hasApiKey || directApiKey),
+      apiName: normalized.apiName,
+      message: normalized.hasApiKey || directApiKey ? normalized.apiName : '未配置 API Key',
+    }));
+  };
+
+  const syncDirectApiKey = async (settings) => {
+    const normalized = normalizeServerSettings(settings || {});
+    if (!normalized.hasApiKey) return normalized;
+
+    setApiKeySyncing(true);
+    try {
+      const data = await requestJson('/api/settings/direct');
+      mergeDirectApiKey(data.settings || normalized, data.apiKey || '');
+      return normalizeServerSettings(data.settings || normalized);
+    } finally {
+      setApiKeySyncing(false);
+    }
+  };
+
   const applyServerSettings = (settings, nextUser = user) => {
     const normalized = normalizeServerSettings(settings || {});
     const nextForm = normalizeForm({ ...normalized.form, model: normalized.model, prompt: form.prompt });
 
     setForm((current) => ({ ...current, ...nextForm, prompt: current.prompt }));
-    setApiConfigForm(normalized);
+    setApiConfigForm((current) => {
+      const currentKeys = new Map((current.apiConfigs || []).map((item) => [String(item.id), item.apiKey || '']));
+      return {
+        ...normalized,
+        apiConfigs: normalized.apiConfigs.map((item) => ({ ...item, apiKey: item.apiKey || currentKeys.get(String(item.id)) || '' })),
+      };
+    });
     setStatus((current) => ({
       ...current,
       loading: false,
@@ -922,7 +971,7 @@ function App() {
         const currentKeys = new Map((current.apiConfigs || []).map((item) => [String(item.id), item.apiKey || '']));
         return {
           ...normalized,
-          apiConfigs: normalized.apiConfigs.map((item) => ({ ...item, apiKey: item.apiKey || currentKeys.get(String(item.id)) || getCachedDirectApiKey(item) })),
+          apiConfigs: normalized.apiConfigs.map((item) => ({ ...item, apiKey: item.apiKey || currentKeys.get(String(item.id)) || '' })),
         };
       });
       setForm((current) => ({ ...current, model: normalized.model || current.model }));
@@ -933,9 +982,11 @@ function App() {
         apiName: normalized.apiName,
         message: normalized.hasApiKey ? normalized.apiName : '未配置 API Key',
       }));
+      if (normalized.hasApiKey) await syncDirectApiKey(normalized);
       setOpenSelect('');
       setError('');
     } catch (switchError) {
+      setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
       setError(switchError instanceof Error ? switchError.message : '切换 API 失败');
     }
   };
@@ -949,6 +1000,71 @@ function App() {
     }
   };
 
+  const syncGeneratedImages = async () => {
+    try {
+      const data = await requestJson('/api/generated-images');
+      const generatedItems = Array.isArray(data.items) ? data.items : [];
+      const recordsByRequest = new Map();
+      const syncedJobIds = new Set(generatedItems.map(getGeneratedImageJobId).filter(Boolean).map(String));
+
+      generatedItems.forEach((item) => {
+        const requestId = item.requestId || item.request_id || `job-${item.jobId || item.id}`;
+        const formDraft = normalizeForm({ ...(item.form || {}), prompt: item.prompt || item.form?.prompt || '' });
+        const image = normalizeBoardImage({
+          ...item,
+          id: item.id || `job-${item.jobId}`,
+          requestId,
+          status: 'completed',
+          url: item.url || item.image_url || '',
+          image_url: item.image_url || item.url || '',
+          downloadUrl: item.downloadUrl || item.originalUrl || item.original_url || '',
+          originalUrl: item.originalUrl || item.downloadUrl || item.original_url || '',
+          b64_json: item.url || item.image_url ? '' : item.b64_json || '',
+          form: formDraft,
+          prompt: item.prompt || formDraft.prompt || '',
+          source: normalizeImageSource(item.source),
+          isOnWall: Boolean(item.wallItemId),
+          createdAt: item.createdAt || item.completedAt || item.finishedAt || new Date().toISOString(),
+        });
+
+        if (!recordsByRequest.has(requestId)) {
+          recordsByRequest.set(requestId, {
+            id: requestId,
+            form: formDraft,
+            images: [],
+            createdAt: image.createdAt,
+          });
+        }
+
+        recordsByRequest.get(requestId).images.push(image);
+      });
+
+      const syncedRecords = Array.from(recordsByRequest.values())
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+
+      setHistory((current) => {
+        const currentHistory = current.length ? current : readHistory();
+        const syncedIds = new Set(syncedRecords.map((record) => record.id));
+        const retainedHistory = currentHistory
+          .map((record) => {
+            if (syncedIds.has(record.id)) return null;
+            const nextImages = (record.images || []).filter((image) => {
+              const jobId = getGeneratedImageJobId(image);
+              return !jobId || syncedJobIds.has(String(jobId));
+            });
+            return nextImages.length ? { ...record, images: nextImages } : null;
+          })
+          .filter(Boolean);
+        const nextHistory = [...syncedRecords, ...retainedHistory].slice(0, 30);
+        saveHistory(nextHistory);
+        return nextHistory;
+      });
+    } catch (syncError) {
+      const message = syncError instanceof Error ? syncError.message : '生成作品同步失败';
+      if (message !== '请先登录') setError(message);
+    }
+  };
+
   useEffect(() => {
     setHistory(readHistory());
 
@@ -958,17 +1074,33 @@ function App() {
         setUser(nextUser);
         if (nextUser) {
           applyServerSettings(data.settings, nextUser);
+          if (data.settings?.hasApiKey) syncDirectApiKey(data.settings).catch(() => {
+            setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
+          });
+          syncGeneratedImages();
         } else {
+          saveHistory([]);
+          setImages([]);
+          setHistory([]);
+          setSelectedImage(null);
+          setBoardScope('generate');
           setApiConfigForm(defaultApiConfigForm);
           setStatus((current) => ({ ...current, loading: false, configured: false, message: '请先登录' }));
         }
       })
       .catch(() => {
+        saveHistory([]);
+        setImages([]);
+        setHistory([]);
+        setSelectedImage(null);
+        setBoardScope('generate');
         setStatus((current) => ({ ...current, loading: false, configured: false, message: '请先登录' }));
       });
-
-    loadWall();
   }, []);
+
+  useEffect(() => {
+    if (view === 'wall') loadWall();
+  }, [view]);
 
   useEffect(() => {
     setProfileForm({ displayName: user?.displayName || user?.username || '' });
@@ -1004,7 +1136,12 @@ function App() {
 
   const findWallItem = (image) => {
     if (!image) return null;
-    if (image.wallItemId) return wallItems.find((item) => Number(item.id) === Number(image.wallItemId)) || { id: image.wallItemId };
+    if (image.wallItemId) {
+      const matched = wallItems.find((item) => Number(item.id) === Number(image.wallItemId));
+      if (matched) return matched;
+      if (image.isOnWall) return { id: image.wallItemId };
+      return null;
+    }
 
     const src = createImageSrc(image);
     return wallItems.find((item) => {
@@ -1039,8 +1176,63 @@ function App() {
     if (activeBoardFilter === 'edit') return normalizeImageSource(image.source) === 'edit';
     return true;
   });
+  const renderableBoardItems = boardItems.filter(canRenderBoardItem);
+  const visibleBoardItems = renderableBoardItems.slice(0, boardVisibleCount);
+  const hasMoreBoardItems = visibleBoardItems.length < renderableBoardItems.length;
+  const masonryColumns = useMemo(
+    () => getMasonryColumns(visibleBoardItems, masonryColumnCount, imageLayoutMeta),
+    [imageLayoutMeta, masonryColumnCount, visibleBoardItems],
+  );
 
   const isSameImage = isSameImageIdentity;
+
+  useEffect(() => {
+    setBoardVisibleCount(BOARD_PAGE_SIZE);
+    setBoardLoadingMore(false);
+    if (boardRef.current) boardRef.current.scrollTop = 0;
+  }, [activeBoardFilter, boardScope, boardSearch, sourceBoardItems.length, view]);
+
+  useEffect(() => {
+    const updateColumnCount = () => setMasonryColumnCount(getResponsiveMasonryColumnCount());
+    updateColumnCount();
+    window.addEventListener('resize', updateColumnCount);
+    return () => window.removeEventListener('resize', updateColumnCount);
+  }, []);
+
+  useEffect(() => {
+    if (!hasMoreBoardItems || boardLoadingMore) return undefined;
+
+    const loadNextPage = () => {
+      setBoardLoadingMore(true);
+      window.setTimeout(() => {
+        setBoardVisibleCount((count) => Math.min(count + BOARD_PAGE_SIZE, renderableBoardItems.length));
+        setBoardLoadingMore(false);
+      }, BOARD_LOAD_DELAY_MS);
+    };
+
+    const sentinel = boardLoadSentinelRef.current;
+    const board = boardRef.current;
+    if (sentinel && typeof IntersectionObserver !== 'undefined') {
+      const observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadNextPage();
+      }, { root: board || null, rootMargin: '260px 0px 260px 0px' });
+      observer.observe(sentinel);
+      return () => observer.disconnect();
+    }
+
+    if (!board) return undefined;
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        ticking = false;
+        if (board.scrollTop + board.clientHeight >= board.scrollHeight - 260) loadNextPage();
+      });
+    };
+    board.addEventListener('scroll', onScroll, { passive: true });
+    return () => board.removeEventListener('scroll', onScroll);
+  }, [boardLoadingMore, hasMoreBoardItems, renderableBoardItems.length]);
 
   const openSizeDialog = () => {
     if (!form.size) {
@@ -1063,24 +1255,55 @@ function App() {
     setActiveDialog(null);
   };
 
-  const clearHistory = () => {
+  const clearHistory = async () => {
     if (!history.length || !window.confirm('确认清空历史记录？')) return;
+
+    const previousHistory = history;
     setHistory([]);
     saveHistory([]);
     if (boardScope === 'history') setSelectedImage(null);
+
+    if (!user) return;
+    try {
+      await requestJson('/api/generated-images', { method: 'DELETE' });
+    } catch (deleteError) {
+      setHistory(previousHistory);
+      saveHistory(previousHistory);
+      setError(deleteError instanceof Error ? deleteError.message : '服务端历史记录删除失败');
+    }
   };
 
-  const deleteImage = (image) => {
+  const deleteImage = async (image) => {
     if (!image || !window.confirm('确认删除这张图片记录？')) return;
 
     const requestId = image.requestId || image.id;
     if (requestId) deletedRequestIdsRef.current.add(requestId);
+
+    const previousImages = images;
+    const previousHistory = history;
+    const previousSelectedImage = selectedImage;
+    const previousDialog = activeDialog;
     setImages((items) => items.filter((item) => !isSameImage(item, image)));
     const nextHistory = removeImageFromHistory(history, image);
     setHistory(nextHistory);
     saveHistory(nextHistory);
     setSelectedImage((current) => (current && isSameImage(current, image) ? null : current));
     if (selectedImage && isSameImage(selectedImage, image)) setActiveDialog(null);
+
+    const jobId = getGeneratedImageJobId(image);
+    if (!user || !jobId) return;
+
+    try {
+      await requestJson(`/api/generated-images/${jobId}`, { method: 'DELETE' });
+    } catch (deleteError) {
+      setImages(previousImages);
+      setHistory(previousHistory);
+      saveHistory(previousHistory);
+      setSelectedImage(previousSelectedImage);
+      setActiveDialog(previousDialog);
+      if (requestId) deletedRequestIdsRef.current.delete(requestId);
+      setError(deleteError instanceof Error ? deleteError.message : '服务端图片记录删除失败');
+    }
   };
 
   const openDetail = (image) => {
@@ -1210,8 +1433,8 @@ function App() {
 
     try {
       if (!status.configured) throw new Error('请先在参数设置里保存 API Key。');
-      const requestApiKey = String(requestConfig.apiKey || getCachedDirectApiKey(requestConfig)).trim();
-      if (!requestApiKey) throw new Error('前端直连需要在当前浏览器重新填写并保存 API Key。');
+      const requestApiKey = String(requestConfig.apiKey || '').trim();
+      if (!requestApiKey) throw new Error('服务器未同步到 API Key，请重新登录或重新保存 Key。');
       const payload = hasReferenceImages
         ? buildEditPayload(prompt, requestConfig)
         : buildGenerationPayload(prompt, { ...requestConfig, stream: apiConfigForm.stream });
@@ -1250,17 +1473,58 @@ function App() {
         throw new Error('上游接口未返回可展示图片。');
       }
 
+      let storedImages = nextImages;
+      if (user) {
+        try {
+          const savedImages = [];
+          for (const image of nextImages) {
+            const imageMime = getDataImageMime(image.b64_json) || image.imageMime || imageMimeForOutputFormat(imageForm.output_format);
+            const imageB64 = isDataImageValue(image.b64_json) ? stripDataImagePrefix(image.b64_json) : image.b64_json || '';
+            const saved = await requestJson('/api/generated-images', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                requestId,
+                mode: normalizeImageSource(image.source),
+                image: {
+                  url: createImageDownloadSrc(image) || image.url || '',
+                  b64_json: imageB64,
+                  mime: imageMime,
+                },
+                prompt,
+                revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
+                form: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
+                params: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
+              }),
+            });
+            savedImages.push(normalizeBoardImage({
+              ...image,
+              ...(saved.item || {}),
+              upstreamImageId: image.upstreamImageId || image.id || '',
+              source: normalizeImageSource(image.source),
+              apiName: requestApiName,
+              prompt,
+              form: imageForm,
+              referenceName: referenceNames,
+            }));
+          }
+          if (savedImages.length) storedImages = savedImages;
+        } catch {
+          setError('图片已生成，但服务器保存失败；刷新后可能无法恢复这次未上墙作品。');
+        }
+      }
+
       setImages((items) => [
-        ...nextImages,
+        ...storedImages,
         ...items.filter((item) => item.requestId !== requestId && item.id !== requestId),
       ]);
-      setSelectedImage((current) => (current?.requestId === requestId || current?.id === requestId ? nextImages[0] || current : current));
+      setSelectedImage((current) => (current?.requestId === requestId || current?.id === requestId ? storedImages[0] || current : current));
       setView('generate');
 
       const record = {
         id: requestId,
         form: imageForm,
-        images: nextImages,
+        images: storedImages,
         createdAt: finishedAt,
       };
 
@@ -1271,7 +1535,7 @@ function App() {
         setHistory((items) => [record, ...items.filter((item) => item.id !== record.id)].slice(0, 30));
         setError('图片已生成，但本地历史记录保存失败。');
       }
-      setStatus((current) => ({ ...current, message: `Done · ${nextImages.length}` }));
+      setStatus((current) => ({ ...current, message: `Done · ${storedImages.length}` }));
     } catch (requestError) {
       const failedAt = new Date().toISOString();
       const message = requestError instanceof Error ? requestError.message : '生成失败';
@@ -1370,8 +1634,8 @@ function App() {
           revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
           durationSeconds: getElapsedSeconds(image),
           sourceJobId: image.sourceJobId || image.jobId || null,
-          form: { ...(image.form || form), source: normalizeImageSource(image.source), sourceJobId: image.sourceJobId || image.jobId || null },
-          params: { ...(image.form || form), source: normalizeImageSource(image.source), durationSeconds: getElapsedSeconds(image), sourceJobId: image.sourceJobId || image.jobId || null },
+          form: { ...(image.form || form), apiName: image.apiName || activeApiConfig?.apiName || status.apiName || defaultApiConfigItem.apiName, source: normalizeImageSource(image.source), sourceJobId: image.sourceJobId || image.jobId || null },
+          params: { ...(image.form || form), apiName: image.apiName || activeApiConfig?.apiName || status.apiName || defaultApiConfigItem.apiName, source: normalizeImageSource(image.source), durationSeconds: getElapsedSeconds(image), sourceJobId: image.sourceJobId || image.jobId || null },
         }),
       });
 
@@ -1406,7 +1670,11 @@ function App() {
       });
 
       setUser(data.user || null);
-      if (data.user) applyServerSettings(data.settings, data.user);
+      if (data.user) {
+        applyServerSettings(data.settings, data.user);
+        if (data.settings?.hasApiKey) await syncDirectApiKey(data.settings);
+        await syncGeneratedImages();
+      }
       setAuthForm(emptyAuthForm);
       setAuthTab('profile');
       setActiveDialog(data.user ? 'auth' : null);
@@ -1416,12 +1684,23 @@ function App() {
   };
 
   const logout = async () => {
-    await requestJson('/api/auth/logout', { method: 'POST' });
-    setUser(null);
-    setProfileForm(emptyProfileForm);
-    setPasswordForm(emptyPasswordForm);
-    setApiConfigForm(defaultApiConfigForm);
-    setStatus((current) => ({ ...current, configured: false, apiName: '', message: '请先登录' }));
+    try {
+      await requestJson('/api/auth/logout', { method: 'POST' });
+    } finally {
+      saveHistory([]);
+      setUser(null);
+      setImages([]);
+      setHistory([]);
+      setWallItems([]);
+      setSelectedImage(null);
+      setBoardScope('generate');
+      setBoardFilter('all');
+      setProfileForm(emptyProfileForm);
+      setPasswordForm(emptyPasswordForm);
+      setApiConfigForm(defaultApiConfigForm);
+      setApiKeySyncing(false);
+      setStatus((current) => ({ ...current, configured: false, apiName: '', message: '请先登录' }));
+    }
   };
 
   const saveAccountSettings = async () => {
@@ -1436,7 +1715,6 @@ function App() {
       activeApiConfigId: apiConfigForm.activeApiConfigId,
       stream: apiConfigForm.stream,
     });
-    rememberDirectApiKeys(apiConfigForm.apiConfigs || []);
     try {
       const data = await requestJson('/api/settings', {
         method: 'POST',
@@ -1458,10 +1736,12 @@ function App() {
         }),
       });
       applyServerSettings(data.settings, user);
+      if (data.settings?.hasApiKey) await syncDirectApiKey(data.settings);
       setForm((current) => ({ ...current, model: data.settings?.model || activeApiConfig?.model || current.model }));
       setError('');
       setAuthTab('settings');
     } catch (settingsError) {
+      setStatus((current) => (apiKeySyncing ? { ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' } : current));
       setError(settingsError instanceof Error ? settingsError.message : '保存参数失败');
     }
   };
@@ -1536,14 +1816,30 @@ function App() {
 
   const renderImageCard = (image) => {
     const src = createImageSrc(image);
+    const imageId = getImageIdentity(image);
+    const imageMeta = imageLayoutMeta[imageId] || {};
+    const aspectRatio = estimateImageAspectRatio(image, imageMeta);
     const isPending = image.status === 'pending';
     const isFailed = image.status === 'failed';
     const title = normalizeRevisedPrompt(image.revised_prompt) || image.prompt || image.form?.prompt || 'Generated image';
-    const apiName = image.apiName || status.apiName || activeApiConfig?.apiName || defaultApiConfigItem.apiName;
+    const savedApiName = String(image.apiName || image.api_name || image.form?.apiName || image.form?.api_name || '').trim();
+    const apiName = view === 'wall'
+      ? savedApiName || '未知 API'
+      : savedApiName || status.apiName || activeApiConfig?.apiName || defaultApiConfigItem.apiName;
+    const authorName = view === 'wall'
+      ? String(image.authorName || image.author_name || '').trim() || '未知艺术家'
+      : String(image.authorName || image.author_name || userDisplayName || '').trim() || '未知艺术家';
+    const metaText = view === 'wall' ? `${apiName} · ${authorName}` : apiName;
     const canDelete = view !== 'wall';
+    const cardClassName = [
+      'result-card',
+      isPending ? 'is-pending' : '',
+      isFailed ? 'is-failed' : '',
+      src && !imageMeta.loaded ? 'is-image-loading' : '',
+    ].filter(Boolean).join(' ');
 
     return (
-      <figure className={`result-card ${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`.trim()} key={`${image.source || 'image'}-${image.id || image.wallItemId || src}`} onClick={() => openDetail(image)}>
+      <figure className={cardClassName} key={`${image.source || 'image'}-${image.id || image.wallItemId || src}`} onClick={() => openDetail(image)}>
         {canDelete ? (
           <button
             type="button"
@@ -1557,9 +1853,32 @@ function App() {
             ×
           </button>
         ) : null}
-        <div className="result-image-wrap">
+        <div className="result-image-wrap" style={{ aspectRatio }}>
           {src ? (
-            <img src={src} alt={title || '生成图片'} />
+            <>
+              {!imageMeta.loaded ? <div className="image-loading-placeholder" aria-hidden="true" /> : null}
+              <img
+                src={src}
+                alt={title || '生成图片'}
+                onLoad={(event) => {
+                  const naturalWidth = event.currentTarget.naturalWidth || 1;
+                  const naturalHeight = event.currentTarget.naturalHeight || 1;
+                  setImageLayoutMeta((current) => ({
+                    ...current,
+                    [imageId]: {
+                      loaded: true,
+                      aspectRatio: clampNumber(naturalWidth / naturalHeight, 0.28, 3.2),
+                    },
+                  }));
+                }}
+                onError={() => {
+                  setImageLayoutMeta((current) => ({
+                    ...current,
+                    [imageId]: { ...(current[imageId] || {}), loaded: true, failed: true },
+                  }));
+                }}
+              />
+            </>
           ) : (
             <div className="pending-preview">
               <span className="loading-ring" aria-hidden="true" />
@@ -1567,7 +1886,16 @@ function App() {
             </div>
           )}
         </div>
-        <figcaption className="result-api-name">{apiName}</figcaption>
+        <figcaption className={view === 'wall' ? 'result-caption result-caption-spread' : 'result-caption'} title={metaText}>
+          {view === 'wall' ? (
+            <>
+              <span>{apiName}</span>
+              <span>{authorName}</span>
+            </>
+          ) : (
+            <span>{metaText}</span>
+          )}
+        </figcaption>
       </figure>
     );
   };
@@ -1605,7 +1933,6 @@ function App() {
             className={view === 'wall' ? 'is-active' : ''}
             onClick={() => {
               setView('wall');
-              loadWall();
             }}
           >
             作品墙
@@ -1668,9 +1995,25 @@ function App() {
           ) : null}
         </div>
 
-        <div className={boardItems.length ? 'image-board has-images' : 'image-board'}>
-          {boardItems.length ? (
-            boardItems.filter(canRenderBoardItem).map(renderImageCard)
+        <div className={renderableBoardItems.length ? 'image-board has-images' : 'image-board'} ref={boardRef}>
+          {renderableBoardItems.length ? (
+            <>
+              <div className="masonry-board" style={{ '--masonry-columns': masonryColumnCount }}>
+                {masonryColumns.map((column) => (
+                  <div className="masonry-column" key={column.id}>
+                    {column.items.map(renderImageCard)}
+                  </div>
+                ))}
+              </div>
+              <div className="board-load-sentinel" ref={boardLoadSentinelRef} aria-hidden="true" />
+              {hasMoreBoardItems || boardLoadingMore ? (
+                <div className="board-loader" role="status">
+                  {boardLoadingMore ? '加载更多作品...' : '继续下滑加载更多'}
+                </div>
+              ) : (
+                <div className="board-loader is-complete">已展示全部作品</div>
+              )}
+            </>
           ) : (
             <div className="empty-canvas">
               <span className="empty-mark" aria-hidden="true">
@@ -1979,11 +2322,11 @@ function App() {
                             <div className="api-config-fields">
                               <label>
                                 <span>API 名称</span>
-                                <input value={config.apiName} onChange={(event) => updateApiConfig(config.id, 'apiName', event.target.value)} placeholder="API易 gpt-image-2" />
+                                <input value={config.apiName} onChange={(event) => updateApiConfig(config.id, 'apiName', event.target.value)} placeholder="OpenAI gpt-image-2" />
                               </label>
                               <label>
                                 <span>API 地址</span>
-                                <input value={config.apiBaseUrl} onChange={(event) => updateApiConfig(config.id, 'apiBaseUrl', event.target.value)} placeholder="https://api.apiyi.com" />
+                                <input value={config.apiBaseUrl} onChange={(event) => updateApiConfig(config.id, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
                               </label>
                               <label>
                                 <span>模型 ID</span>
