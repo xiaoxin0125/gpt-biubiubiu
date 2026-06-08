@@ -1,191 +1,265 @@
 # gpt-biubiubiu
 
-黑白硬边风格的在线生图模板。前端使用 Vite + React，生产后端是 PHP 单入口 API，部署后不需要单独启动 Node 服务。
+一个基于 Vite + React + PHP 单入口 API 的图片生成工作台。前端负责调用 OpenAI 兼容图片接口，PHP 负责账号、API 配置、生成记录、图片落盘和作品墙。
 
-## 功能
+生产环境不需要 Node 服务：`npm run build` 后部署静态产物，由 PHP 处理 `/api/index.php`。
 
-- GPT-Image-2 文生图和图片编辑合并在同一工作台：无参考图走文生图，有参考图走图片编辑
-- 图片编辑支持最多 16 张 `image[]` 参考图，上传顺序对应提示词中的“图1/图2/...”
-- 支持可选 `mask`，用于第一张参考图的局部重绘
-- `workbench-actions` 集中展示尺寸、质量、背景、格式、压缩、审核、数量、参考图、mask 和发送按钮
-- 压缩参数始终显示；仅 `jpeg` / `webp` 可编辑，`png` 时置灰且不向上游发送
-- 支持最高 999 秒应用层请求超时，避免长时间生图在 600 秒处被本地中转主动断开
-- `image-board` 在生图界面展示全部作品、本次生成和历史记录；作品墙界面仅展示上墙作品
-- 作品支持搜索、筛选、下载、复用配置、上墙/取消上墙和删除记录
-- 用户注册登录、个人生成配置保存；用户 API Key 加密保存到 MySQL，后端不返回明文
-- 默认管理员账号为 `admin`，默认密码为 `1427145484`；`筱信` 账号会自动提升为管理员
-- 兼容 OpenAI 风格的 `/v1/images/generations` 与 `/v1/images/edits`
-- 支持 `url` 与 `b64_json` 两种图片返回格式
+## 当前架构
+
+```text
+浏览器 React 页面
+  ├─ 直连 OpenAI 兼容图片 API：/v1/images/generations、/v1/images/edits
+  └─ 调用本站 PHP API：账号、配置、生成记录、作品墙
+
+PHP API
+  ├─ public/api/index.php        单入口
+  ├─ public/api/routes.php       路由表
+  └─ public/api/lib/*.php        数据库、账号、设置、文件、生成记录、作品墙
+
+MySQL
+  ├─ users
+  ├─ user_settings
+  ├─ user_api_configs
+  ├─ image_jobs
+  └─ wall_items
+```
+
+## 目录结构
+
+```text
+src/
+  App.jsx                       页面装配和主状态编排
+  constants/options.js           选项、默认表单、尺寸限制
+  lib/api.js                     本站 API 请求、上游直连请求、响应解析
+  lib/images.js                  图片来源、MIME、data URL、展示数据归一化
+  lib/history.js                 本地历史
+  lib/size.js                    尺寸和比例
+  lib/board.js                   作品列表、过滤、排序、瀑布流
+  components/                    顶栏、工作台、作品板、弹窗组件
+
+public/api/
+  index.php                      PHP API 单入口
+  routes.php                     路由分发
+  bootstrap.php                  配置、响应、请求体、公共常量
+  lib/database.php               PDO、建表、补列、数据库可用性
+  lib/auth.php                   登录态、注册登录、个人资料、密码
+  lib/settings.php               API 配置、API Key 加密保存、当前配置切换
+  lib/files.php                  图片解码、压缩、落盘、公开路径
+  lib/generated_images.php       生成记录保存、列表、删除、清空
+  lib/wall.php                   作品墙列表、详情、上墙、取消上墙
+
+server/schema.sql                数据库初始化脚本
+.php-api-config.example.php       PHP 配置模板
+.php-api-config.php               本机/生产配置，不提交
+```
+
+## 功能边界
+
+### 前端直连上游
+
+生图请求由浏览器直接访问用户配置的 OpenAI 兼容 API 地址：
+
+- 文生图：`/v1/images/generations`
+- 图片编辑：`/v1/images/edits`
+
+这意味着：
+
+- PHP 不再代理上游生图请求。
+- 用户登录后可保存多套 API 配置。
+- 前端生成成功后，再把图片结果保存到本站 `/api/generated-images`。
+- 服务端保存图片时会落盘到 `public/wall-images`，作品墙使用压缩后的展示图。
+
+### PHP API
+
+PHP 只保留本站业务接口：
+
+```text
+GET    /api/health
+GET    /api/auth/me
+POST   /api/auth/register
+POST   /api/auth/login
+POST   /api/auth/profile
+POST   /api/auth/password
+POST   /api/auth/logout
+
+GET    /api/settings
+GET    /api/settings/direct
+POST   /api/settings
+POST   /api/settings/active-api
+
+GET    /api/generated-images
+POST   /api/generated-images
+DELETE /api/generated-images
+DELETE /api/generated-images/{id}
+
+GET    /api/wall
+GET    /api/wall/mine
+GET    /api/wall/{id}
+POST   /api/wall
+DELETE /api/wall/{id}
+```
+
+前端会通过 `src/lib/api.js` 转成兼容 PHP 单入口的形式：
+
+```text
+/api/index.php?route=/auth/me
+/api/index.php?route=/generated-images
+/api/index.php?route=/wall
+```
+
+已删除旧 PHP 代理链路，不再提供服务端生图中转和请求日志接口。
 
 ## PHP 配置
 
-生产环境使用项目根目录的 `.php-api-config.php`，它不会进入前端，也已被 `.gitignore` 忽略。
-
-可复制示例：
+复制配置模板：
 
 ```bash
 cp .php-api-config.example.php .php-api-config.php
 ```
 
-配置项：
+配置内容：
 
 ```php
 <?php
 return [
     'openai_base_url' => 'https://api.openai.com',
-    'openai_api_key' => 'sk-your-api-key',
     'openai_image_model' => 'gpt-image-2',
+
     'mysql_host' => '127.0.0.1',
     'mysql_port' => 3306,
     'mysql_user' => 'your-db-user',
     'mysql_password' => 'your-db-password',
     'mysql_database' => 'your-db-name',
+
     'session_secret' => 'replace-with-a-long-random-session-secret',
     'user_api_key_secret' => 'replace-with-a-long-random-api-key-secret',
 ];
 ```
 
-`.php-api-config.example.php` 与 `env.example` 都默认使用 `gpt-image-2`。个人 API 地址和 API Key 也可以登录后在设置页保存。
+说明：
+
+- `.php-api-config.php` 不进入前端构建，也不应提交。
+- `session_secret` 用于签名登录 Cookie。
+- `user_api_key_secret` 用于加密保存用户 API Key。
+- `openai_base_url` 和 `openai_image_model` 只是默认值，用户登录后可在页面里保存自己的 API 配置。
 
 ## 数据库
 
-PHP API 首次请求会自动创建所需表，也可以手动导入：
+PHP API 首次请求会自动创建/补齐表结构。也可以手动导入：
 
 ```bash
 mysql -u your-db-user -p your-db-name < server/schema.sql
 ```
 
-主要数据：
+主要数据表：
 
-- `users`：用户账号
-- `user_settings`：用户默认生成参数、999 秒请求超时和加密 API Key
-- `image_jobs`：生成任务状态与结果快照
+- `users`：账号与管理员标记
+- `user_settings`：当前 API 配置、stream 等用户设置
+- `user_api_configs`：多套 OpenAI 兼容 API 配置，加密保存 API Key
+- `image_jobs`：已保存生成记录、图片地址、参数快照
 - `wall_items`：作品墙数据
 
+默认管理员：
+
+```text
+username: admin
+password: 1427145484
+```
+
+`筱信` 账号会在建表迁移时自动提升为管理员。
+
 ## 本地开发
+
+安装依赖：
+
+```bash
+npm install
+```
 
 启动 PHP API：
 
 ```bash
-php -S 127.0.0.1:8088 -t public
+npm run dev:server
 ```
 
-启动前端：
+启动 Vite：
 
 ```bash
-npm install
 npm run dev:client
 ```
 
-Vite 会把 `/api` 代理到 `http://127.0.0.1:8088`。项目现在只有 PHP API 后端，开发和生产使用同一套接口逻辑。
+或者同时启动：
+
+```bash
+npm run dev
+```
+
+Vite 开发服务会把 `/api` 代理到 `http://127.0.0.1:8088`。
 
 ## 生产部署
 
+构建前端：
+
 ```bash
-npm install
 npm run build
 ```
 
-构建后 `public/api` 会复制到 `dist/api`。
+部署要求：
 
-宝塔/PHP 推荐：
+- 网站运行目录指向 Vite 构建产物目录。
+- 保留 `api/index.php` 和 `api/lib/*.php` 可由 PHP 执行。
+- 不需要启动 Node 服务。
+- PHP 建议启用：PDO MySQL、OpenSSL、GD。
 
-- 网站运行目录指向 `dist`
-- PHP 版本建议 7.4+
-- 启用扩展：PDO MySQL、cURL、OpenSSL
-- 不需要反向代理到 Node，也不需要运行 Node 后端服务
-
-长时间 GPT-Image-2 生图建议同步放大外层超时：
-
-```nginx
-proxy_read_timeout 999s;
-fastcgi_read_timeout 999s;
-send_timeout 999s;
-```
-
-如果仍出现 `stream disconnected before completion` 或 504，优先检查宝塔/Nginx/PHP-FPM 的外层超时是否早于应用层 999 秒。
-
-前端请求会访问：
+如果构建流程没有自动复制 `public/api`，请确保生产目录里包含：
 
 ```text
-/api/index.php?route=/health
-/api/index.php?route=/health&job={jobId}
-/api/index.php?route=/images/generations
-/api/index.php?route=/images/edits
-/api/index.php?route=/wall
-/api/index.php?route=/auth/me
-/api/index.php?route=/settings
+api/index.php
+api/routes.php
+api/bootstrap.php
+api/lib/*.php
 ```
 
-## GPT-Image-2 参数
+`wall-images` 目录用于保存原图和压缩展示图，需要 Web 用户可写。
 
-### 文生图
+## 图片与作品墙
+
+生成成功后的流向：
 
 ```text
-POST /api/images/generations
-Content-Type: application/json
+上游图片结果
+  -> 前端展示
+  -> POST /api/generated-images
+  -> PHP 保存图片文件和 image_jobs
+  -> 用户点击上墙
+  -> POST /api/wall
+  -> wall_items
 ```
 
-转发白名单：
+文件保存策略：
 
-```json
-{
-  "model": "gpt-image-2",
-  "prompt": "黑白极简风格的机械猫",
-  "size": "2048x2048",
-  "quality": "medium",
-  "output_format": "jpeg",
-  "output_compression": 85,
-  "background": "opaque",
-  "moderation": "auto",
-  "n": 1
-}
+- 原图保存到 `public/wall-images/original`。
+- 展示图保存到 `public/wall-images/display`。
+- 展示图超过 1MB 时，服务端会尝试压缩。
+- 删除生成记录时，会同步删除关联作品墙数据和本地图片文件。
+
+## 验证命令
+
+```bash
+npm run build
+php -l public/api/index.php
+php -l public/api/routes.php
+php -l public/api/bootstrap.php
+php -l public/api/lib/database.php
+php -l public/api/lib/auth.php
+php -l public/api/lib/settings.php
+php -l public/api/lib/files.php
+php -l public/api/lib/generated_images.php
+php -l public/api/lib/wall.php
 ```
 
-规则：
+最小接口检查：
 
-- `n` 固定为 `1`
-- `quality` 支持 `low` / `medium` / `high` / `auto`；`auto` 不主动转发
-- `background` 支持 `auto` / `opaque`；不支持 `transparent`
-- `output_format` 支持 `png` / `jpeg` / `webp`
-- `output_compression` 只在 `jpeg` / `webp` 时转发
-- `moderation` 仅文生图转发，支持 `auto` / `low`
-- 不转发 `negative_prompt`、`style`、`response_format`、`input_fidelity`
-
-### 图片编辑
-
-```text
-POST /api/images/edits
-Content-Type: multipart/form-data
+```bash
+curl 'http://127.0.0.1:8088/api/index.php?route=/health'
 ```
-
-转发白名单：
-
-```text
-model=gpt-image-2
-prompt=把图1的人物放进图2的场景，沿用图3的色彩风格
-image[]=person.png
-image[]=scene.png
-image[]=style.png
-mask=mask.png
-size=1536x1024
-quality=high
-output_format=webp
-output_compression=85
-background=opaque
-```
-
-规则：
-
-- `image[]` 最多 16 张，支持 `png` / `jpg` / `webp`
-- 多图顺序会保留，提示词中可用“图1/图2/图3”指代
-- `mask` 可选，仅对第一张参考图生效，必须是 PNG 且小于 4MB
-- 图片编辑不转发 `n` / `moderation`
-- `output_compression` 只在 `jpeg` / `webp` 时转发
-- 不转发 `input_fidelity` 和 `background=transparent`
-
-## 响应说明
-
-API易 GPT-Image-2 返回的 `b64_json` 是纯 base64 字符串，不包含 `data:image/...;base64,` 前缀。
-
-前端展示时会按 `output_format` 自动补齐 MIME 前缀；如果你自己消费接口，需要自行 decode 或拼接 data URL。
