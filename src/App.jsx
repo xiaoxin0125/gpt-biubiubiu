@@ -60,13 +60,11 @@ import {
 import {
   createImageDownloadSrc,
   createImageSrc,
-  getDataImageMime,
   getGeneratedImageJobId,
   imageMimeForOutputFormat,
-  isDataImageValue,
+  imageToSavePayload,
   normalizeImageSource,
   revokeObjectImageUrls,
-  stripDataImagePrefix,
 } from './lib/images';
 import { getAvailableRatios, getDraftSize, parseSize } from './lib/size';
 
@@ -341,7 +339,6 @@ function App() {
       const data = await requestJson('/api/generated-images');
       const generatedItems = Array.isArray(data.items) ? data.items : [];
       const recordsByRequest = new Map();
-      const syncedJobIds = new Set(generatedItems.map(getGeneratedImageJobId).filter(Boolean).map(String));
 
       generatedItems.forEach((item) => {
         const requestId = item.requestId || item.request_id || `job-${item.jobId || item.id}`;
@@ -382,15 +379,7 @@ function App() {
         const currentHistory = current.length ? current : readHistory();
         const syncedIds = new Set(syncedRecords.map((record) => record.id));
         const retainedHistory = currentHistory
-          .map((record) => {
-            if (syncedIds.has(record.id)) return null;
-            const nextImages = (record.images || []).filter((image) => {
-              const jobId = getGeneratedImageJobId(image);
-              return !jobId || syncedJobIds.has(String(jobId));
-            });
-            return nextImages.length ? { ...record, images: nextImages } : null;
-          })
-          .filter(Boolean);
+          .filter((record) => !syncedIds.has(record.id));
         const nextHistory = [...syncedRecords, ...retainedHistory].slice(0, 30);
         saveHistory(nextHistory);
         return nextHistory;
@@ -823,19 +812,14 @@ function App() {
         try {
           const savedImages = [];
           for (const image of nextImages) {
-            const imageMime = getDataImageMime(image.b64_json) || image.imageMime || imageMimeForOutputFormat(imageForm.output_format);
-            const imageB64 = isDataImageValue(image.b64_json) ? stripDataImagePrefix(image.b64_json) : image.b64_json || '';
+            const imagePayload = await imageToSavePayload(image, imageMimeForOutputFormat(imageForm.output_format));
             const saved = await requestJson('/api/generated-images', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 requestId,
                 mode: normalizeImageSource(image.source),
-                image: {
-                  url: createImageDownloadSrc(image) || image.url || '',
-                  b64_json: imageB64,
-                  mime: imageMime,
-                },
+                image: imagePayload,
                 prompt,
                 revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
                 form: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },

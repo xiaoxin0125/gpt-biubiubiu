@@ -7,12 +7,6 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT INTO users (username, display_name, password_hash, is_admin)
-VALUES ('admin', 'admin', '$2y$12$lRL.W37YSEeEj9Ak.lTGrObzpwvBlswc2SqMfzBveWlSUS5Zd8Sw6', 1)
-ON DUPLICATE KEY UPDATE is_admin = 1;
-
-UPDATE users SET is_admin = 1 WHERE username = '筱信' OR display_name = '筱信';
-
 CREATE TABLE IF NOT EXISTS user_settings (
   user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
   model VARCHAR(128) DEFAULT NULL,
@@ -21,15 +15,6 @@ CREATE TABLE IF NOT EXISTS user_settings (
   request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
   stream TINYINT(1) NOT NULL DEFAULT 0,
   active_api_config_id BIGINT UNSIGNED DEFAULT NULL,
-  size VARCHAR(64) DEFAULT NULL,
-  quality VARCHAR(64) DEFAULT NULL,
-  style VARCHAR(64) DEFAULT NULL,
-  response_format VARCHAR(64) DEFAULT NULL,
-  background VARCHAR(64) DEFAULT NULL,
-  output_format VARCHAR(64) DEFAULT NULL,
-  output_compression VARCHAR(16) DEFAULT NULL,
-  moderation VARCHAR(64) DEFAULT NULL,
-  n INT UNSIGNED DEFAULT 1,
   api_key_ciphertext TEXT DEFAULT NULL,
   api_key_iv VARCHAR(64) DEFAULT NULL,
   api_key_tag VARCHAR(64) DEFAULT NULL,
@@ -41,8 +26,8 @@ CREATE TABLE IF NOT EXISTS user_settings (
 CREATE TABLE IF NOT EXISTS user_api_configs (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   user_id BIGINT UNSIGNED NOT NULL,
-  api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI Compatible',
-  api_base_url VARCHAR(255) NOT NULL DEFAULT '',
+  api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
+  api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
   model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
   request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
   api_key_ciphertext TEXT DEFAULT NULL,
@@ -62,7 +47,7 @@ CREATE TABLE IF NOT EXISTS image_jobs (
   request_id VARCHAR(80) DEFAULT NULL,
   mode VARCHAR(32) NOT NULL DEFAULT 'generation',
   status VARCHAR(32) NOT NULL DEFAULT 'completed',
-  prompt TEXT NOT NULL,
+  prompt TEXT DEFAULT NULL,
   revised_prompt TEXT DEFAULT NULL,
   error_message TEXT DEFAULT NULL,
   image_url TEXT DEFAULT NULL,
@@ -86,7 +71,7 @@ CREATE TABLE IF NOT EXISTS wall_items (
   user_id BIGINT UNSIGNED DEFAULT NULL,
   client_id VARCHAR(80) DEFAULT NULL,
   author_name VARCHAR(96) NOT NULL DEFAULT '未知艺术家',
-  prompt TEXT NOT NULL,
+  prompt TEXT DEFAULT NULL,
   revised_prompt TEXT DEFAULT NULL,
   image_url TEXT DEFAULT NULL,
   image_b64 LONGTEXT DEFAULT NULL,

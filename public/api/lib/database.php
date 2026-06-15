@@ -53,6 +53,25 @@ function ensure_index(PDO $db, string $table, string $index, string $definition)
     }
 }
 
+function bootstrap_admin_user(PDO $db): void
+{
+    $username = trim((string) cfg('bootstrap_admin_username', ''));
+    $password = (string) cfg('bootstrap_admin_password', '');
+    if ($username === '' || $password === '') return;
+
+    if (!preg_match('/^[\w\x{4e00}-\x{9fa5}.-]{2,20}$/u', $username)) {
+        throw new RuntimeException('bootstrap_admin_username 不合法');
+    }
+    if (strlen($password) < 12) {
+        throw new RuntimeException('bootstrap_admin_password 至少 12 位');
+    }
+
+    $displayName = normalize_display_name((string) cfg('bootstrap_admin_display_name', $username), $username);
+    $hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
+    $stmt = $db->prepare("INSERT INTO users (username, display_name, password_hash, is_admin) VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE is_admin = 1, display_name = COALESCE(NULLIF(display_name, ''), VALUES(display_name))");
+    $stmt->execute([$username, $displayName, $hash]);
+}
+
 function ensure_schema(): void
 {
     global $state;
@@ -132,7 +151,7 @@ function ensure_schema(): void
       user_id BIGINT UNSIGNED DEFAULT NULL,
       client_id VARCHAR(80) DEFAULT NULL,
       author_name VARCHAR(96) NOT NULL DEFAULT '未知艺术家',
-      prompt TEXT NOT NULL,
+      prompt TEXT DEFAULT NULL,
       revised_prompt TEXT DEFAULT NULL,
       image_url TEXT DEFAULT NULL,
       image_b64 LONGTEXT DEFAULT NULL,
@@ -207,11 +226,7 @@ function ensure_schema(): void
     ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
 
-    $adminHash = password_hash('1427145484', PASSWORD_BCRYPT, ['cost' => 12]);
-    $stmt = $db->prepare('INSERT INTO users (username, display_name, password_hash, is_admin) VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE is_admin = 1');
-    $stmt->execute(['admin', 'admin', $adminHash]);
-    $stmt = $db->prepare('UPDATE users SET is_admin = 1 WHERE username = ? OR display_name = ?');
-    $stmt->execute(['筱信', '筱信']);
+    bootstrap_admin_user($db);
 
     $db->exec('UPDATE user_settings SET request_timeout = 999 WHERE request_timeout IN (180, 600)');
     $db->exec("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");

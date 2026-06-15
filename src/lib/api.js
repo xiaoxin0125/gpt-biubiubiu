@@ -42,6 +42,26 @@ export const requestJson = async (input, init) => {
 
 export const normalizeApiBaseUrl = (value) => String(value || DEFAULT_DIRECT_API_BASE_URL).replace(/\s+/g, '').replace(/\/+$/, '') || DEFAULT_DIRECT_API_BASE_URL;
 
+const requestTimeoutMs = (config = {}) => clampNumber(Number(config.requestTimeout || config.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS) * 1000;
+
+const createTimeoutSignal = (config = {}) => {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(requestTimeoutMs(config));
+  if (typeof AbortController === 'undefined') return undefined;
+
+  const controller = new AbortController();
+  window.setTimeout(() => controller.abort(), requestTimeoutMs(config));
+  return controller.signal;
+};
+
+const fetchWithTimeout = async (url, init = {}, config = {}) => {
+  try {
+    return await fetch(url, { ...init, signal: init.signal || createTimeoutSignal(config) });
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') throw new Error('上游接口请求超时。');
+    throw error;
+  }
+};
+
 export const createLocalApiConfigId = () => `api-config-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 export const normalizeApiConfigItem = (value = {}, index = 0) => ({
@@ -202,24 +222,24 @@ const readDirectImageResponse = async (response) => {
 };
 
 export const requestDirectImageJson = async (config, apiKey, payload) => {
-  const response = await fetch(buildDirectImageApiUrl(config, '/v1/images/generations'), {
+  const response = await fetchWithTimeout(buildDirectImageApiUrl(config, '/v1/images/generations'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(payload),
-  });
+  }, config);
   return readDirectImageResponse(response);
 };
 
 export const requestDirectImageFormData = async (config, apiKey, payload) => {
-  const response = await fetch(buildDirectImageApiUrl(config, '/v1/images/edits'), {
+  const response = await fetchWithTimeout(buildDirectImageApiUrl(config, '/v1/images/edits'), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
     },
     body: payload,
-  });
+  }, config);
   return readDirectImageResponse(response);
 };

@@ -12,4 +12,9 @@ return [
 
     'session_secret' => 'replace-with-a-long-random-session-secret',
     'user_api_key_secret' => 'replace-with-a-long-random-api-key-secret',
+
+    // 可选：首次部署时显式创建管理员。留空则不自动创建。
+    'bootstrap_admin_username' => '',
+    'bootstrap_admin_password' => '',
+    'bootstrap_admin_display_name' => '',
 ];

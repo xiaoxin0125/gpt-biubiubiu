@@ -61,6 +61,80 @@ function mime_from_binary(string $binary, string $fallback = 'image/png'): strin
     return $fallback ?: 'image/png';
 }
 
+function supported_image_mime(string $mime): bool
+{
+    return in_array(strtolower($mime), ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'], true);
+}
+
+function validate_image_binary(string $binary, string $fallbackMime = 'image/png'): string
+{
+    if ($binary === '') json_response(['error' => '图片内容为空'], 400);
+    if (strlen($binary) > MAX_IMAGE_UPLOAD_BYTES) json_response(['error' => '图片不能超过 20MB'], 413);
+
+    $mime = mime_from_binary($binary, $fallbackMime);
+    if (!supported_image_mime($mime)) json_response(['error' => '仅支持 PNG、JPEG、WebP 或 GIF 图片'], 400);
+    if (!@getimagesizefromstring($binary)) json_response(['error' => '图片内容无法识别'], 400);
+
+    return $mime;
+}
+
+function local_public_file_from_url(string $url): string
+{
+    $path = parse_url($url, PHP_URL_PATH) ?: $url;
+    if ($path === '' || preg_match('#^https?://#i', $url)) return '';
+    if (!preg_match('#^/wall-images/(original|display)/[a-f0-9]{24}(?:-[0-9]+-[0-9]+)?\.(png|jpg|jpeg|webp|gif)$#i', $path)) return '';
+
+    $candidate = realpath(public_base_dir() . '/' . ltrim($path, '/'));
+    $root = realpath(public_base_dir() . '/wall-images');
+    if (!$candidate || !$root || strpos(str_replace('\\', '/', $candidate), rtrim(str_replace('\\', '/', $root), '/') . '/') !== 0) return '';
+    return is_file($candidate) ? $candidate : '';
+}
+
+function is_public_remote_host(string $host): bool
+{
+    $records = @dns_get_record($host, DNS_A + DNS_AAAA);
+    if (!$records) {
+        $ip = filter_var($host, FILTER_VALIDATE_IP) ? $host : '';
+        $records = $ip ? [['ip' => $ip]] : [];
+    }
+
+    foreach ($records as $record) {
+        $ip = (string) ($record['ip'] ?? ($record['ipv6'] ?? ''));
+        if ($ip === '') return false;
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) return false;
+    }
+
+    return count($records) > 0;
+}
+
+function fetch_remote_image_binary(string $url): string
+{
+    $parts = parse_url($url);
+    $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+    $host = (string) ($parts['host'] ?? '');
+    if (!in_array($scheme, ['http', 'https'], true) || $host === '' || !is_public_remote_host($host)) {
+        json_response(['error' => '远程图片地址不允许访问'], 400);
+    }
+
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => 15,
+            'follow_location' => 0,
+            'max_redirects' => 0,
+            'header' => "Accept: image/png,image/jpeg,image/webp,image/gif\r\n",
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
+    $binary = @file_get_contents($url, false, $context, 0, MAX_IMAGE_UPLOAD_BYTES + 1);
+    if ($binary === false) json_response(['error' => '无法读取远程图片'], 400);
+    if (strlen($binary) > MAX_IMAGE_UPLOAD_BYTES) json_response(['error' => '图片不能超过 20MB'], 413);
+    return $binary;
+}
+
 function decode_image_payload(array $image): array
 {
     $imageUrl = trim((string) ($image['url'] ?? ''));
@@ -70,16 +144,15 @@ function decode_image_payload(array $image): array
     if ($imageB64 !== '') {
         $imageB64 = preg_replace('#^data:(image/[a-z0-9.+-]+);base64,#i', '', $imageB64);
         $binary = base64_decode($imageB64, true);
-        if ($binary === false || $binary === '') json_response(['error' => '图片 base64 无法解析'], 400);
-        return ['binary' => $binary, 'mime' => mime_from_binary($binary, $mime), 'sourceUrl' => ''];
+        if ($binary === false) json_response(['error' => '图片 base64 无法解析'], 400);
+        return ['binary' => $binary, 'mime' => validate_image_binary($binary, $mime), 'sourceUrl' => ''];
     }
 
     if ($imageUrl !== '') {
-        if (!preg_match('#^https?://#i', $imageUrl) && strpos($imageUrl, '/') !== 0) json_response(['error' => '图片 URL 不合法'], 400);
-        $sourcePath = preg_match('#^https?://#i', $imageUrl) ? $imageUrl : public_base_dir() . '/' . ltrim(parse_url($imageUrl, PHP_URL_PATH) ?: $imageUrl, '/');
-        $binary = @file_get_contents($sourcePath);
-        if ($binary === false || $binary === '') json_response(['error' => '无法读取上墙图片'], 400);
-        return ['binary' => $binary, 'mime' => mime_from_binary($binary, $mime), 'sourceUrl' => $imageUrl];
+        $sourcePath = local_public_file_from_url($imageUrl);
+        $binary = $sourcePath !== '' ? @file_get_contents($sourcePath) : fetch_remote_image_binary($imageUrl);
+        if ($binary === false) json_response(['error' => '无法读取上墙图片'], 400);
+        return ['binary' => $binary, 'mime' => validate_image_binary($binary, $mime), 'sourceUrl' => $imageUrl];
     }
 
     json_response(['error' => '缺少可上墙的图片'], 400);
@@ -200,16 +273,6 @@ function stored_generated_image(array $image, string $fallbackMime = 'image/png'
     if ($url !== '') return save_wall_image(['url' => $url, 'mime' => $mime]);
     if ($b64 !== '') return save_wall_image(['b64_json' => $b64, 'mime' => $mime]);
     return [];
-}
-
-function local_public_file_from_url(string $url): string
-{
-    $path = parse_url($url, PHP_URL_PATH) ?: $url;
-    if ($path === '') return '';
-    $candidate = realpath(public_base_dir() . '/' . ltrim($path, '/'));
-    $root = realpath(public_base_dir());
-    if (!$candidate || !$root || strpos(str_replace('\\', '/', $candidate), rtrim(str_replace('\\', '/', $root), '/') . '/') !== 0) return '';
-    return is_file($candidate) ? $candidate : '';
 }
 
 function delete_generated_image_files(array $row): void

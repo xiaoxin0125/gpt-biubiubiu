@@ -82,3 +82,19 @@ export const imageMimeForOutputFormat = (format) => {
   if (format === 'webp') return 'image/webp';
   return 'image/png';
 };
+
+export const imageToSavePayload = async (image, fallbackMime = 'image/png') => {
+  const b64Json = String(image?.b64_json || image?.image_b64 || '');
+  const url = String(image?.downloadUrl || image?.originalUrl || image?.original_url || image?.url || image?.image_url || '');
+  const mime = getDataImageMime(b64Json) || image?.imageMime || image?.image_mime || fallbackMime || 'image/png';
+
+  if (b64Json) {
+    return {
+      url: '',
+      b64_json: isDataImageValue(b64Json) ? stripDataImagePrefix(b64Json) : b64Json,
+      mime,
+    };
+  }
+
+  return { url, b64_json: '', mime };
+};

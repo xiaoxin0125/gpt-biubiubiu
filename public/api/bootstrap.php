@@ -14,6 +14,7 @@ define('WALL_DISPLAY_MAX_BYTES', 1048576);
 define('DEFAULT_API_NAME', 'OpenAI gpt-image-2');
 define('DEFAULT_API_BASE_URL', 'https://api.openai.com');
 define('DEFAULT_IMAGE_MODEL', 'gpt-image-2');
+define('MAX_IMAGE_UPLOAD_BYTES', 20 * 1024 * 1024);
 
 @ini_set('max_execution_time', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
 @ini_set('default_socket_timeout', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
