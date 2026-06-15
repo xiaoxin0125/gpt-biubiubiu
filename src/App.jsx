@@ -106,12 +106,12 @@ function App() {
   const boardRef = useRef(null);
   const boardLoadSentinelRef = useRef(null);
   const deletedRequestIdsRef = useRef(new Set());
+  const apiKeyVaultRef = useRef(new Map());
 
   const hasReferenceImages = referenceImages.length > 0;
   const responseFormat = normalizeResponseFormat(form.response_format);
   const canUseOutputFormat = responseFormat === 'url';
   const isGenerating = runningGenerations > 0;
-  const canSubmitGeneration = status.configured && !apiKeySyncing;
   const referenceNames = referenceImages.map((image, index) => `图${index + 1}:${image.name}`).join('，');
   const availableRatios = getAvailableRatios(sizeDraft.resolution);
   const activeSize = getDraftSize(sizeDraft);
@@ -137,6 +137,7 @@ function App() {
     return configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId)) || configs[0];
   }, [apiConfigForm]);
   const statusText = status.configured ? (status.apiName || activeApiConfig?.apiName || status.message || defaultApiConfigItem.apiName) : status.message;
+  const canSubmitGeneration = Boolean(user) && !apiKeySyncing && (status.configured || Boolean(activeApiConfig?.hasApiKey));
 
   const updateForm = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -235,21 +236,14 @@ function App() {
     const normalized = normalizeServerSettings(settings || {});
     const directApiKey = String(apiKey || '').trim();
 
-    setApiConfigForm((current) => {
-      const currentKeys = new Map((current.apiConfigs || []).map((item) => [String(item.id), item.apiKey || '']));
-      const apiConfigs = normalized.apiConfigs.map((item) => {
-        const isActive = String(item.id) === String(normalized.activeApiConfigId);
-        const nextApiKey = isActive && directApiKey ? directApiKey : currentKeys.get(String(item.id)) || item.apiKey || '';
-        return { ...item, apiKey: nextApiKey, hasApiKey: item.hasApiKey || Boolean(nextApiKey) };
-      });
-      return { ...normalized, apiConfigs };
-    });
+    if (directApiKey) apiKeyVaultRef.current.set(String(normalized.activeApiConfigId), directApiKey);
+    setApiConfigForm(normalized);
     setStatus((current) => ({
       ...current,
       loading: false,
-      configured: Boolean(normalized.hasApiKey || directApiKey),
+      configured: Boolean(directApiKey),
       apiName: normalized.apiName,
-      message: normalized.hasApiKey || directApiKey ? normalized.apiName : '未配置 API Key',
+      message: directApiKey ? normalized.apiName : 'API Key 同步失败，请重新登录或重新保存。',
     }));
   };
 
@@ -272,13 +266,7 @@ function App() {
     const nextForm = normalizeForm({ ...normalized.form, model: normalized.model, prompt: form.prompt });
 
     setForm((current) => ({ ...current, ...nextForm, prompt: current.prompt }));
-    setApiConfigForm((current) => {
-      const currentKeys = new Map((current.apiConfigs || []).map((item) => [String(item.id), item.apiKey || '']));
-      return {
-        ...normalized,
-        apiConfigs: normalized.apiConfigs.map((item) => ({ ...item, apiKey: item.apiKey || currentKeys.get(String(item.id)) || '' })),
-      };
-    });
+    setApiConfigForm(normalized);
     setStatus((current) => ({
       ...current,
       loading: false,
@@ -301,13 +289,7 @@ function App() {
         body: JSON.stringify({ activeApiConfigId: configId }),
       });
       const normalized = normalizeServerSettings(data.settings || {});
-      setApiConfigForm((current) => {
-        const currentKeys = new Map((current.apiConfigs || []).map((item) => [String(item.id), item.apiKey || '']));
-        return {
-          ...normalized,
-          apiConfigs: normalized.apiConfigs.map((item) => ({ ...item, apiKey: item.apiKey || currentKeys.get(String(item.id)) || '' })),
-        };
-      });
+      setApiConfigForm(normalized);
       setForm((current) => ({ ...current, model: normalized.model || current.model }));
       setStatus((current) => ({
         ...current,
@@ -408,12 +390,14 @@ function App() {
         setUser(nextUser);
         if (nextUser) {
           applyServerSettings(data.settings, nextUser);
-          if (data.settings?.hasApiKey) syncDirectApiKey(data.settings).catch(() => {
+          const normalizedSettings = normalizeServerSettings(data.settings || {});
+          if (normalizedSettings.hasApiKey) syncDirectApiKey(normalizedSettings).catch(() => {
             setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
           });
           syncGeneratedImages();
         } else {
           saveHistory([]);
+          apiKeyVaultRef.current.clear();
           setImages([]);
           setHistory([]);
           setSelectedImage(null);
@@ -424,6 +408,7 @@ function App() {
       })
       .catch(() => {
         saveHistory([]);
+        apiKeyVaultRef.current.clear();
         setImages([]);
         setHistory([]);
         setSelectedImage(null);
@@ -766,8 +751,12 @@ function App() {
     setImages((items) => [pendingItem, ...items]);
 
     try {
-      if (!status.configured) throw new Error('请先在参数设置里保存 API Key。');
-      const requestApiKey = String(requestConfig.apiKey || '').trim();
+      if (!status.configured && !requestConfig.hasApiKey) throw new Error('请先在参数设置里保存 API Key。');
+      let requestApiKey = String(apiKeyVaultRef.current.get(String(requestConfig.id)) || '').trim();
+      if (!requestApiKey && requestConfig.hasApiKey) {
+        await syncDirectApiKey(apiConfigForm);
+        requestApiKey = String(apiKeyVaultRef.current.get(String(requestConfig.id)) || '').trim();
+      }
       if (!requestApiKey) throw new Error('服务器未同步到 API Key，请重新登录或重新保存 Key。');
       const payload = hasReferenceImages
         ? buildEditPayload(imageForm, requestConfig)
@@ -1002,7 +991,8 @@ function App() {
       setUser(data.user || null);
       if (data.user) {
         applyServerSettings(data.settings, data.user);
-        if (data.settings?.hasApiKey) await syncDirectApiKey(data.settings);
+        const normalizedSettings = normalizeServerSettings(data.settings || {});
+        if (normalizedSettings.hasApiKey) await syncDirectApiKey(normalizedSettings);
         await syncGeneratedImages();
       }
       setAuthForm(emptyAuthForm);
@@ -1027,6 +1017,7 @@ function App() {
       setBoardFilter('all');
       setProfileForm(emptyProfileForm);
       setPasswordForm(emptyPasswordForm);
+      apiKeyVaultRef.current.clear();
       setApiConfigForm(defaultApiConfigForm);
       setApiKeySyncing(false);
       setStatus((current) => ({ ...current, configured: false, apiName: '', message: '请先登录' }));
@@ -1038,6 +1029,10 @@ function App() {
       setError('请先登录后再设置参数。');
       return;
     }
+
+    const pendingApiKeys = new Map((apiConfigForm.apiConfigs || [])
+      .filter((item) => String(item.apiKey || '').trim())
+      .map((item) => [String(item.id), String(item.apiKey || '').trim()]));
 
     const nextSettings = normalizeServerSettings({
       ...apiConfigForm,
@@ -1066,6 +1061,7 @@ function App() {
         }),
       });
       applyServerSettings(data.settings, user);
+      pendingApiKeys.forEach((apiKey, configId) => apiKeyVaultRef.current.set(configId, apiKey));
       if (data.settings?.hasApiKey) await syncDirectApiKey(data.settings);
       setForm((current) => ({ ...current, model: data.settings?.model || activeApiConfig?.model || current.model }));
       setError('');

@@ -20,6 +20,7 @@ MySQL
   ├─ users
   ├─ user_settings
   ├─ user_api_configs
+  ├─ auth_rate_limits
   ├─ image_jobs
   └─ wall_items
 ```
@@ -131,16 +132,17 @@ return [
     'mysql_password' => 'your-db-password',
     'mysql_database' => 'your-db-name',
 
-    'session_secret' => 'replace-with-a-long-random-session-secret',
-    'user_api_key_secret' => 'replace-with-a-long-random-api-key-secret',
+    'session_secret' => 'generate-at-least-32-random-characters-before-deploy',
+    'user_api_key_secret' => 'generate-another-32-random-characters-before-deploy',
 ];
 ```
 
 说明：
 
-- `.php-api-config.php` 不进入前端构建，也不应提交。
-- `session_secret` 用于签名登录 Cookie。
-- `user_api_key_secret` 用于加密保存用户 API Key。
+- `.php-api-config.php` 不进入前端构建，也不应提交；生产环境建议放在 Web 根目录之外，或至少由 Web 服务器禁止直接访问。
+- `session_secret` 用于签名登录 Cookie，必须是 32 位以上随机值；空值或示例弱值会被拒绝。
+- `user_api_key_secret` 用于加密保存用户 API Key，必须和 `session_secret` 不同，且部署后不要随意更换，否则旧 API Key 无法解密。
+- 写接口会拒绝跨站 Origin/Referer，请确保生产域名和反向代理 Host 配置一致。
 - `openai_base_url` 和 `openai_image_model` 只是默认值，用户登录后可在页面里保存自己的 API 配置。
 
 ## 数据库
@@ -156,17 +158,19 @@ mysql -u your-db-user -p your-db-name < server/schema.sql
 - `users`：账号与管理员标记
 - `user_settings`：当前 API 配置、stream 等用户设置
 - `user_api_configs`：多套 OpenAI 兼容 API 配置，加密保存 API Key
+- `auth_rate_limits`：登录、注册、改密等账号接口的短窗口频控
 - `image_jobs`：已保存生成记录、图片地址、参数快照
 - `wall_items`：作品墙数据
 
-默认管理员：
+管理员账号不会内置默认密码。首次部署如需自动创建管理员，可在 `.php-api-config.php` 中填写：
 
-```text
-username: admin
-password: 1427145484
+```php
+'bootstrap_admin_username' => 'admin',
+'bootstrap_admin_password' => '至少 12 位的强密码',
+'bootstrap_admin_display_name' => '管理员',
 ```
 
-`筱信` 账号会在建表迁移时自动提升为管理员。
+创建后建议清空 `bootstrap_admin_password`，避免后续误改管理员密码。
 
 ## 本地开发
 
@@ -241,7 +245,8 @@ api/lib/*.php
 - 原图保存到 `public/wall-images/original`。
 - 展示图保存到 `public/wall-images/display`。
 - 展示图超过 1MB 时，服务端会尝试压缩。
-- 删除生成记录时，会同步删除关联作品墙数据和本地图片文件。
+- 删除生成记录时，如果没有作品墙引用，会同步删除关联本地图片文件。
+- 取消上墙时，如果作品墙图片已经脱离生成记录，也会清理对应本地文件。
 
 ## 验证命令
 

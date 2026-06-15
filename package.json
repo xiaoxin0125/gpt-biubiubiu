@@ -12,8 +12,6 @@
     "start": "php -S 0.0.0.0:8088 -t dist"
   },
   "dependencies": {
-    "bcryptjs": "^3.0.3",
-    "mysql2": "^3.22.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

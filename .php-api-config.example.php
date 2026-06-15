@@ -10,8 +10,8 @@ return [
     'mysql_password' => 'your-db-password',
     'mysql_database' => 'your-db-name',
 
-    'session_secret' => 'replace-with-a-long-random-session-secret',
-    'user_api_key_secret' => 'replace-with-a-long-random-api-key-secret',
+    'session_secret' => 'generate-at-least-32-random-characters-before-deploy',
+    'user_api_key_secret' => 'generate-another-32-random-characters-before-deploy',
 
     // 可选：首次部署时显式创建管理员。留空则不自动创建。
     'bootstrap_admin_username' => '',

@@ -110,6 +110,18 @@ function handle_create_wall_item(array $user, array $body): array
     return ['item' => client_wall_item($stmt->fetch())];
 }
 
+function delete_wall_item_files(array $item): void
+{
+    $sourceJobId = (int) ($item['source_job_id'] ?? 0);
+    if ($sourceJobId > 0) return;
+
+    delete_generated_image_files([
+        'display_url' => $item['display_url'] ?? '',
+        'original_url' => $item['original_url'] ?? '',
+        'image_url' => $item['image_url'] ?? '',
+    ]);
+}
+
 function handle_delete_wall_item(array $user, int $id): array
 {
     $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
@@ -126,6 +138,8 @@ function handle_delete_wall_item(array $user, int $id): array
     }
     $stmt = pdo()->prepare('UPDATE image_jobs SET wall_item_id = NULL WHERE wall_item_id = ?');
     $stmt->execute([$id]);
+
+    delete_wall_item_files($item);
 
     $stmt = pdo()->prepare('DELETE FROM wall_items WHERE id = ?');
     $stmt->execute([$id]);

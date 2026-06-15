@@ -121,6 +121,13 @@ function ensure_schema(): void
       CONSTRAINT fk_user_api_configs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+    $db->exec("CREATE TABLE IF NOT EXISTS auth_rate_limits (
+      rate_key VARCHAR(191) NOT NULL PRIMARY KEY,
+      attempts INT UNSIGNED NOT NULL DEFAULT 0,
+      window_started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     $db->exec("CREATE TABLE IF NOT EXISTS image_jobs (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       user_id BIGINT UNSIGNED DEFAULT NULL,

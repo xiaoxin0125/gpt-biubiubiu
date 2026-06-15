@@ -15,6 +15,17 @@ define('DEFAULT_API_NAME', 'OpenAI gpt-image-2');
 define('DEFAULT_API_BASE_URL', 'https://api.openai.com');
 define('DEFAULT_IMAGE_MODEL', 'gpt-image-2');
 define('MAX_IMAGE_UPLOAD_BYTES', 20 * 1024 * 1024);
+define('MIN_SECRET_LENGTH', 32);
+
+define('WEAK_SECRET_VALUES', [
+    '',
+    'change-this-session-secret',
+    'change-this-api-key-secret',
+    'replace-with-a-long-random-session-secret',
+    'replace-with-a-long-random-api-key-secret',
+    'generate-at-least-32-random-characters-before-deploy',
+    'generate-another-32-random-characters-before-deploy',
+]);
 
 @ini_set('max_execution_time', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
 @ini_set('default_socket_timeout', (string) (MAX_REQUEST_TIMEOUT + REQUEST_TIMEOUT_BUFFER));
@@ -22,10 +33,10 @@ define('MAX_IMAGE_UPLOAD_BYTES', 20 * 1024 * 1024);
 @ignore_user_abort(true);
 
 $configCandidates = [
-    __DIR__ . '/.php-api-config.php',
-    dirname(__DIR__) . '/.php-api-config.php',
     dirname(__DIR__, 2) . '/.php-api-config.php',
     dirname(__DIR__, 3) . '/.php-api-config.php',
+    dirname(__DIR__) . '/.php-api-config.php',
+    __DIR__ . '/.php-api-config.php',
 ];
 $configPath = '';
 foreach ($configCandidates as $candidate) {
@@ -45,6 +56,62 @@ function cfg(string $key, $fallback = null)
 {
     global $config;
     return $config[$key] ?? $fallback;
+}
+
+function security_secret(string $key): string
+{
+    $value = trim((string) cfg($key, ''));
+    if (strlen($value) < MIN_SECRET_LENGTH || in_array($value, WEAK_SECRET_VALUES, true)) return '';
+    return $value;
+}
+
+function request_origin_candidates(): array
+{
+    $hosts = array_filter(array_unique([
+        strtolower((string) ($_SERVER['HTTP_HOST'] ?? '')),
+        strtolower((string) ($_SERVER['HTTP_X_FORWARDED_HOST'] ?? '')),
+    ]));
+    $schemes = [];
+    $directScheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $schemes[] = $directScheme;
+    $forwardedProto = strtolower(trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0] ?? ''));
+    if (in_array($forwardedProto, ['http', 'https'], true)) $schemes[] = $forwardedProto;
+
+    $origins = [];
+    foreach ($hosts as $host) {
+        if ($host === '') continue;
+        foreach (array_unique($schemes) as $scheme) {
+            $origins[] = $scheme . '://' . $host;
+        }
+    }
+
+    return array_values(array_unique($origins));
+}
+
+function is_same_origin_header(string $header): bool
+{
+    $value = trim($header);
+    if ($value === '') return true;
+
+    $origins = request_origin_candidates();
+    if (!$origins) return false;
+
+    $parts = parse_url($value);
+    if (!$parts || empty($parts['scheme']) || empty($parts['host'])) return false;
+
+    $port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
+    $headerOrigin = strtolower((string) $parts['scheme']) . '://' . strtolower((string) $parts['host']) . $port;
+    return in_array($headerOrigin, $origins, true);
+}
+
+function enforce_write_request_origin(string $method): void
+{
+    if (!in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) return;
+
+    $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
+    $referer = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+    if ($origin !== '' && !is_same_origin_header($origin)) json_response(['error' => '跨站请求已被拒绝'], 403);
+    if ($origin === '' && $referer !== '' && !is_same_origin_header($referer)) json_response(['error' => '跨站请求已被拒绝'], 403);
 }
 
 function json_response(array $payload, int $status = 200): void

@@ -13,6 +13,7 @@ require_once __DIR__ . '/routes.php';
 
 try {
     $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    enforce_write_request_origin($method);
     $route = route_path();
     $contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ($_SERVER['HTTP_CONTENT_TYPE'] ?? '')));
     $body = in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true) && (strpos($contentType, 'application/json') !== false || $contentType === '') ? read_json_body() : [];

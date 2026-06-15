@@ -4,12 +4,27 @@ declare(strict_types=1);
 
 function api_key_secret(): string
 {
-    return (string) (cfg('user_api_key_secret') ?: cfg('session_secret') ?: '');
+    return security_secret('user_api_key_secret');
 }
 
-function encryption_key(): string
+function legacy_api_key_secrets(): array
 {
-    return hash('sha256', api_key_secret(), true);
+    $configured = cfg('legacy_user_api_key_secrets', []);
+    if (!is_array($configured)) $configured = [$configured];
+
+    $current = api_key_secret();
+    $secrets = [];
+    foreach ($configured as $value) {
+        $secret = trim((string) $value);
+        if ($secret !== '' && $secret !== $current) $secrets[] = $secret;
+    }
+
+    return array_values(array_unique($secrets));
+}
+
+function encryption_key(?string $secret = null): string
+{
+    return hash('sha256', $secret ?? api_key_secret(), true);
 }
 
 function encrypt_api_key(string $value): array
@@ -28,20 +43,62 @@ function encrypt_api_key(string $value): array
     ];
 }
 
+function decrypt_api_key_with_secret(?array $settings, string $secret): string
+{
+    if (!$settings || $secret === '' || empty($settings['api_key_ciphertext']) || empty($settings['api_key_iv']) || empty($settings['api_key_tag'])) return '';
+
+    $ciphertext = base64_decode((string) $settings['api_key_ciphertext'], true);
+    $iv = base64_decode((string) $settings['api_key_iv'], true);
+    $tag = base64_decode((string) $settings['api_key_tag'], true);
+    if ($ciphertext === false || $iv === false || $tag === false) return '';
+
+    $plain = openssl_decrypt($ciphertext, 'aes-256-gcm', encryption_key($secret), OPENSSL_RAW_DATA, $iv, $tag);
+    return $plain === false ? '' : $plain;
+}
+
+function migrate_api_key_encryption(array $settings, string $plain): void
+{
+    $id = (int) ($settings['id'] ?? 0);
+    $userId = (int) ($settings['user_id'] ?? 0);
+    if ($id <= 0 || $userId <= 0 || $plain === '' || api_key_secret() === '') return;
+
+    $encrypted = encrypt_api_key($plain);
+    $db = pdo();
+    $stmt = $db->prepare('UPDATE user_api_configs SET api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ? WHERE id = ? AND user_id = ?');
+    $stmt->execute([
+        $encrypted['api_key_ciphertext'],
+        $encrypted['api_key_iv'],
+        $encrypted['api_key_tag'],
+        $encrypted['api_key_hint'],
+        $id,
+        $userId,
+    ]);
+
+    $stmt = $db->prepare('UPDATE user_settings SET api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ? WHERE user_id = ? AND active_api_config_id = ?');
+    $stmt->execute([
+        $encrypted['api_key_ciphertext'],
+        $encrypted['api_key_iv'],
+        $encrypted['api_key_tag'],
+        $encrypted['api_key_hint'],
+        $userId,
+        $id,
+    ]);
+}
+
 function decrypt_api_key(?array $settings): string
 {
-    if (!$settings || api_key_secret() === '' || empty($settings['api_key_ciphertext']) || empty($settings['api_key_iv']) || empty($settings['api_key_tag'])) return '';
+    $plain = decrypt_api_key_with_secret($settings, api_key_secret());
+    if ($plain !== '') return $plain;
 
-    $plain = openssl_decrypt(
-        base64_decode((string) $settings['api_key_ciphertext']),
-        'aes-256-gcm',
-        encryption_key(),
-        OPENSSL_RAW_DATA,
-        base64_decode((string) $settings['api_key_iv']),
-        base64_decode((string) $settings['api_key_tag'])
-    );
+    foreach (legacy_api_key_secrets() as $legacySecret) {
+        $plain = decrypt_api_key_with_secret($settings, $legacySecret);
+        if ($plain !== '') {
+            migrate_api_key_encryption($settings ?: [], $plain);
+            return $plain;
+        }
+    }
 
-    return $plain === false ? '' : $plain;
+    return '';
 }
 
 function stored_user_settings_row(int $userId): ?array

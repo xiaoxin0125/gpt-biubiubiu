@@ -15,14 +15,16 @@ function cookie_options(int $maxAge): array
 
 function sign_value(string $value): string
 {
-    $signature = rtrim(base64_encode(hash_hmac('sha256', $value, (string) cfg('session_secret', ''), true)), '=');
+    $secret = security_secret('session_secret');
+    if ($secret === '') throw new RuntimeException('服务端未配置安全的 SESSION_SECRET');
+
+    $signature = rtrim(base64_encode(hash_hmac('sha256', $value, $secret, true)), '=');
     return 's:' . $value . '.' . $signature;
 }
 
 function unsign_value(?string $signed): string
 {
-    if (!$signed) return '';
-    if (strpos($signed, 's:') !== 0) return $signed;
+    if (!$signed || strpos($signed, 's:') !== 0) return '';
 
     $raw = substr($signed, 2);
     $dot = strrpos($raw, '.');
@@ -83,6 +85,42 @@ function require_user(): array
     return $user;
 }
 
+function rate_limit_key(string $scope, string $identity = ''): string
+{
+    $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+    $safeIdentity = strtolower(trim($identity));
+    return hash('sha256', $scope . '|' . $ip . '|' . $safeIdentity);
+}
+
+function enforce_rate_limit(string $scope, string $identity = '', int $limit = 8, int $windowSeconds = 900): void
+{
+    require_database();
+    $key = rate_limit_key($scope, $identity);
+    $db = pdo();
+    $stmt = $db->prepare('SELECT attempts, UNIX_TIMESTAMP(window_started_at) AS window_started_at FROM auth_rate_limits WHERE rate_key = ? LIMIT 1');
+    $stmt->execute([$key]);
+    $row = $stmt->fetch();
+    $now = time();
+
+    if (!$row || $now - (int) ($row['window_started_at'] ?? 0) >= $windowSeconds) {
+        $stmt = $db->prepare('REPLACE INTO auth_rate_limits (rate_key, attempts, window_started_at, updated_at) VALUES (?, 1, NOW(), NOW())');
+        $stmt->execute([$key]);
+        return;
+    }
+
+    if ((int) $row['attempts'] >= $limit) json_response(['error' => '请求过于频繁，请稍后再试'], 429);
+
+    $stmt = $db->prepare('UPDATE auth_rate_limits SET attempts = attempts + 1, updated_at = NOW() WHERE rate_key = ?');
+    $stmt->execute([$key]);
+}
+
+function reset_rate_limit(string $scope, string $identity = ''): void
+{
+    $key = rate_limit_key($scope, $identity);
+    $stmt = pdo()->prepare('DELETE FROM auth_rate_limits WHERE rate_key = ?');
+    $stmt->execute([$key]);
+}
+
 function handle_auth_me(): array
 {
     try {
@@ -101,6 +139,7 @@ function handle_auth_register(array $body): array
     $password = (string) ($body['password'] ?? '');
     if (!preg_match('/^[\w\x{4e00}-\x{9fa5}.-]{2,20}$/u', $username)) json_response(['error' => '用户名需为 2-20 位中文、字母、数字、下划线、点或短横线'], 400);
     if (strlen($password) < 6) json_response(['error' => '密码至少 6 位'], 400);
+    enforce_rate_limit('register', $username, 5, 900);
     $displayName = normalize_display_name((string) ($body['displayName'] ?? ($body['display_name'] ?? '')), $username);
 
     try {
@@ -118,11 +157,14 @@ function handle_auth_register(array $body): array
 function handle_auth_login(array $body): array
 {
     require_database();
+    $username = trim((string) ($body['username'] ?? ''));
+    enforce_rate_limit('login', $username, 8, 900);
     $stmt = pdo()->prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
-    $stmt->execute([trim((string) ($body['username'] ?? ''))]);
+    $stmt->execute([$username]);
     $user = $stmt->fetch();
     if (!$user || !password_verify((string) ($body['password'] ?? ''), $user['password_hash'])) json_response(['error' => '用户名或密码错误'], 401);
 
+    reset_rate_limit('login', $username);
     set_signed_cookie('session_user', (string) $user['id'], 30 * 24 * 60 * 60);
     $displayName = trim((string) ($user['display_name'] ?? '')) ?: $user['username'];
     return ['user' => ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'isAdmin' => !empty($user['is_admin']), 'createdAt' => $user['created_at']], 'settings' => settings_for_user((int) $user['id'])];
@@ -143,6 +185,7 @@ function handle_auth_password(array $body): array
     $currentPassword = (string) ($body['currentPassword'] ?? ($body['current_password'] ?? ''));
     $newPassword = (string) ($body['newPassword'] ?? ($body['new_password'] ?? ''));
     if (strlen($newPassword) < 6) json_response(['error' => '新密码至少 6 位'], 400);
+    enforce_rate_limit('password', (string) $user['id'], 5, 900);
 
     $stmt = pdo()->prepare('SELECT password_hash FROM users WHERE id = ? LIMIT 1');
     $stmt->execute([$user['id']]);
@@ -152,6 +195,7 @@ function handle_auth_password(array $body): array
     $hash = password_hash($newPassword, PASSWORD_BCRYPT, ['cost' => 12]);
     $stmt = pdo()->prepare('UPDATE users SET password_hash = ? WHERE id = ?');
     $stmt->execute([$hash, $user['id']]);
+    reset_rate_limit('password', (string) $user['id']);
     return ['ok' => true];
 }
 
