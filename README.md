@@ -1,81 +1,250 @@
 # gpt-biubiubiu
 
-一个基于 Vite + React + PHP 单入口 API 的图片生成工作台。前端负责调用 OpenAI 兼容图片接口，PHP 负责账号、API 配置、生成记录、图片落盘和作品墙。
+一个面向 OpenAI 兼容图片接口的 Web 生图工作台。
 
-生产环境不需要 Node 服务：`npm run build` 后部署静态产物，由 PHP 处理 `/api/index.php`。
+前端使用 Vite + React，后端使用 PHP 单入口 API，数据保存在 MySQL。项目重点是：账号登录、多套 API 配置、文生图、图生图、生成记录、作品墙和图片本地落盘。
 
-## 当前架构
+## 功能概览
+
+- 文生图：调用 `/v1/images/generations`
+- 图生图：调用 `/v1/images/edits`
+- 支持多张参考图，最多 16 张
+- 支持 mask 图片，最大 4MB
+- 支持 1K / 2K / 4K 和常用比例，也支持自定义尺寸
+- 支持 URL / Base64 两种响应格式
+- 支持 `png`、`jpeg`、`webp` 输出格式
+- 支持多套 OpenAI 兼容 API 配置
+- 用户 API Key 加密保存到 MySQL
+- 生成成功后可保存到个人记录
+- 作品可发布到公开作品墙
+- 服务端自动保存原图和压缩展示图
+
+## 技术栈
 
 ```text
-浏览器 React 页面
-  ├─ 直连 OpenAI 兼容图片 API：/v1/images/generations、/v1/images/edits
-  └─ 调用本站 PHP API：账号、配置、生成记录、作品墙
+浏览器
+  └─ React + Vite
 
-PHP API
-  ├─ public/api/index.php        单入口
-  ├─ public/api/routes.php       路由表
-  └─ public/api/lib/*.php        数据库、账号、设置、文件、生成记录、作品墙
+本站 API
+  └─ PHP 单入口：public/api/index.php
 
-MySQL
-  ├─ users
-  ├─ user_settings
-  ├─ user_api_configs
-  ├─ auth_rate_limits
-  ├─ image_jobs
-  └─ wall_items
+数据层
+  └─ MySQL + 本地图片文件
+
+上游生图接口
+  └─ OpenAI 兼容 Images API
 ```
+
+生产环境不需要 Node 服务。前端构建后由 Web 服务器托管静态文件，PHP 只负责本站业务 API。
 
 ## 目录结构
 
 ```text
 src/
-  App.jsx                       页面装配和主状态编排
-  constants/options.js           选项、默认表单、尺寸限制
-  lib/api.js                     本站 API 请求、上游直连请求、响应解析
-  lib/images.js                  图片来源、MIME、data URL、展示数据归一化
-  lib/history.js                 本地历史
-  lib/size.js                    尺寸和比例
-  lib/board.js                   作品列表、过滤、排序、瀑布流
-  components/                    顶栏、工作台、作品板、弹窗组件
+  App.jsx                  页面状态和业务编排
+  main.jsx                 前端入口
+  styles.css               页面样式
+  components/              顶栏、工作台、作品板、弹窗
+  constants/               默认参数、尺寸、选项
+  lib/                     API、图片、历史、表单、作品墙工具
 
 public/api/
-  index.php                      PHP API 单入口
-  routes.php                     路由分发
-  bootstrap.php                  配置、响应、请求体、公共常量
-  lib/database.php               PDO、建表、补列、数据库可用性
-  lib/auth.php                   登录态、注册登录、个人资料、密码
-  lib/settings.php               API 配置、API Key 加密保存、当前配置切换
-  lib/files.php                  图片解码、压缩、落盘、公开路径
-  lib/generated_images.php       生成记录保存、列表、删除、清空
-  lib/wall.php                   作品墙列表、详情、上墙、取消上墙
+  index.php                API 单入口
+  bootstrap.php            配置、响应、请求解析、安全校验
+  routes.php               路由表
+  lib/
+    auth.php               账号、登录态、资料、密码
+    database.php           PDO、建表、补列
+    settings.php           API 配置、API Key 加密保存
+    files.php              图片解码、压缩、落盘
+    generated_images.php   生成记录
+    wall.php               作品墙
 
-server/schema.sql                数据库初始化脚本
-.php-api-config.example.php       PHP 配置模板
-.php-api-config.php               本机/生产配置，不提交
+server/
+  schema.sql               数据库初始化脚本
+
+.php-api-config.example.php 配置模板
+.php-api-config.php         本机/生产配置，不提交
 ```
 
-## 功能边界
+## 运行流程
 
-### 前端直连上游
+```text
+用户登录
+  -> 保存 API 配置和 API Key
+  -> 浏览器直连 OpenAI 兼容图片接口
+  -> 前端拿到图片结果
+  -> 保存生成记录到本站 PHP API
+  -> PHP 写入 MySQL，并把图片落盘到 public/wall-images
+  -> 用户选择发布到作品墙
+```
 
-生图请求由浏览器直接访问用户配置的 OpenAI 兼容 API 地址：
+这里的生图请求由浏览器直接访问用户配置的 API 地址，PHP 不做代理转发。PHP 只处理账号、配置、记录、图片落盘和作品墙。
 
-- 文生图：`/v1/images/generations`
-- 图片编辑：`/v1/images/edits`
+## 环境要求
 
-这意味着：
+- Node.js：用于前端开发和构建
+- PHP：建议 8.x
+- MySQL：建议 5.7+ 或 8.x
+- PHP 扩展：PDO MySQL、OpenSSL、GD
+- Web 服务器：Nginx / Apache / PHP 内置服务均可
 
-- PHP 不再代理上游生图请求。
-- 用户登录后可保存多套 API 配置。
-- 前端生成成功后，再把图片结果保存到本站 `/api/generated-images`。
-- 服务端保存图片时会落盘到 `public/wall-images`，作品墙使用压缩后的展示图。
+## 快速开始
 
-### PHP API
+安装依赖：
 
-PHP 只保留本站业务接口：
+```bash
+npm install
+```
+
+复制 PHP 配置：
+
+```bash
+cp .php-api-config.example.php .php-api-config.php
+```
+
+编辑 `.php-api-config.php`：
+
+```php
+<?php
+return [
+    'openai_base_url' => 'https://api.openai.com',
+    'openai_image_model' => 'gpt-image-2',
+
+    'mysql_host' => '127.0.0.1',
+    'mysql_port' => 3306,
+    'mysql_user' => 'your-db-user',
+    'mysql_password' => 'your-db-password',
+    'mysql_database' => 'your-db-name',
+
+    'session_secret' => 'generate-at-least-32-random-characters-before-deploy',
+    'user_api_key_secret' => 'generate-another-32-random-characters-before-deploy',
+
+    'bootstrap_admin_username' => '',
+    'bootstrap_admin_password' => '',
+    'bootstrap_admin_display_name' => '',
+];
+```
+
+启动开发环境：
+
+```bash
+npm run dev
+```
+
+也可以分开启动：
+
+```bash
+npm run dev:server
+npm run dev:client
+```
+
+开发模式下，Vite 会把 `/api` 代理到 `http://127.0.0.1:8088`。
+
+## 数据库
+
+PHP API 首次访问时会尝试自动创建和补齐表结构。也可以手动导入：
+
+```bash
+mysql -u your-db-user -p your-db-name < server/schema.sql
+```
+
+主要数据表：
+
+| 表 | 用途 |
+| --- | --- |
+| `users` | 用户账号、展示名、管理员标记 |
+| `user_settings` | 当前 API 配置、stream 等用户设置 |
+| `user_api_configs` | 多套 OpenAI 兼容 API 配置 |
+| `auth_rate_limits` | 登录、注册、改密频控 |
+| `image_jobs` | 生成记录、参数快照、图片地址 |
+| `wall_items` | 公开作品墙数据 |
+
+## 配置说明
+
+### 必填配置
+
+| 配置 | 说明 |
+| --- | --- |
+| `mysql_host` | MySQL 地址 |
+| `mysql_port` | MySQL 端口 |
+| `mysql_user` | MySQL 用户 |
+| `mysql_password` | MySQL 密码 |
+| `mysql_database` | MySQL 数据库 |
+| `session_secret` | 登录 Cookie 签名密钥 |
+| `user_api_key_secret` | 用户 API Key 加密密钥 |
+
+`session_secret` 和 `user_api_key_secret` 必须是 32 位以上随机字符串，不能使用示例值，也不能相同。
+
+### 默认上游配置
+
+| 配置 | 说明 |
+| --- | --- |
+| `openai_base_url` | 新用户默认 API 地址 |
+| `openai_image_model` | 新用户默认图片模型 |
+
+这两个值只是默认值。用户登录后可以在页面中保存自己的 API 地址、模型和 API Key。
+
+### 管理员初始化
+
+如需首次部署时自动创建管理员，可临时填写：
+
+```php
+'bootstrap_admin_username' => 'admin',
+'bootstrap_admin_password' => '至少 12 位的强密码',
+'bootstrap_admin_display_name' => '管理员',
+```
+
+管理员创建完成后，建议清空 `bootstrap_admin_password`，避免后续误改密码。
+
+## 生产部署
+
+构建前端：
+
+```bash
+npm run build
+```
+
+部署要点：
+
+- 站点运行目录指向 `dist`
+- `dist/api/index.php` 需要能被 PHP 执行
+- `.php-api-config.php` 放在项目根目录或 Web 根目录上级均可
+- `.php-api-config.php` 不要提交到仓库
+- `wall-images` 目录需要 Web 用户可写
+- 反向代理的 Host、Scheme 需要和实际访问域名一致，否则写接口可能被同源校验拒绝
+
+如果构建产物没有包含 API 文件，需要确保以下文件存在：
+
+```text
+api/index.php
+api/bootstrap.php
+api/routes.php
+api/lib/*.php
+```
+
+PHP 内置服务预览生产构建：
+
+```bash
+npm run start
+```
+
+## API 路由
+
+前端访问时通常会走 PHP 单入口：
+
+```text
+/api/index.php?route=/auth/me
+/api/index.php?route=/settings
+/api/index.php?route=/generated-images
+/api/index.php?route=/wall
+```
+
+本站 API：
 
 ```text
 GET    /api/health
+
 GET    /api/auth/me
 POST   /api/auth/register
 POST   /api/auth/login
@@ -100,161 +269,43 @@ POST   /api/wall
 DELETE /api/wall/{id}
 ```
 
-前端会通过 `src/lib/api.js` 转成兼容 PHP 单入口的形式：
+## 图片保存策略
 
 ```text
-/api/index.php?route=/auth/me
-/api/index.php?route=/generated-images
-/api/index.php?route=/wall
+public/wall-images/original   原图
+public/wall-images/display    展示图
 ```
 
-已删除旧 PHP 代理链路，不再提供服务端生图中转和请求日志接口。
+- 服务端会保存生成结果对应的原图
+- 展示图超过 1MB 时会尝试压缩
+- 删除生成记录时，如果图片没有被作品墙引用，会同步清理本地文件
+- 取消上墙时，如果图片已经脱离生成记录，也会清理对应本地文件
 
-## PHP 配置
-
-复制配置模板：
+## 常用命令
 
 ```bash
-cp .php-api-config.example.php .php-api-config.php
+npm run dev          # 同时启动 PHP API 和 Vite
+npm run dev:server   # 只启动 PHP API
+npm run dev:client   # 只启动 Vite
+npm run build        # 构建前端
+npm run preview      # 预览 Vite 构建结果
+npm run start        # 用 PHP 内置服务运行 dist
 ```
 
-配置内容：
+## 验证
 
-```php
-<?php
-return [
-    'openai_base_url' => 'https://api.openai.com',
-    'openai_image_model' => 'gpt-image-2',
-
-    'mysql_host' => '127.0.0.1',
-    'mysql_port' => 3306,
-    'mysql_user' => 'your-db-user',
-    'mysql_password' => 'your-db-password',
-    'mysql_database' => 'your-db-name',
-
-    'session_secret' => 'generate-at-least-32-random-characters-before-deploy',
-    'user_api_key_secret' => 'generate-another-32-random-characters-before-deploy',
-];
-```
-
-说明：
-
-- `.php-api-config.php` 不进入前端构建，也不应提交；生产环境建议放在 Web 根目录之外，或至少由 Web 服务器禁止直接访问。
-- `session_secret` 用于签名登录 Cookie，必须是 32 位以上随机值；空值或示例弱值会被拒绝。
-- `user_api_key_secret` 用于加密保存用户 API Key，必须和 `session_secret` 不同，且部署后不要随意更换，否则旧 API Key 无法解密。
-- 写接口会拒绝跨站 Origin/Referer，请确保生产域名和反向代理 Host 配置一致。
-- `openai_base_url` 和 `openai_image_model` 只是默认值，用户登录后可在页面里保存自己的 API 配置。
-
-## 数据库
-
-PHP API 首次请求会自动创建/补齐表结构。也可以手动导入：
-
-```bash
-mysql -u your-db-user -p your-db-name < server/schema.sql
-```
-
-主要数据表：
-
-- `users`：账号与管理员标记
-- `user_settings`：当前 API 配置、stream 等用户设置
-- `user_api_configs`：多套 OpenAI 兼容 API 配置，加密保存 API Key
-- `auth_rate_limits`：登录、注册、改密等账号接口的短窗口频控
-- `image_jobs`：已保存生成记录、图片地址、参数快照
-- `wall_items`：作品墙数据
-
-管理员账号不会内置默认密码。首次部署如需自动创建管理员，可在 `.php-api-config.php` 中填写：
-
-```php
-'bootstrap_admin_username' => 'admin',
-'bootstrap_admin_password' => '至少 12 位的强密码',
-'bootstrap_admin_display_name' => '管理员',
-```
-
-创建后建议清空 `bootstrap_admin_password`，避免后续误改管理员密码。
-
-## 本地开发
-
-安装依赖：
-
-```bash
-npm install
-```
-
-启动 PHP API：
-
-```bash
-npm run dev:server
-```
-
-启动 Vite：
-
-```bash
-npm run dev:client
-```
-
-或者同时启动：
-
-```bash
-npm run dev
-```
-
-Vite 开发服务会把 `/api` 代理到 `http://127.0.0.1:8088`。
-
-## 生产部署
-
-构建前端：
+检查前端构建：
 
 ```bash
 npm run build
 ```
 
-部署要求：
-
-- 网站运行目录指向 Vite 构建产物目录。
-- 保留 `api/index.php` 和 `api/lib/*.php` 可由 PHP 执行。
-- 不需要启动 Node 服务。
-- PHP 建议启用：PDO MySQL、OpenSSL、GD。
-
-如果构建流程没有自动复制 `public/api`，请确保生产目录里包含：
-
-```text
-api/index.php
-api/routes.php
-api/bootstrap.php
-api/lib/*.php
-```
-
-`wall-images` 目录用于保存原图和压缩展示图，需要 Web 用户可写。
-
-## 图片与作品墙
-
-生成成功后的流向：
-
-```text
-上游图片结果
-  -> 前端展示
-  -> POST /api/generated-images
-  -> PHP 保存图片文件和 image_jobs
-  -> 用户点击上墙
-  -> POST /api/wall
-  -> wall_items
-```
-
-文件保存策略：
-
-- 原图保存到 `public/wall-images/original`。
-- 展示图保存到 `public/wall-images/display`。
-- 展示图超过 1MB 时，服务端会尝试压缩。
-- 删除生成记录时，如果没有作品墙引用，会同步删除关联本地图片文件。
-- 取消上墙时，如果作品墙图片已经脱离生成记录，也会清理对应本地文件。
-
-## 验证命令
+检查 PHP 语法：
 
 ```bash
-npm run build
 php -l public/api/index.php
-php -l public/api/routes.php
 php -l public/api/bootstrap.php
+php -l public/api/routes.php
 php -l public/api/lib/database.php
 php -l public/api/lib/auth.php
 php -l public/api/lib/settings.php
@@ -263,8 +314,16 @@ php -l public/api/lib/generated_images.php
 php -l public/api/lib/wall.php
 ```
 
-最小接口检查：
+检查 API 健康状态：
 
 ```bash
 curl 'http://127.0.0.1:8088/api/index.php?route=/health'
 ```
+
+## 安全注意
+
+- 不要提交 `.php-api-config.php`
+- 不要使用示例密钥部署生产环境
+- 不要随意更换 `user_api_key_secret`，否则已保存的 API Key 将无法解密
+- 生产环境建议禁止直接访问配置文件
+- 写接口会校验 Origin / Referer，跨站请求会被拒绝
