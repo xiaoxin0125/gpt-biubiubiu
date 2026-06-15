@@ -109,12 +109,6 @@ function stored_user_settings_row(int $userId): ?array
     return $settings ?: null;
 }
 
-function stored_user_settings(): ?array
-{
-    $userId = session_user_id();
-    return $userId ? stored_user_settings_row($userId) : null;
-}
-
 function config_from_row(array $row): array
 {
     return [

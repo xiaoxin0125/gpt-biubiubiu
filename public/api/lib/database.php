@@ -66,6 +66,14 @@ function bootstrap_admin_user(PDO $db): void
         throw new RuntimeException('bootstrap_admin_password 至少 12 位');
     }
 
+    $stmt = $db->prepare('SELECT id FROM users WHERE username = ? LIMIT 1');
+    $stmt->execute([$username]);
+    $existing = $stmt->fetch();
+    if ($existing) {
+        $db->prepare('UPDATE users SET is_admin = 1 WHERE id = ?')->execute([(int) $existing['id']]);
+        return;
+    }
+
     $displayName = normalize_display_name((string) cfg('bootstrap_admin_display_name', $username), $username);
     $hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
     $stmt = $db->prepare("INSERT INTO users (username, display_name, password_hash, is_admin) VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE is_admin = 1, display_name = COALESCE(NULLIF(display_name, ''), VALUES(display_name))");
@@ -78,12 +86,25 @@ function ensure_schema(): void
     if ($state['schemaReady']) return;
 
     $db = pdo();
+    $db->exec("CREATE TABLE IF NOT EXISTS schema_meta (
+      meta_key VARCHAR(64) NOT NULL PRIMARY KEY,
+      meta_value VARCHAR(191) NOT NULL DEFAULT ''
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $stmt = $db->prepare('SELECT meta_value FROM schema_meta WHERE meta_key = ? LIMIT 1');
+    $stmt->execute(['schema_version']);
+    if ((string) $stmt->fetchColumn() === SCHEMA_VERSION) {
+        $state['schemaReady'] = true;
+        return;
+    }
+
     $db->exec("CREATE TABLE IF NOT EXISTS users (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       username VARCHAR(64) NOT NULL UNIQUE,
       display_name VARCHAR(96) DEFAULT NULL,
       password_hash VARCHAR(255) NOT NULL,
       is_admin TINYINT(1) NOT NULL DEFAULT 0,
+      token_version INT UNSIGNED NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
@@ -180,6 +201,7 @@ function ensure_schema(): void
 
     ensure_column($db, 'users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
     ensure_column($db, 'users', 'is_admin', 'is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER password_hash');
+    ensure_column($db, 'users', 'token_version', 'token_version INT UNSIGNED NOT NULL DEFAULT 0 AFTER is_admin');
     ensure_column($db, 'user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
     ensure_column($db, 'user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
     ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');
@@ -238,6 +260,9 @@ function ensure_schema(): void
     $db->exec('UPDATE user_settings SET request_timeout = 999 WHERE request_timeout IN (180, 600)');
     $db->exec("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");
 
+    $stmt = $db->prepare('INSERT INTO schema_meta (meta_key, meta_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)');
+    $stmt->execute(['schema_version', SCHEMA_VERSION]);
+
     $state['schemaReady'] = true;
 }
 
@@ -246,6 +271,7 @@ function require_database(): void
     try {
         ensure_schema();
     } catch (Throwable $error) {
-        json_response(['error' => '服务端未配置 MySQL', 'detail' => $error->getMessage()], 503);
+        error_log('[gpt_biubiubiu] schema: ' . $error->getMessage());
+        json_response(['error' => '服务端未配置 MySQL'], 503);
     }
 }

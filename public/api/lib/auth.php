@@ -46,32 +46,38 @@ function clear_cookie_value(string $name): void
     unset($_COOKIE[$name]);
 }
 
-function session_user_id(): ?int
+function session_token(): array
 {
     $value = unsign_value($_COOKIE['session_user'] ?? '');
-    $id = (int) $value;
+    if ($value === '') return ['id' => 0, 'version' => 0];
+
+    $parts = explode('.', $value, 2);
+    $id = (int) ($parts[0] ?? 0);
+    $version = isset($parts[1]) ? (int) $parts[1] : 0;
+    return ['id' => $id > 0 ? $id : 0, 'version' => $version];
+}
+
+function session_user_id(): ?int
+{
+    $id = session_token()['id'];
     return $id > 0 ? $id : null;
 }
 
-function visitor_id(): string
+function issue_session_cookie(int $userId, int $tokenVersion): void
 {
-    $existing = unsign_value($_COOKIE['visitor_id'] ?? '');
-    if ($existing !== '') return $existing;
-
-    $id = bin2hex(random_bytes(16));
-    set_signed_cookie('visitor_id', $id, 365 * 24 * 60 * 60);
-    return $id;
+    set_signed_cookie('session_user', $userId . '.' . $tokenVersion, 30 * 24 * 60 * 60);
 }
 
 function current_user(): ?array
 {
-    $id = session_user_id();
-    if (!$id) return null;
+    $token = session_token();
+    if ($token['id'] <= 0) return null;
 
-    $stmt = pdo()->prepare('SELECT id, username, display_name, is_admin, created_at FROM users WHERE id = ? LIMIT 1');
-    $stmt->execute([$id]);
+    $stmt = pdo()->prepare('SELECT id, username, display_name, is_admin, token_version, created_at FROM users WHERE id = ? LIMIT 1');
+    $stmt->execute([$token['id']]);
     $user = $stmt->fetch();
     if (!$user) return null;
+    if ((int) ($user['token_version'] ?? 0) !== $token['version']) return null;
 
     $displayName = trim((string) ($user['display_name'] ?? '')) ?: $user['username'];
     return ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'isAdmin' => !empty($user['is_admin']), 'createdAt' => $user['created_at']];
@@ -128,7 +134,8 @@ function handle_auth_me(): array
         $user = current_user();
         return ['user' => $user, 'settings' => $user ? settings_for_user((int) $user['id']) : null, 'mysqlConfigured' => true];
     } catch (Throwable $error) {
-        return ['user' => null, 'settings' => null, 'mysqlConfigured' => false, 'detail' => $error->getMessage()];
+        error_log('[gpt_biubiubiu] auth_me: ' . $error->getMessage());
+        return ['user' => null, 'settings' => null, 'mysqlConfigured' => false];
     }
 }
 
@@ -146,12 +153,14 @@ function handle_auth_register(array $body): array
         $hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
         $stmt = pdo()->prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)');
         $stmt->execute([$username, $displayName, $hash]);
-        $id = (int) pdo()->lastInsertId();
-        set_signed_cookie('session_user', (string) $id, 30 * 24 * 60 * 60);
-        return ['user' => ['id' => $id, 'username' => $username, 'displayName' => $displayName, 'isAdmin' => false], 'settings' => settings_for_user($id)];
-    } catch (Throwable $error) {
-        json_response(['error' => '用户名已存在'], 400);
+    } catch (PDOException $error) {
+        if (($error->errorInfo[1] ?? null) === 1062) json_response(['error' => '用户名已存在'], 400);
+        throw $error;
     }
+
+    $id = (int) pdo()->lastInsertId();
+    issue_session_cookie($id, 0);
+    return ['user' => ['id' => $id, 'username' => $username, 'displayName' => $displayName, 'isAdmin' => false], 'settings' => settings_for_user($id)];
 }
 
 function handle_auth_login(array $body): array
@@ -165,7 +174,7 @@ function handle_auth_login(array $body): array
     if (!$user || !password_verify((string) ($body['password'] ?? ''), $user['password_hash'])) json_response(['error' => '用户名或密码错误'], 401);
 
     reset_rate_limit('login', $username);
-    set_signed_cookie('session_user', (string) $user['id'], 30 * 24 * 60 * 60);
+    issue_session_cookie((int) $user['id'], (int) ($user['token_version'] ?? 0));
     $displayName = trim((string) ($user['display_name'] ?? '')) ?: $user['username'];
     return ['user' => ['id' => (int) $user['id'], 'username' => $user['username'], 'displayName' => $displayName, 'isAdmin' => !empty($user['is_admin']), 'createdAt' => $user['created_at']], 'settings' => settings_for_user((int) $user['id'])];
 }
@@ -193,9 +202,13 @@ function handle_auth_password(array $body): array
     if (!$row || !password_verify($currentPassword, $row['password_hash'])) json_response(['error' => '旧密码错误'], 401);
 
     $hash = password_hash($newPassword, PASSWORD_BCRYPT, ['cost' => 12]);
-    $stmt = pdo()->prepare('UPDATE users SET password_hash = ? WHERE id = ?');
+    $stmt = pdo()->prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?');
     $stmt->execute([$hash, $user['id']]);
     reset_rate_limit('password', (string) $user['id']);
+
+    $stmt = pdo()->prepare('SELECT token_version FROM users WHERE id = ? LIMIT 1');
+    $stmt->execute([$user['id']]);
+    issue_session_cookie((int) $user['id'], (int) $stmt->fetchColumn());
     return ['ok' => true];
 }
 

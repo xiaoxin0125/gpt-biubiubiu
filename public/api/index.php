@@ -21,8 +21,8 @@ try {
     json_response(dispatch_route($method, $route, $body));
 } catch (Throwable $error) {
     $status = $error instanceof RuntimeException ? 502 : 500;
+    error_log('[gpt_biubiubiu] ' . $error->getMessage());
     json_response([
-        'error' => $error->getMessage() ?: '服务端异常',
-        'detail' => $error->getMessage(),
+        'error' => $error instanceof RuntimeException ? ($error->getMessage() ?: '上游服务异常') : '服务端异常',
     ], $status);
 }
