@@ -1,4 +1,5 @@
 import { MAX_REQUEST_TIMEOUT_SECONDS } from '../constants/options';
+import SiteAdminPanel from './SiteAdminPanel';
 
 export default function AccountModal({
   user,
@@ -25,12 +26,18 @@ export default function AccountModal({
   addApiConfig,
   resetDirectSettings,
   saveAccountSettings,
+  siteFlags,
+  siteSettings,
+  setSiteSettings,
+  saveSiteSettings,
 }) {
+  const isAdmin = Boolean(user?.isAdmin);
+  const registrationEnabled = siteFlags?.registrationEnabled !== false;
   return (
     <section className="modal-card account-modal" role="dialog" aria-modal="true" aria-label="账号设置">
       <div className="modal-head">
         <div>
-          <h2>{user ? '账号设置' : authMode === 'login' ? '登录' : '注册'}</h2>
+          <h2>{user ? '账号设置' : (registrationEnabled && authMode === 'register') ? '注册' : '登录'}</h2>
           <p>{user ? '账号信息、密码和参数设置' : '登录后可保存配置，上墙作品显示展示名称'}</p>
         </div>
         <button type="button" className="close-button" onClick={closeDialog}>×</button>
@@ -38,9 +45,12 @@ export default function AccountModal({
 
       {user ? (
         <div className="account-panel">
-          <div className="segmented-control two-tabs account-tabs">
+          <div className={isAdmin ? 'segmented-control account-tabs' : 'segmented-control two-tabs account-tabs'}>
             <button type="button" className={authTab === 'profile' ? 'is-active' : ''} onClick={() => setAuthTab('profile')}>账号信息</button>
             <button type="button" className={authTab === 'settings' ? 'is-active' : ''} onClick={() => setAuthTab('settings')}>参数设置</button>
+            {isAdmin ? (
+              <button type="button" className={authTab === 'site' ? 'is-active' : ''} onClick={() => setAuthTab('site')}>网站管理</button>
+            ) : null}
           </div>
 
           {authTab === 'profile' ? (
@@ -77,39 +87,44 @@ export default function AccountModal({
 
               {(apiConfigForm.apiConfigs || []).map((config, index) => {
                 const isActiveConfig = String(config.id) === String(apiConfigForm.activeApiConfigId);
+                const isShared = Boolean(config.isShared);
                 return (
                   <section className={isActiveConfig ? 'api-config-card full-field is-active' : 'api-config-card full-field'} key={config.id}>
                     <div className="api-config-card-head">
                       <div>
                         <strong>{config.apiName || `API 配置 ${index + 1}`}</strong>
-                        <span>{isActiveConfig ? '当前启用' : '备用配置'}</span>
+                        <span>{isShared ? '站点共享，不可编辑' : isActiveConfig ? '当前启用' : '备用配置'}</span>
                       </div>
                       <div className="api-config-actions">
                         <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, activeApiConfigId: config.id }))}>启用</button>
-                        <button type="button" className="secondary-action danger-action" onClick={() => removeApiConfig(config.id)} disabled={(apiConfigForm.apiConfigs || []).length <= 1}>删除</button>
+                        {isShared ? null : (
+                          <button type="button" className="secondary-action danger-action" onClick={() => removeApiConfig(config.id)} disabled={(apiConfigForm.apiConfigs || []).filter((item) => !item.isShared).length <= 1}>删除</button>
+                        )}
                       </div>
                     </div>
                     <div className="api-config-fields">
                       <label>
                         <span>API 名称</span>
-                        <input value={config.apiName} onChange={(event) => updateApiConfig(config.id, 'apiName', event.target.value)} placeholder="OpenAI gpt-image-2" />
+                        <input value={config.apiName} onChange={(event) => updateApiConfig(config.id, 'apiName', event.target.value)} placeholder="OpenAI gpt-image-2" disabled={isShared} />
                       </label>
                       <label>
                         <span>API 地址</span>
-                        <input value={config.apiBaseUrl} onChange={(event) => updateApiConfig(config.id, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
+                        <input value={config.apiBaseUrl} onChange={(event) => updateApiConfig(config.id, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" disabled={isShared} />
                       </label>
                       <label>
                         <span>模型 ID</span>
-                        <input value={config.model} onChange={(event) => updateApiConfig(config.id, 'model', event.target.value)} placeholder="gpt-image-2" />
+                        <input value={config.model} onChange={(event) => updateApiConfig(config.id, 'model', event.target.value)} placeholder="gpt-image-2" disabled={isShared} />
                       </label>
                       <label>
                         <span>请求超时（秒）</span>
-                        <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={config.requestTimeout} onChange={(event) => updateApiConfig(config.id, 'requestTimeout', event.target.value)} placeholder="999" />
+                        <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={config.requestTimeout} onChange={(event) => updateApiConfig(config.id, 'requestTimeout', event.target.value)} placeholder="999" disabled={isShared} />
                       </label>
-                      <label className="full-field">
-                        <span>密钥设置</span>
-                        <input type="password" value={config.apiKey || ''} onChange={(event) => updateApiConfig(config.id, 'apiKey', event.target.value)} placeholder={config.hasApiKey ? `已保存：${config.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
-                      </label>
+                      {isShared ? null : (
+                        <label className="full-field">
+                          <span>密钥设置</span>
+                          <input type="password" value={config.apiKey || ''} onChange={(event) => updateApiConfig(config.id, 'apiKey', event.target.value)} placeholder={config.hasApiKey ? `已保存：${config.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
+                        </label>
+                      )}
                     </div>
                   </section>
                 );
@@ -128,18 +143,28 @@ export default function AccountModal({
               </div>
             </div>
           ) : null}
+
+          {authTab === 'site' && isAdmin ? (
+            <SiteAdminPanel
+              siteSettings={siteSettings}
+              setSiteSettings={setSiteSettings}
+              saveSiteSettings={saveSiteSettings}
+            />
+          ) : null}
         </div>
       ) : (
         <form className="auth-form" onSubmit={submitAuth}>
-          <div className="segmented-control two-tabs">
-            <button type="button" className={authMode === 'login' ? 'is-active' : ''} onClick={() => setAuthMode('login')}>登录</button>
-            <button type="button" className={authMode === 'register' ? 'is-active' : ''} onClick={() => setAuthMode('register')}>注册</button>
-          </div>
+          {registrationEnabled ? (
+            <div className="segmented-control two-tabs">
+              <button type="button" className={authMode === 'login' ? 'is-active' : ''} onClick={() => setAuthMode('login')}>登录</button>
+              <button type="button" className={authMode === 'register' ? 'is-active' : ''} onClick={() => setAuthMode('register')}>注册</button>
+            </div>
+          ) : null}
           <label>
             <span>用户名</span>
             <input value={authForm.username} onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))} placeholder="2-20 位" />
           </label>
-          {authMode === 'register' ? (
+          {registrationEnabled && authMode === 'register' ? (
             <label>
               <span>展示名称</span>
               <input value={authForm.displayName} onChange={(event) => setAuthForm((current) => ({ ...current, displayName: event.target.value }))} placeholder="可选，默认同用户名" />
@@ -149,7 +174,7 @@ export default function AccountModal({
             <span>密码</span>
             <input type="password" value={authForm.password} onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))} placeholder="至少 6 位" />
           </label>
-          <button type="submit" className="primary-action">{authMode === 'login' ? '登录' : '注册'}</button>
+          <button type="submit" className="primary-action">{registrationEnabled && authMode === 'register' ? '注册' : '登录'}</button>
         </form>
       )}
     </section>

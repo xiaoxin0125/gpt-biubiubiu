@@ -216,10 +216,18 @@ function settings_for_user(int $userId): ?array
     $active = active_api_config_row($userId);
     $activeClient = $active ? config_from_row($active) : null;
 
+    $apiConfigs = array_map('config_from_row', $configs);
+    if (shared_api_enabled()) {
+        $sharedClient = shared_api_config_client();
+        array_unshift($apiConfigs, $sharedClient);
+        $ownHasKey = $activeClient['hasApiKey'] ?? false;
+        if (!empty($settings['active_shared']) || !$ownHasKey) $activeClient = $sharedClient;
+    }
+
     return [
         'stream' => !empty($settings['stream']),
         'activeApiConfigId' => $activeClient['id'] ?? null,
-        'apiConfigs' => array_map('config_from_row', $configs),
+        'apiConfigs' => $apiConfigs,
         'activeConfig' => $activeClient,
         'model' => $activeClient['model'] ?? DEFAULT_IMAGE_MODEL,
         'apiName' => $activeClient['apiName'] ?? DEFAULT_API_NAME,
@@ -234,6 +242,12 @@ function stored_user_api_key(): string
 {
     $userId = session_user_id();
     if (!$userId) return '';
+    $settings = stored_user_settings_row($userId);
+    if (shared_api_enabled()) {
+        $ownKey = decrypt_api_key(active_api_config_row($userId));
+        if (!empty($settings['active_shared']) || $ownKey === '') return decrypt_shared_api_key();
+        return $ownKey;
+    }
     return decrypt_api_key(active_api_config_row($userId));
 }
 
@@ -261,13 +275,19 @@ function save_user_settings(array $user, array $body): array
     $db = pdo();
     $settings = is_array($body['settings'] ?? null) ? $body['settings'] : [];
     $configs = array_values(array_filter(is_array($body['apiConfigs'] ?? null) ? $body['apiConfigs'] : [], 'is_array'));
+    // 共享配置是注入的虚拟项，不写入 user_api_configs。
+    $configs = array_values(array_filter($configs, function ($config) {
+        $rawId = (string) ($config['id'] ?? '');
+        return $rawId !== SHARED_API_CONFIG_ID && empty($config['isShared']);
+    }));
     if (!$configs && isset($settings['apiName'], $settings['apiBaseUrl'])) $configs = [$settings];
     if (!$configs) json_response(['error' => '至少保留一套 API 配置'], 400);
 
-    // activeRawId 可能是本地字符串 id（如 api-config-xxx）或数据库数字 id。
+    // activeRawId 可能是本地字符串 id（如 api-config-xxx）、共享虚拟 id 或数据库数字 id。
     // (int) 对字符串 id 取 0，循环里再按 raw id 精确匹配落库后的真实数字 id。
     $activeRawId = (string) ($settings['activeApiConfigId'] ?? ($settings['active_api_config_id'] ?? ''));
-    $activeId = (int) $activeRawId;
+    $wantShared = shared_api_enabled() && $activeRawId === SHARED_API_CONFIG_ID;
+    $activeId = $wantShared ? 0 : (int) $activeRawId;
     $stream = !empty($settings['stream']);
     $seenIds = [];
 
@@ -326,6 +346,7 @@ function save_user_settings(array $user, array $body): array
         if (!$active) throw new RuntimeException('当前 API 配置不存在');
 
         upsert_user_settings_from_config((int) $user['id'], $active, $activeId, $stream ? 1 : 0, true);
+        $db->prepare('UPDATE user_settings SET active_shared = ? WHERE user_id = ?')->execute([$wantShared ? 1 : 0, $user['id']]);
 
         $db->commit();
         return settings_for_user((int) $user['id']);
@@ -337,7 +358,13 @@ function save_user_settings(array $user, array $body): array
 
 function switch_active_api_config(array $user, array $body): array
 {
-    $configId = (int) ($body['activeApiConfigId'] ?? ($body['active_api_config_id'] ?? 0));
+    $rawId = (string) ($body['activeApiConfigId'] ?? ($body['active_api_config_id'] ?? ''));
+    if (shared_api_enabled() && $rawId === SHARED_API_CONFIG_ID) {
+        pdo()->prepare('UPDATE user_settings SET active_shared = 1 WHERE user_id = ?')->execute([$user['id']]);
+        return settings_for_user((int) $user['id']);
+    }
+
+    $configId = (int) $rawId;
     if ($configId <= 0) json_response(['error' => '缺少 API 配置 ID'], 400);
 
     $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
@@ -348,6 +375,7 @@ function switch_active_api_config(array $user, array $body): array
     $settings = stored_user_settings_row((int) $user['id']);
     $stream = !empty($settings['stream']) ? 1 : 0;
     upsert_user_settings_from_config((int) $user['id'], $active, $configId, $stream, false);
+    pdo()->prepare('UPDATE user_settings SET active_shared = 0 WHERE user_id = ?')->execute([$user['id']]);
 
     return settings_for_user((int) $user['id']);
 }

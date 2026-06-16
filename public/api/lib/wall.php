@@ -194,6 +194,7 @@ function handle_wall_mine(array $user): array
 function handle_wall_list(): array
 {
     require_database();
+    if (wall_requires_login()) require_user();
     $rows = pdo()->query('SELECT * FROM wall_items ORDER BY created_at DESC LIMIT 80')->fetchAll();
     return ['items' => array_map('client_wall_item', $rows)];
 }
@@ -201,6 +202,7 @@ function handle_wall_list(): array
 function handle_wall_detail(int $id): array
 {
     require_database();
+    if (wall_requires_login()) require_user();
     $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
     $stmt->execute([$id]);
     $item = $stmt->fetch();

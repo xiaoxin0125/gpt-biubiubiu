@@ -11,6 +11,7 @@ function handle_health(): array
     try {
         ensure_schema();
         $mysqlConfigured = true;
+        $siteFlags = public_site_flags();
         $userId = session_user_id();
         $settings = $userId ? stored_user_settings_row((int) $userId) : null;
         $active = $userId ? active_api_config_row((int) $userId) : null;
@@ -28,6 +29,7 @@ function handle_health(): array
         'apiName' => $apiName,
         'baseUrl' => rtrim((string) cfg('openai_base_url', DEFAULT_API_BASE_URL), '/'),
         'defaultImageModel' => cfg('openai_image_model', DEFAULT_IMAGE_MODEL),
+        'site' => $siteFlags ?? null,
     ];
 }
 
@@ -73,6 +75,14 @@ function api_exact_routes(): array
         ['POST', '/settings/active-api', function (array $body): array {
             $user = require_user();
             return ['settings' => switch_active_api_config($user, $body)];
+        }],
+        ['GET', '/admin/site-settings', function (): array {
+            require_admin();
+            return ['site' => admin_site_settings_view()];
+        }],
+        ['POST', '/admin/site-settings', function (array $body): array {
+            require_admin();
+            return ['site' => save_site_settings($body)];
         }],
         ['GET', '/generated-images', function (): array {
             return handle_generated_images(require_user());

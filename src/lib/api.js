@@ -73,6 +73,7 @@ export const normalizeApiConfigItem = (value = {}, index = 0) => ({
   hasApiKey: Boolean(value.hasApiKey || value.has_api_key || value.apiKey || value.api_key),
   apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),
   requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
+  isShared: Boolean(value.isShared || value.is_shared),
 });
 
 export const normalizeServerSettings = (value = {}) => {

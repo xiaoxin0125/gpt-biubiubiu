@@ -13,6 +13,7 @@ import {
   defaultApiConfigForm,
   defaultApiConfigItem,
   defaultForm,
+  defaultSiteFlags,
   defaultSizeDraft,
   emptyAuthForm,
   emptyPasswordForm,
@@ -92,6 +93,8 @@ function App() {
   const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const [imageLayoutMeta, setImageLayoutMeta] = useState({});
+  const [siteFlags, setSiteFlags] = useState(defaultSiteFlags);
+  const [siteSettings, setSiteSettings] = useState({ ...defaultSiteFlags, sharedApi: {} });
   const {
     boardVisibleCount,
     setBoardVisibleCount,
@@ -228,7 +231,55 @@ function App() {
     }
   };
 
+  const loadSiteSettings = async () => {
+    try {
+      const data = await requestJson('/api/admin/site-settings');
+      if (data.site) setSiteSettings({ ...data.site, sharedApi: data.site.sharedApi || {} });
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '网站设置加载失败');
+    }
+  };
+
+  const saveSiteSettings = async () => {
+    try {
+      const data = await requestJson('/api/admin/site-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wallRequireLogin: siteSettings.wallRequireLogin,
+          registrationEnabled: siteSettings.registrationEnabled,
+          sharedApiEnabled: siteSettings.sharedApiEnabled,
+          sharedApi: {
+            apiName: siteSettings.sharedApi?.apiName,
+            apiBaseUrl: siteSettings.sharedApi?.apiBaseUrl,
+            model: siteSettings.sharedApi?.model,
+            requestTimeout: siteSettings.sharedApi?.requestTimeout,
+            apiKey: siteSettings.sharedApi?.apiKey,
+            clearApiKey: Boolean(siteSettings.sharedApi?.clearApiKey),
+          },
+        }),
+      });
+      if (data.site) {
+        setSiteSettings({ ...data.site, sharedApi: data.site.sharedApi || {} });
+        setSiteFlags({
+          wallRequireLogin: Boolean(data.site.wallRequireLogin),
+          registrationEnabled: Boolean(data.site.registrationEnabled),
+          sharedApiEnabled: Boolean(data.site.sharedApiEnabled),
+        });
+      }
+      setError('');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : '网站设置保存失败');
+    }
+  };
+
+  const wallLocked = siteFlags.wallRequireLogin && !user;
+
   const loadWall = async () => {
+    if (wallLocked) {
+      setWallItems([]);
+      return;
+    }
     try {
       const data = await requestJson('/api/wall');
       setWallItems(Array.isArray(data.items) ? data.items : []);
@@ -305,6 +356,18 @@ function App() {
   useEffect(() => {
     setHistory(readHistory());
 
+    requestJson('/api/health')
+      .then((data) => {
+        if (data.site) {
+          setSiteFlags({
+            wallRequireLogin: Boolean(data.site.wallRequireLogin),
+            registrationEnabled: Boolean(data.site.registrationEnabled),
+            sharedApiEnabled: Boolean(data.site.sharedApiEnabled),
+          });
+        }
+      })
+      .catch(() => {});
+
     requestJson('/api/auth/me')
       .then((data) => {
         const nextUser = data.user || null;
@@ -316,6 +379,7 @@ function App() {
             setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
           });
           syncGeneratedImages();
+          if (nextUser.isAdmin) loadSiteSettings();
         } else {
           saveHistory([]);
           apiKeyVaultRef.current.clear();
@@ -340,11 +404,15 @@ function App() {
 
   useEffect(() => {
     if (view === 'wall') loadWall();
-  }, [view]);
+  }, [view, user, siteFlags.wallRequireLogin]);
 
   useEffect(() => {
     setProfileForm({ displayName: user?.displayName || user?.username || '' });
   }, [user]);
+
+  useEffect(() => {
+    if (user?.isAdmin) loadSiteSettings();
+  }, [user?.isAdmin]);
 
   useEffect(() => {
     if (view === 'wall' && !wallFilterOptions.some((option) => option.value === boardFilter)) setBoardFilter('all');
@@ -766,6 +834,7 @@ function App() {
         status={status}
         activeApiConfig={activeApiConfig}
         userDisplayName={userDisplayName}
+        wallLocked={wallLocked}
       />
 
       {view === 'generate' ? (
@@ -846,6 +915,10 @@ function App() {
               addApiConfig={addApiConfig}
               resetDirectSettings={resetDirectSettings}
               saveAccountSettings={saveAccountSettings}
+              siteFlags={siteFlags}
+              siteSettings={siteSettings}
+              setSiteSettings={setSiteSettings}
+              saveSiteSettings={saveSiteSettings}
             />
           ) : null}
 

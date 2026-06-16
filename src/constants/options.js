@@ -9,6 +9,14 @@ export const MASONRY_CARD_TEXT_HEIGHT_RATIO = 0.22;
 export const MASONRY_CARD_GAP_RATIO = 0.08;
 export const MAX_OUTPUT_IMAGES = 10;
 
+export const SHARED_API_CONFIG_ID = 'shared';
+
+export const defaultSiteFlags = {
+  wallRequireLogin: false,
+  registrationEnabled: true,
+  sharedApiEnabled: false,
+};
+
 export const qualityOptions = [
   { label: 'auto', value: 'auto' },
   { label: 'low', value: 'low' },

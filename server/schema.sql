@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
   request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
   stream TINYINT(1) NOT NULL DEFAULT 0,
   active_api_config_id BIGINT UNSIGNED DEFAULT NULL,
+  active_shared TINYINT(1) NOT NULL DEFAULT 0,
   api_key_ciphertext TEXT DEFAULT NULL,
   api_key_iv VARCHAR(64) DEFAULT NULL,
   api_key_tag VARCHAR(64) DEFAULT NULL,
@@ -98,4 +99,20 @@ CREATE TABLE IF NOT EXISTS wall_items (
   INDEX idx_wall_items_client (client_id),
   CONSTRAINT fk_wall_items_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_wall_items_job FOREIGN KEY (source_job_id) REFERENCES image_jobs(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS site_settings (
+  id TINYINT UNSIGNED NOT NULL PRIMARY KEY DEFAULT 1,
+  wall_require_login TINYINT(1) NOT NULL DEFAULT 0,
+  registration_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  shared_api_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  shared_api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
+  shared_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
+  shared_model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
+  shared_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
+  shared_api_key_ciphertext TEXT DEFAULT NULL,
+  shared_api_key_iv VARCHAR(64) DEFAULT NULL,
+  shared_api_key_tag VARCHAR(64) DEFAULT NULL,
+  shared_api_key_hint VARCHAR(24) DEFAULT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

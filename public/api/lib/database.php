@@ -199,6 +199,22 @@ function ensure_schema(): void
       INDEX idx_wall_items_client (client_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+    $db->exec("CREATE TABLE IF NOT EXISTS site_settings (
+      id TINYINT UNSIGNED NOT NULL PRIMARY KEY DEFAULT 1,
+      wall_require_login TINYINT(1) NOT NULL DEFAULT 0,
+      registration_enabled TINYINT(1) NOT NULL DEFAULT 1,
+      shared_api_enabled TINYINT(1) NOT NULL DEFAULT 0,
+      shared_api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
+      shared_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
+      shared_model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
+      shared_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
+      shared_api_key_ciphertext TEXT DEFAULT NULL,
+      shared_api_key_iv VARCHAR(64) DEFAULT NULL,
+      shared_api_key_tag VARCHAR(64) DEFAULT NULL,
+      shared_api_key_hint VARCHAR(24) DEFAULT NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     ensure_column($db, 'users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
     ensure_column($db, 'users', 'is_admin', 'is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER password_hash');
     ensure_column($db, 'users', 'token_version', 'token_version INT UNSIGNED NOT NULL DEFAULT 0 AFTER is_admin');
@@ -207,6 +223,7 @@ function ensure_schema(): void
     ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');
     ensure_column($db, 'user_settings', 'stream', 'stream TINYINT(1) NOT NULL DEFAULT 0 AFTER request_timeout');
     ensure_column($db, 'user_settings', 'active_api_config_id', 'active_api_config_id BIGINT UNSIGNED DEFAULT NULL AFTER stream');
+    ensure_column($db, 'user_settings', 'active_shared', 'active_shared TINYINT(1) NOT NULL DEFAULT 0 AFTER active_api_config_id');
     ensure_column($db, 'user_settings', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER active_api_config_id');
     ensure_column($db, 'user_settings', 'api_key_iv', 'api_key_iv VARCHAR(64) DEFAULT NULL AFTER api_key_ciphertext');
     ensure_column($db, 'user_settings', 'api_key_tag', 'api_key_tag VARCHAR(64) DEFAULT NULL AFTER api_key_iv');
@@ -256,6 +273,8 @@ function ensure_schema(): void
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
 
     bootstrap_admin_user($db);
+
+    $db->exec('INSERT IGNORE INTO site_settings (id) VALUES (1)');
 
     $db->exec('UPDATE user_settings SET request_timeout = 999 WHERE request_timeout IN (180, 600)');
     $db->exec("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");

@@ -6,6 +6,7 @@ require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/lib/database.php';
 require_once __DIR__ . '/lib/auth.php';
 require_once __DIR__ . '/lib/settings.php';
+require_once __DIR__ . '/lib/site.php';
 require_once __DIR__ . '/lib/files.php';
 require_once __DIR__ . '/lib/generated_images.php';
 require_once __DIR__ . '/lib/wall.php';

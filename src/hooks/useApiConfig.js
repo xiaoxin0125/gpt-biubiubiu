@@ -12,7 +12,7 @@ export const useApiConfig = (deps) => {
   const updateApiConfig = (id, key, value) => {
     setApiConfigForm((current) => ({
       ...current,
-      apiConfigs: (current.apiConfigs || []).map((item) => (String(item.id) === String(id) ? { ...item, [key]: value } : item)),
+      apiConfigs: (current.apiConfigs || []).map((item) => (String(item.id) === String(id) && !item.isShared ? { ...item, [key]: value } : item)),
     }));
   };
 
@@ -33,6 +33,8 @@ export const useApiConfig = (deps) => {
 
   const removeApiConfig = (id) => {
     setApiConfigForm((current) => {
+      const target = (current.apiConfigs || []).find((item) => String(item.id) === String(id));
+      if (target?.isShared) return current;
       const nextConfigs = (current.apiConfigs || []).filter((item) => String(item.id) !== String(id));
       if (!nextConfigs.length) return current;
       return {

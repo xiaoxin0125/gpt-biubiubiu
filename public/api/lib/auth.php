@@ -142,6 +142,7 @@ function handle_auth_me(): array
 function handle_auth_register(array $body): array
 {
     require_database();
+    if (!registration_enabled()) json_response(['error' => '注册已关闭'], 403);
     $username = trim((string) ($body['username'] ?? ''));
     $password = (string) ($body['password'] ?? '');
     if (!preg_match('/^[\w\x{4e00}-\x{9fa5}.-]{2,20}$/u', $username)) json_response(['error' => '用户名需为 2-20 位中文、字母、数字、下划线、点或短横线'], 400);

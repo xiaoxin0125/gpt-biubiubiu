@@ -112,7 +112,7 @@ export const useSession = (deps) => {
             activeApiConfigId: nextSettings.activeApiConfigId,
             stream: nextSettings.stream,
           },
-          apiConfigs: (apiConfigForm.apiConfigs || []).map((item) => ({
+          apiConfigs: (apiConfigForm.apiConfigs || []).filter((item) => !item.isShared).map((item) => ({
             id: item.id,
             apiName: item.apiName,
             apiBaseUrl: item.apiBaseUrl,

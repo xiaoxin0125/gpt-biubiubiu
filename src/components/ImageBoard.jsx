@@ -33,6 +33,7 @@ export default function ImageBoard({
   status,
   activeApiConfig,
   userDisplayName,
+  wallLocked,
 }) {
   const activeFilterOptions = view === 'wall' ? wallFilterOptions : boardFilterOptions;
 
@@ -164,7 +165,17 @@ export default function ImageBoard({
       </div>
 
       <div className={renderableBoardItems.length ? 'image-board has-images' : 'image-board'} ref={boardRef}>
-        {renderableBoardItems.length ? (
+        {view === 'wall' && wallLocked ? (
+          <div className="empty-canvas">
+            <span className="empty-mark" aria-hidden="true">
+              <svg viewBox="0 0 48 48">
+                <rect x="10" y="20" width="28" height="20" rx="3" />
+                <path d="M16 20v-6a8 8 0 0 1 16 0v6" />
+              </svg>
+            </span>
+            <p>请先登录后查看作品墙</p>
+          </div>
+        ) : renderableBoardItems.length ? (
           <>
             <div className="masonry-board" style={{ '--masonry-columns': masonryColumnCount }}>
               {masonryColumns.map((column) => (
