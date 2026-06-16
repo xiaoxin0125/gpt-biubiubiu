@@ -638,11 +638,18 @@ button:disabled {
   object-fit: cover;
   background: #ecece6;
   opacity: 1;
-  transition: opacity 180ms ease;
+  transform: scale(1);
+  filter: blur(0);
+  transition:
+    opacity 420ms ease,
+    transform 420ms ease,
+    filter 420ms ease;
 }
 
 .result-card.is-image-loading img {
   opacity: 0;
+  transform: scale(1.04);
+  filter: blur(8px);
 }
 
 @keyframes placeholder-shimmer {

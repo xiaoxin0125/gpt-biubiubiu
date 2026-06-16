@@ -82,6 +82,8 @@ export default function ImageBoard({
               <img
                 src={src}
                 alt={title || '生成图片'}
+                loading="lazy"
+                decoding="async"
                 onLoad={(event) => {
                   const naturalWidth = event.currentTarget.naturalWidth || 1;
                   const naturalHeight = event.currentTarget.naturalHeight || 1;

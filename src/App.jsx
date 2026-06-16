@@ -431,26 +431,35 @@ function App() {
 
     const sentinel = boardLoadSentinelRef.current;
     const board = boardRef.current;
+    const usePageScroll = typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches;
+    const scrollRoot = usePageScroll ? null : board;
+
     if (sentinel && typeof IntersectionObserver !== 'undefined') {
       const observer = new IntersectionObserver((entries) => {
         if (entries.some((entry) => entry.isIntersecting)) loadNextPage();
-      }, { root: board || null, rootMargin: '260px 0px 260px 0px' });
+      }, { root: scrollRoot, rootMargin: '260px 0px 260px 0px' });
       observer.observe(sentinel);
       return () => observer.disconnect();
     }
 
-    if (!board) return undefined;
+    const scrollTarget = usePageScroll ? window : board;
+    if (!scrollTarget) return undefined;
     let ticking = false;
     const onScroll = () => {
       if (ticking) return;
       ticking = true;
       window.requestAnimationFrame(() => {
         ticking = false;
-        if (board.scrollTop + board.clientHeight >= board.scrollHeight - 260) loadNextPage();
+        if (usePageScroll) {
+          const doc = document.documentElement;
+          if (window.innerHeight + window.scrollY >= doc.scrollHeight - 260) loadNextPage();
+        } else if (board && board.scrollTop + board.clientHeight >= board.scrollHeight - 260) {
+          loadNextPage();
+        }
       });
     };
-    board.addEventListener('scroll', onScroll, { passive: true });
-    return () => board.removeEventListener('scroll', onScroll);
+    scrollTarget.addEventListener('scroll', onScroll, { passive: true });
+    return () => scrollTarget.removeEventListener('scroll', onScroll);
   }, [boardLoadingMore, hasMoreBoardItems, renderableBoardItems.length]);
 
   const openSizeDialog = () => {
