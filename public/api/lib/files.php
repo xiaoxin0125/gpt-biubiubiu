@@ -250,7 +250,7 @@ function compress_display_image(string $binary, string $originalMime, string $ta
     return ['path' => $bestPath, 'mime' => $targetMime, 'bytes' => $bestBytes];
 }
 
-function save_wall_image(array $image): array
+function store_image_files(array $image): array
 {
     $payload = decode_image_payload($image);
     $mime = $payload['mime'];
@@ -282,8 +282,8 @@ function stored_generated_image(array $image, string $fallbackMime = 'image/png'
     $b64 = trim((string) ($image['b64_json'] ?? ($image['image_b64'] ?? '')));
     $mime = trim((string) ($image['imageMime'] ?? ($image['mime'] ?? $fallbackMime))) ?: $fallbackMime;
 
-    if ($url !== '') return save_wall_image(['url' => $url, 'mime' => $mime]);
-    if ($b64 !== '') return save_wall_image(['b64_json' => $b64, 'mime' => $mime]);
+    if ($url !== '') return store_image_files(['url' => $url, 'mime' => $mime]);
+    if ($b64 !== '') return store_image_files(['b64_json' => $b64, 'mime' => $mime]);
     return [];
 }
 

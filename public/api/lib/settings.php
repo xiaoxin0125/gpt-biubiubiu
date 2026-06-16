@@ -237,6 +237,25 @@ function stored_user_api_key(): string
     return decrypt_api_key(active_api_config_row($userId));
 }
 
+function upsert_user_settings_from_config(int $userId, array $active, int $activeId, int $stream, bool $updateStream): void
+{
+    $streamClause = $updateStream ? 'stream = VALUES(stream), ' : '';
+    $stmt = pdo()->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream, active_api_config_id, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE model = VALUES(model), api_name = VALUES(api_name), api_base_url = VALUES(api_base_url), request_timeout = VALUES(request_timeout), ' . $streamClause . 'active_api_config_id = VALUES(active_api_config_id), api_key_ciphertext = VALUES(api_key_ciphertext), api_key_iv = VALUES(api_key_iv), api_key_tag = VALUES(api_key_tag), api_key_hint = VALUES(api_key_hint)');
+    $stmt->execute([
+        $userId,
+        $active['model'],
+        $active['api_name'],
+        $active['api_base_url'],
+        $active['request_timeout'],
+        $stream,
+        $activeId,
+        $active['api_key_ciphertext'],
+        $active['api_key_iv'],
+        $active['api_key_tag'],
+        $active['api_key_hint'],
+    ]);
+}
+
 function save_user_settings(array $user, array $body): array
 {
     $db = pdo();
@@ -245,6 +264,8 @@ function save_user_settings(array $user, array $body): array
     if (!$configs && isset($settings['apiName'], $settings['apiBaseUrl'])) $configs = [$settings];
     if (!$configs) json_response(['error' => '至少保留一套 API 配置'], 400);
 
+    // activeRawId 可能是本地字符串 id（如 api-config-xxx）或数据库数字 id。
+    // (int) 对字符串 id 取 0，循环里再按 raw id 精确匹配落库后的真实数字 id。
     $activeRawId = (string) ($settings['activeApiConfigId'] ?? ($settings['active_api_config_id'] ?? ''));
     $activeId = (int) $activeRawId;
     $stream = !empty($settings['stream']);
@@ -290,6 +311,7 @@ function save_user_settings(array $user, array $body): array
             }
 
             $seenIds[] = $configId;
+            // 尚未选定 active，或本配置的 raw id 正是请求指定的 active，则锁定为当前真实数字 id。
             if (!$activeId || (isset($config['id']) && (string) $config['id'] === $activeRawId)) $activeId = $configId;
         }
 
@@ -303,20 +325,7 @@ function save_user_settings(array $user, array $body): array
         $active = $stmt->fetch();
         if (!$active) throw new RuntimeException('当前 API 配置不存在');
 
-        $stmt = $db->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream, active_api_config_id, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE model = VALUES(model), api_name = VALUES(api_name), api_base_url = VALUES(api_base_url), request_timeout = VALUES(request_timeout), stream = VALUES(stream), active_api_config_id = VALUES(active_api_config_id), api_key_ciphertext = VALUES(api_key_ciphertext), api_key_iv = VALUES(api_key_iv), api_key_tag = VALUES(api_key_tag), api_key_hint = VALUES(api_key_hint)');
-        $stmt->execute([
-            $user['id'],
-            $active['model'],
-            $active['api_name'],
-            $active['api_base_url'],
-            $active['request_timeout'],
-            $stream ? 1 : 0,
-            $activeId,
-            $active['api_key_ciphertext'],
-            $active['api_key_iv'],
-            $active['api_key_tag'],
-            $active['api_key_hint'],
-        ]);
+        upsert_user_settings_from_config((int) $user['id'], $active, $activeId, $stream ? 1 : 0, true);
 
         $db->commit();
         return settings_for_user((int) $user['id']);
@@ -338,20 +347,7 @@ function switch_active_api_config(array $user, array $body): array
 
     $settings = stored_user_settings_row((int) $user['id']);
     $stream = !empty($settings['stream']) ? 1 : 0;
-    $stmt = pdo()->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream, active_api_config_id, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE model = VALUES(model), api_name = VALUES(api_name), api_base_url = VALUES(api_base_url), request_timeout = VALUES(request_timeout), active_api_config_id = VALUES(active_api_config_id), api_key_ciphertext = VALUES(api_key_ciphertext), api_key_iv = VALUES(api_key_iv), api_key_tag = VALUES(api_key_tag), api_key_hint = VALUES(api_key_hint)');
-    $stmt->execute([
-        $user['id'],
-        $active['model'],
-        $active['api_name'],
-        $active['api_base_url'],
-        $active['request_timeout'],
-        $stream,
-        $configId,
-        $active['api_key_ciphertext'],
-        $active['api_key_iv'],
-        $active['api_key_tag'],
-        $active['api_key_hint'],
-    ]);
+    upsert_user_settings_from_config((int) $user['id'], $active, $configId, $stream, false);
 
     return settings_for_user((int) $user['id']);
 }

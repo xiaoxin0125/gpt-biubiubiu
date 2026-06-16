@@ -1201,6 +1201,70 @@ input::placeholder {
   padding: 18px;
 }
 
+.lightbox-layer {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+
+.lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(11, 11, 11, 0.82);
+  cursor: zoom-out;
+  backdrop-filter: blur(8px);
+}
+
+.lightbox-figure {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  max-width: calc(100vw - 64px);
+  max-height: calc(100vh - 64px);
+  border: 2px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper-2);
+  box-shadow: var(--shadow-hard);
+  overflow: hidden;
+}
+
+.lightbox-figure img {
+  display: block;
+  max-width: calc(100vw - 72px);
+  max-height: calc(100vh - 72px);
+  object-fit: contain;
+  cursor: zoom-out;
+}
+
+.lightbox-close {
+  position: absolute;
+  z-index: 2;
+  top: 18px;
+  right: 18px;
+}
+
+@media (max-width: 640px) {
+  .lightbox-layer {
+    padding: 14px;
+  }
+
+  .lightbox-figure {
+    max-width: calc(100vw - 28px);
+    max-height: calc(100vh - 28px);
+  }
+
+  .lightbox-figure img {
+    max-width: calc(100vw - 36px);
+    max-height: calc(100vh - 36px);
+  }
+}
+
 .modal-backdrop {
   position: absolute;
   inset: 0;
@@ -1264,6 +1328,10 @@ input::placeholder {
   height: 100%;
   min-height: 0;
   object-fit: contain;
+}
+
+.detail-preview-image {
+  cursor: zoom-in;
 }
 
 .detail-pending-preview {

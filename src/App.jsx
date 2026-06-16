@@ -19,16 +19,11 @@ import {
   emptyProfileForm,
   MAX_MASK_SIZE_BYTES,
   MAX_REFERENCE_IMAGES,
-  MAX_REQUEST_TIMEOUT_SECONDS,
   wallFilterOptions,
 } from './constants/options';
 import {
-  createLocalApiConfigId,
   normalizeApiConfigItem,
-  normalizeDirectImageResponse,
   normalizeServerSettings,
-  requestDirectImageFormData,
-  requestDirectImageJson,
   requestJson,
 } from './lib/api';
 import {
@@ -36,23 +31,16 @@ import {
   formatDuration,
   getImageIdentity,
   getMasonryColumns,
-  getResponsiveMasonryColumnCount,
   isSameImageIdentity,
   normalizeBoardImage,
 } from './lib/board';
 import {
-  normalizeBackground,
   normalizeForm,
-  normalizeModeration,
-  normalizeOutputCount,
-  normalizeOutputFormat,
-  normalizeQuality,
   normalizeResponseFormat,
   normalizeRevisedPrompt,
 } from './lib/form';
 import {
   flattenHistoryImages,
-  prependHistoryRecord,
   readHistory,
   removeImageFromHistory,
   saveHistory,
@@ -61,12 +49,16 @@ import {
   createImageDownloadSrc,
   createImageSrc,
   getGeneratedImageJobId,
-  imageMimeForOutputFormat,
-  imageToSavePayload,
   normalizeImageSource,
   revokeObjectImageUrls,
 } from './lib/images';
 import { getAvailableRatios, getDraftSize, parseSize } from './lib/size';
+import { applyWallPatch } from './lib/optimistic';
+import { useGeneration } from './hooks/useGeneration';
+import { useApiConfig } from './hooks/useApiConfig';
+import { useSession } from './hooks/useSession';
+import { useBoard } from './hooks/useBoard';
+import { findWallItem as findWallItemIn, useWall } from './hooks/useWall';
 
 if (typeof window !== 'undefined') window.addEventListener('beforeunload', revokeObjectImageUrls);
 
@@ -99,12 +91,16 @@ function App() {
   const [openSelect, setOpenSelect] = useState('');
   const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
-  const [boardVisibleCount, setBoardVisibleCount] = useState(BOARD_PAGE_SIZE);
-  const [boardLoadingMore, setBoardLoadingMore] = useState(false);
-  const [masonryColumnCount, setMasonryColumnCount] = useState(getResponsiveMasonryColumnCount);
   const [imageLayoutMeta, setImageLayoutMeta] = useState({});
-  const boardRef = useRef(null);
-  const boardLoadSentinelRef = useRef(null);
+  const {
+    boardVisibleCount,
+    setBoardVisibleCount,
+    boardLoadingMore,
+    setBoardLoadingMore,
+    masonryColumnCount,
+    boardRef,
+    boardLoadSentinelRef,
+  } = useBoard();
   const deletedRequestIdsRef = useRef(new Set());
   const apiKeyVaultRef = useRef(new Map());
 
@@ -139,6 +135,13 @@ function App() {
   const statusText = status.configured ? (status.apiName || activeApiConfig?.apiName || status.message || defaultApiConfigItem.apiName) : status.message;
   const canSubmitGeneration = Boolean(user) && !apiKeySyncing && (status.configured || Boolean(activeApiConfig?.hasApiKey));
 
+  const { updateApiConfig, addApiConfig, removeApiConfig, resetDirectSettings } = useApiConfig({
+    apiConfigForm,
+    setApiConfigForm,
+    activeApiConfig,
+    setForm,
+  });
+
   const updateForm = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
   };
@@ -150,87 +153,6 @@ function App() {
       setOpenSelect={setOpenSelect}
     />
   );
-
-  const buildGenerationPayload = (formDraft, apiConfig = activeApiConfig) => {
-    const normalized = normalizeForm({ ...formDraft, model: apiConfig?.model || formDraft.model });
-    const useStream = Boolean(apiConfig?.stream ?? apiConfigForm.stream);
-    const responseFormat = useStream ? 'url' : normalizeResponseFormat(normalized.response_format);
-    const outputFormat = normalizeOutputFormat(normalized.output_format);
-    const payload = {
-      model: normalized.model || defaultForm.model,
-      prompt: normalized.prompt,
-      n: normalizeOutputCount(normalized.n),
-      response_format: responseFormat,
-      moderation: normalizeModeration(normalized.moderation),
-    };
-
-    if (responseFormat === 'url') payload.output_format = outputFormat;
-    if (normalized.size) payload.size = normalized.size;
-    if (useStream && responseFormat === 'url') payload.stream = true;
-    if (normalizeQuality(normalized.quality) !== 'auto') payload.quality = normalizeQuality(normalized.quality);
-    if (normalizeBackground(normalized.background) !== 'auto') payload.background = normalizeBackground(normalized.background);
-
-    return payload;
-  };
-
-  const buildEditPayload = (formDraft, apiConfig = activeApiConfig) => {
-    const normalized = normalizeForm({ ...formDraft, model: apiConfig?.model || formDraft.model });
-    const responseFormat = normalizeResponseFormat(normalized.response_format);
-    const outputFormat = normalizeOutputFormat(normalized.output_format);
-    const canUseOutputFormat = responseFormat === 'url';
-    const payload = new FormData();
-
-    payload.append('model', normalized.model || defaultForm.model);
-    payload.append('prompt', normalized.prompt);
-    payload.append('n', String(normalizeOutputCount(normalized.n)));
-    payload.append('response_format', responseFormat);
-    payload.append('moderation', normalizeModeration(normalized.moderation));
-    referenceImages.forEach((image) => {
-      payload.append('image[]', image.file, image.name || image.file.name || 'reference-image');
-    });
-
-    if (canUseOutputFormat) payload.append('output_format', outputFormat);
-    if (normalized.size) payload.append('size', normalized.size);
-    if (normalizeQuality(normalized.quality) !== 'auto') payload.append('quality', normalizeQuality(normalized.quality));
-    if (normalizeBackground(normalized.background) !== 'auto') payload.append('background', normalizeBackground(normalized.background));
-    if (maskImage?.file) payload.append('mask', maskImage.file, maskImage.name || maskImage.file.name || 'mask.png');
-
-    return payload;
-  };
-
-  const updateApiConfig = (id, key, value) => {
-    setApiConfigForm((current) => ({
-      ...current,
-      apiConfigs: (current.apiConfigs || []).map((item) => (String(item.id) === String(id) ? { ...item, [key]: value } : item)),
-    }));
-  };
-
-  const addApiConfig = () => {
-    const nextConfig = normalizeApiConfigItem({
-      id: createLocalApiConfigId(),
-      apiName: `API 配置 ${(apiConfigForm.apiConfigs || []).length + 1}`,
-      apiBaseUrl: activeApiConfig?.apiBaseUrl || defaultApiConfigItem.apiBaseUrl,
-      model: activeApiConfig?.model || defaultForm.model,
-      requestTimeout: activeApiConfig?.requestTimeout || MAX_REQUEST_TIMEOUT_SECONDS,
-    }, (apiConfigForm.apiConfigs || []).length);
-    setApiConfigForm((current) => ({
-      ...current,
-      activeApiConfigId: nextConfig.id,
-      apiConfigs: [...(current.apiConfigs || []), nextConfig],
-    }));
-  };
-
-  const removeApiConfig = (id) => {
-    setApiConfigForm((current) => {
-      const nextConfigs = (current.apiConfigs || []).filter((item) => String(item.id) !== String(id));
-      if (!nextConfigs.length) return current;
-      return {
-        ...current,
-        activeApiConfigId: String(current.activeApiConfigId) === String(id) ? nextConfigs[0].id : current.activeApiConfigId,
-        apiConfigs: nextConfigs,
-      };
-    });
-  };
 
   const mergeDirectApiKey = (settings, apiKey) => {
     const normalized = normalizeServerSettings(settings || {});
@@ -263,9 +185,8 @@ function App() {
 
   const applyServerSettings = (settings, nextUser = user) => {
     const normalized = normalizeServerSettings(settings || {});
-    const nextForm = normalizeForm({ ...normalized.form, model: normalized.model, prompt: form.prompt });
 
-    setForm((current) => ({ ...current, ...nextForm, prompt: current.prompt }));
+    setForm((current) => ({ ...current, model: normalized.model || current.model }));
     setApiConfigForm(normalized);
     setStatus((current) => ({
       ...current,
@@ -453,21 +374,7 @@ function App() {
     return () => document.removeEventListener('pointerdown', closeOpenSelect);
   }, [openSelect]);
 
-  const findWallItem = (image) => {
-    if (!image) return null;
-    if (image.wallItemId) {
-      const matched = wallItems.find((item) => Number(item.id) === Number(image.wallItemId));
-      if (matched) return matched;
-      if (image.isOnWall) return { id: image.wallItemId };
-      return null;
-    }
-
-    const src = createImageSrc(image);
-    return wallItems.find((item) => {
-      const wallSrc = createImageSrc(item);
-      return src && wallSrc && src === wallSrc;
-    }) || null;
-  };
+  const findWallItem = (image) => findWallItemIn(wallItems, image);
 
   const boardItems = sourceBoardItems.filter((image) => {
     const wallItem = findWallItem(image);
@@ -510,13 +417,6 @@ function App() {
     setBoardLoadingMore(false);
     if (boardRef.current) boardRef.current.scrollTop = 0;
   }, [activeBoardFilter, boardScope, boardSearch, sourceBoardItems.length, view]);
-
-  useEffect(() => {
-    const updateColumnCount = () => setMasonryColumnCount(getResponsiveMasonryColumnCount());
-    updateColumnCount();
-    window.addEventListener('resize', updateColumnCount);
-    return () => window.removeEventListener('resize', updateColumnCount);
-  }, []);
 
   useEffect(() => {
     if (!hasMoreBoardItems || boardLoadingMore) return undefined;
@@ -648,6 +548,21 @@ function App() {
     return null;
   };
 
+  const { clearWallState, checkWallState, toggleWall } = useWall({
+    wallItems,
+    setWallItems,
+    user,
+    form,
+    activeApiConfig,
+    status,
+    getElapsedSeconds,
+    setImages,
+    setHistory,
+    setSelectedImage,
+    setWallBusyId,
+    setError,
+  });
+
   const handleReferenceChange = (event) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
     if (!files.length) return;
@@ -715,410 +630,60 @@ function App() {
     setMaskImage(null);
   };
 
-  const generate = async (event) => {
-    event.preventDefault();
-    const prompt = form.prompt.trim();
+  const { generate } = useGeneration({
+    form,
+    hasReferenceImages,
+    referenceNames,
+    activeApiConfig,
+    status,
+    apiConfigForm,
+    apiKeyVaultRef,
+    deletedRequestIdsRef,
+    referenceImages,
+    maskImage,
+    user,
+    syncDirectApiKey,
+    setError,
+    setRunningGenerations,
+    setStatus,
+    setView,
+    setBoardScope,
+    setImages,
+    setSelectedImage,
+    setHistory,
+  });
 
-    if (!prompt) {
-      setError('先写提示词，再开始生成。');
-      return;
-    }
-
-    setError('');
-    setRunningGenerations((count) => count + 1);
-    setStatus((current) => ({ ...current, message: hasReferenceImages ? 'Editing' : 'Generating' }));
-    setView('generate');
-    setBoardScope('generate');
-
-    const requestId = `request-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    deletedRequestIdsRef.current.delete(requestId);
-    const startedAt = new Date().toISOString();
-    const requestConfig = activeApiConfig || defaultApiConfigItem;
-    const requestApiName = requestConfig.apiName || status.apiName || defaultApiConfigItem.apiName;
-    const imageForm = normalizeForm({ ...form, prompt, model: requestConfig.model });
-    const pendingItem = {
-      id: requestId,
-      requestId,
-      status: 'pending',
-      form: imageForm,
-      apiName: requestApiName,
-      prompt,
-      startedAt,
-      createdAt: startedAt,
-      source: hasReferenceImages ? 'edit' : 'generation',
-      referenceName: referenceNames,
-    };
-    setImages((items) => [pendingItem, ...items]);
-
-    try {
-      if (!status.configured && !requestConfig.hasApiKey) throw new Error('请先在参数设置里保存 API Key。');
-      let requestApiKey = String(apiKeyVaultRef.current.get(String(requestConfig.id)) || '').trim();
-      if (!requestApiKey && requestConfig.hasApiKey) {
-        await syncDirectApiKey(apiConfigForm);
-        requestApiKey = String(apiKeyVaultRef.current.get(String(requestConfig.id)) || '').trim();
-      }
-      if (!requestApiKey) throw new Error('服务器未同步到 API Key，请重新登录或重新保存 Key。');
-      const payload = hasReferenceImages
-        ? buildEditPayload(imageForm, requestConfig)
-        : buildGenerationPayload(imageForm, { ...requestConfig, stream: apiConfigForm.stream });
-      const data = hasReferenceImages
-        ? await requestDirectImageFormData(requestConfig, requestApiKey, payload)
-        : await requestDirectImageJson(requestConfig, requestApiKey, payload);
-      const outputFormat = hasReferenceImages
-        ? (normalizeResponseFormat(imageForm.response_format) === 'url' ? normalizeOutputFormat(imageForm.output_format) : defaultForm.output_format)
-        : payload.output_format || defaultForm.output_format;
-      const normalizedData = normalizeDirectImageResponse(data, outputFormat);
-
-      const finishedAt = new Date().toISOString();
-      if (deletedRequestIdsRef.current.has(requestId)) {
-        setStatus((current) => ({ ...current, message: 'Done · 0' }));
-        return;
-      }
-      const nextImages = Array.isArray(normalizedData.data)
-        ? normalizedData.data.map((image, index) => normalizeBoardImage({
-            ...image,
-            upstreamImageId: image.id || '',
-            id: `${requestId}-${index}`,
-            requestId,
-            status: 'completed',
-            form: imageForm,
-            apiName: requestApiName,
-            prompt,
-            startedAt,
-            finishedAt,
-            createdAt: finishedAt,
-            source: hasReferenceImages ? 'edit' : 'generation',
-            referenceName: referenceNames,
-          }))
-        : [];
-
-      if (!nextImages.some((image) => Boolean(createImageSrc(image)))) {
-        throw new Error('上游接口未返回可展示图片。');
-      }
-
-      let storedImages = nextImages;
-      if (user) {
-        try {
-          const savedImages = [];
-          for (const image of nextImages) {
-            const imagePayload = await imageToSavePayload(image, imageMimeForOutputFormat(imageForm.output_format));
-            const saved = await requestJson('/api/generated-images', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                requestId,
-                mode: normalizeImageSource(image.source),
-                image: imagePayload,
-                prompt,
-                revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
-                form: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
-                params: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
-              }),
-            });
-            savedImages.push(normalizeBoardImage({
-              ...image,
-              ...(saved.item || {}),
-              upstreamImageId: image.upstreamImageId || image.id || '',
-              source: normalizeImageSource(image.source),
-              apiName: requestApiName,
-              prompt,
-              form: imageForm,
-              referenceName: referenceNames,
-            }));
-          }
-          if (savedImages.length) storedImages = savedImages;
-        } catch {
-          setError('图片已生成，但服务器保存失败；刷新后可能无法恢复这次未上墙作品。');
-        }
-      }
-
-      setImages((items) => [
-        ...storedImages,
-        ...items.filter((item) => item.requestId !== requestId && item.id !== requestId),
-      ]);
-      setSelectedImage((current) => (current?.requestId === requestId || current?.id === requestId ? storedImages[0] || current : current));
-      setView('generate');
-
-      const record = {
-        id: requestId,
-        form: imageForm,
-        images: storedImages,
-        createdAt: finishedAt,
-      };
-
-      try {
-        const nextHistory = prependHistoryRecord(record);
-        setHistory(nextHistory);
-      } catch {
-        setHistory((items) => [record, ...items.filter((item) => item.id !== record.id)].slice(0, 30));
-        setError('图片已生成，但本地历史记录保存失败。');
-      }
-      setStatus((current) => ({ ...current, message: `Done · ${storedImages.length}` }));
-    } catch (requestError) {
-      const failedAt = new Date().toISOString();
-      const message = requestError instanceof Error ? requestError.message : '生成失败';
-      if (deletedRequestIdsRef.current.has(requestId)) {
-        setStatus((current) => ({ ...current, message: current.configured ? '已删除' : current.message }));
-        return;
-      }
-      setError(message);
-      setImages((items) => items.map((item) => (
-        item.requestId === requestId || item.id === requestId
-          ? { ...item, status: 'failed', error: message, finishedAt: failedAt }
-          : item
-      )));
-      setSelectedImage((current) => (current?.requestId === requestId || current?.id === requestId ? { ...current, status: 'failed', error: message, finishedAt: failedAt } : current));
-      setStatus((current) => ({ ...current, message: current.configured ? 'Failed' : current.message }));
-    } finally {
-      setRunningGenerations((count) => Math.max(0, count - 1));
-    }
-  };
-
-  const clearWallState = (image) => {
-    setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)));
-    setHistory((items) => {
-      const nextHistory = items.map((record) => ({
-        ...record,
-        images: (record.images || []).map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)),
-      }));
-      saveHistory(nextHistory);
-      return nextHistory;
-    });
-    setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: null, isOnWall: false } : current));
-  };
-
-  const checkWallState = async (image) => {
-    const wallItem = findWallItem(image);
-    if (!wallItem?.id) {
-      clearWallState(image);
-      setError('本地上墙状态已清理，可重新上墙。');
-      return;
-    }
-
-    const busyId = String(image.wallItemId || image.id || createImageSrc(image));
-    setWallBusyId(busyId);
-    try {
-      const data = await requestJson(`/api/wall/${wallItem.id}`);
-      if (data.item) {
-        setWallItems((items) => [data.item, ...items.filter((item) => Number(item.id) !== Number(data.item.id))]);
-        setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: data.item.id, isOnWall: true } : current));
-        setError('作品仍在墙上。');
-      }
-    } catch {
-      setWallItems((items) => items.filter((item) => Number(item.id) !== Number(wallItem.id)));
-      clearWallState(image);
-      setError('服务器未找到该上墙作品，可重新上墙。');
-    } finally {
-      setWallBusyId('');
-    }
-  };
-
-  const toggleWall = async (image) => {
-    const wallItem = findWallItem(image);
-    const busyId = String(image.wallItemId || image.id || createImageSrc(image));
-    setWallBusyId(busyId);
-    setError('');
-
-    try {
-      if (!user) throw new Error('请先登录后再操作上墙。');
-
-      if (wallItem?.id) {
-        const ownerId = image.userId || image.user_id || wallItem.userId || wallItem.user_id;
-        if (!user.isAdmin && ownerId && Number(ownerId) !== Number(user.id)) throw new Error('只能取消自己上墙的作品。');
-        await requestJson(`/api/wall/${wallItem.id}`, { method: 'DELETE' });
-
-        setWallItems((items) => items.filter((item) => Number(item.id) !== Number(wallItem.id)));
-        setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)));
-        setHistory((items) => {
-          const nextHistory = items.map((record) => ({
-            ...record,
-            images: (record.images || []).map((item) => (isSameImage(item, image) ? { ...item, wallItemId: null, isOnWall: false } : item)),
-          }));
-          saveHistory(nextHistory);
-          return nextHistory;
-        });
-        setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: null, isOnWall: false } : current));
-        return;
-      }
-
-      const sourceJobId = getGeneratedImageJobId(image);
-      if (!sourceJobId) throw new Error('请等待作品保存到服务器后再上墙。');
-
-      const wallForm = { ...(image.form || form), apiName: image.apiName || activeApiConfig?.apiName || status.apiName || defaultApiConfigItem.apiName, source: normalizeImageSource(image.source), sourceJobId };
-      const data = await requestJson('/api/wall', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: image.prompt || image.form?.prompt || form.prompt,
-          revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
-          durationSeconds: getElapsedSeconds(image),
-          sourceJobId,
-          form: wallForm,
-          params: { ...wallForm, durationSeconds: getElapsedSeconds(image) },
-        }),
-      });
-
-      const nextWallItem = data.item;
-      setWallItems((items) => [nextWallItem, ...items.filter((item) => Number(item.id) !== Number(nextWallItem.id))]);
-      setImages((items) => items.map((item) => (isSameImage(item, image) ? { ...item, wallItemId: nextWallItem.id, isOnWall: true, userId: nextWallItem.userId } : item)));
-      setHistory((items) => {
-        const nextHistory = items.map((record) => ({
-          ...record,
-          images: (record.images || []).map((item) => (isSameImage(item, image) ? { ...item, wallItemId: nextWallItem.id, isOnWall: true, userId: nextWallItem.userId } : item)),
-        }));
-        saveHistory(nextHistory);
-        return nextHistory;
-      });
-      setSelectedImage((current) => (current && isSameImage(current, image) ? { ...current, wallItemId: nextWallItem.id, isOnWall: true, userId: nextWallItem.userId } : current));
-    } catch (wallError) {
-      setError(wallError instanceof Error ? wallError.message : '作品墙操作失败');
-    } finally {
-      setWallBusyId('');
-    }
-  };
-
-  const submitAuth = async (event) => {
-    event.preventDefault();
-    setError('');
-
-    try {
-      const data = await requestJson(`/api/auth/${authMode === 'login' ? 'login' : 'register'}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(authForm),
-      });
-
-      setUser(data.user || null);
-      if (data.user) {
-        applyServerSettings(data.settings, data.user);
-        const normalizedSettings = normalizeServerSettings(data.settings || {});
-        if (normalizedSettings.hasApiKey) await syncDirectApiKey(normalizedSettings);
-        await syncGeneratedImages();
-      }
-      setAuthForm(emptyAuthForm);
-      setAuthTab('profile');
-      setActiveDialog(data.user ? 'auth' : null);
-    } catch (authError) {
-      setError(authError instanceof Error ? authError.message : '账号操作失败');
-    }
-  };
-
-  const logout = async () => {
-    try {
-      await requestJson('/api/auth/logout', { method: 'POST' });
-    } finally {
-      saveHistory([]);
-      setUser(null);
-      setImages([]);
-      setHistory([]);
-      setWallItems([]);
-      setSelectedImage(null);
-      setBoardScope('generate');
-      setBoardFilter('all');
-      setProfileForm(emptyProfileForm);
-      setPasswordForm(emptyPasswordForm);
-      apiKeyVaultRef.current.clear();
-      setApiConfigForm(defaultApiConfigForm);
-      setApiKeySyncing(false);
-      setStatus((current) => ({ ...current, configured: false, apiName: '', message: '请先登录' }));
-    }
-  };
-
-  const saveAccountSettings = async () => {
-    if (!user) {
-      setError('请先登录后再设置参数。');
-      return;
-    }
-
-    const pendingApiKeys = new Map((apiConfigForm.apiConfigs || [])
-      .filter((item) => String(item.apiKey || '').trim())
-      .map((item) => [String(item.id), String(item.apiKey || '').trim()]));
-
-    const nextSettings = normalizeServerSettings({
-      ...apiConfigForm,
-      apiConfigs: apiConfigForm.apiConfigs,
-      activeApiConfigId: apiConfigForm.activeApiConfigId,
-      stream: apiConfigForm.stream,
-    });
-    try {
-      const data = await requestJson('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          settings: {
-            activeApiConfigId: nextSettings.activeApiConfigId,
-            stream: nextSettings.stream,
-          },
-          apiConfigs: (apiConfigForm.apiConfigs || []).map((item) => ({
-            id: item.id,
-            apiName: item.apiName,
-            apiBaseUrl: item.apiBaseUrl,
-            model: item.model,
-            requestTimeout: item.requestTimeout,
-            apiKey: item.apiKey,
-            confirmApiKeySave: Boolean(item.apiKey),
-          })),
-        }),
-      });
-      applyServerSettings(data.settings, user);
-      pendingApiKeys.forEach((apiKey, configId) => apiKeyVaultRef.current.set(configId, apiKey));
-      if (data.settings?.hasApiKey) await syncDirectApiKey(data.settings);
-      setForm((current) => ({ ...current, model: data.settings?.model || activeApiConfig?.model || current.model }));
-      setError('');
-      setAuthTab('settings');
-    } catch (settingsError) {
-      setStatus((current) => (apiKeySyncing ? { ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' } : current));
-      setError(settingsError instanceof Error ? settingsError.message : '保存参数失败');
-    }
-  };
-
-  const resetDirectSettings = () => {
-    setApiConfigForm((current) => ({
-      ...defaultApiConfigForm,
-      stream: current.stream,
-      apiConfigs: current.apiConfigs?.length ? current.apiConfigs.map((item, index) => ({
-        ...normalizeApiConfigItem(index === 0 ? defaultApiConfigItem : item, index),
-        id: item.id,
-        hasApiKey: item.hasApiKey,
-        apiKeyHint: item.apiKeyHint,
-        apiKey: '',
-      })) : [defaultApiConfigItem],
-      activeApiConfigId: current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
-    }));
-    setForm(defaultForm);
-  };
-
-  const saveProfile = async () => {
-    if (!user) return;
-
-    try {
-      const data = await requestJson('/api/auth/profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ displayName: profileForm.displayName }),
-      });
-      setUser(data.user || user);
-      setError('');
-    } catch (profileError) {
-      setError(profileError instanceof Error ? profileError.message : '保存账号信息失败');
-    }
-  };
-
-  const changePassword = async () => {
-    if (!user) return;
-
-    try {
-      await requestJson('/api/auth/password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(passwordForm),
-      });
-      setPasswordForm(emptyPasswordForm);
-      setError('');
-    } catch (passwordError) {
-      setError(passwordError instanceof Error ? passwordError.message : '修改密码失败');
-    }
-  };
+  const { submitAuth, logout, saveAccountSettings, saveProfile, changePassword } = useSession({
+    authMode,
+    authForm,
+    profileForm,
+    passwordForm,
+    apiConfigForm,
+    activeApiConfig,
+    user,
+    apiKeySyncing,
+    apiKeyVaultRef,
+    applyServerSettings,
+    syncDirectApiKey,
+    syncGeneratedImages,
+    setUser,
+    setError,
+    setImages,
+    setHistory,
+    setWallItems,
+    setSelectedImage,
+    setBoardScope,
+    setBoardFilter,
+    setProfileForm,
+    setPasswordForm,
+    setApiConfigForm,
+    setApiKeySyncing,
+    setStatus,
+    setForm,
+    setAuthForm,
+    setAuthTab,
+    setActiveDialog,
+  });
 
   const reuseConfig = (image) => {
     if (image?.form) setForm(normalizeForm(image.form));

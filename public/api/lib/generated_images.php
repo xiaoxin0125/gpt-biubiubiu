@@ -131,6 +131,23 @@ function handle_generated_images(array $user): array
     return ['items' => array_map('client_generated_image', $stmt->fetchAll())];
 }
 
+function detach_or_purge_job_files(array $row): void
+{
+    $rowId = (int) ($row['id'] ?? 0);
+    $wallItemId = (int) ($row['wall_item_id'] ?? 0);
+    $wallStmt = pdo()->prepare('SELECT COUNT(*) FROM wall_items WHERE source_job_id = ? OR (? > 0 AND id = ?)');
+    $wallStmt->execute([$rowId, $wallItemId, $wallItemId]);
+    $hasWallReference = (int) $wallStmt->fetchColumn() > 0;
+
+    if ($hasWallReference) {
+        $detachWall = pdo()->prepare('UPDATE wall_items SET source_job_id = NULL WHERE source_job_id = ? OR (? > 0 AND id = ?)');
+        $detachWall->execute([$rowId, $wallItemId, $wallItemId]);
+        return;
+    }
+
+    delete_generated_image_files($row);
+}
+
 function handle_delete_generated_image(array $user, int $id): array
 {
     if (!empty($user['isAdmin'])) {
@@ -143,17 +160,7 @@ function handle_delete_generated_image(array $user, int $id): array
     $row = $stmt->fetch();
     if (!$row) return ['ok' => true, 'deleted' => false];
 
-    $wallItemId = (int) ($row['wall_item_id'] ?? 0);
-    $wallStmt = pdo()->prepare('SELECT COUNT(*) FROM wall_items WHERE source_job_id = ? OR (? > 0 AND id = ?)');
-    $wallStmt->execute([$id, $wallItemId, $wallItemId]);
-    $hasWallReference = (int) $wallStmt->fetchColumn() > 0;
-
-    if ($hasWallReference) {
-        $detachWall = pdo()->prepare('UPDATE wall_items SET source_job_id = NULL WHERE source_job_id = ? OR (? > 0 AND id = ?)');
-        $detachWall->execute([$id, $wallItemId, $wallItemId]);
-    } else {
-        delete_generated_image_files($row);
-    }
+    detach_or_purge_job_files($row);
 
     $stmt = pdo()->prepare(!empty($user['isAdmin']) ? 'DELETE FROM image_jobs WHERE id = ?' : 'DELETE FROM image_jobs WHERE id = ? AND user_id = ?');
     $stmt->execute(!empty($user['isAdmin']) ? [$id] : [$id, (int) $user['id']]);
@@ -166,18 +173,7 @@ function handle_clear_generated_images(array $user): array
     $stmt->execute([(int) $user['id'], 'completed']);
     $rows = $stmt->fetchAll();
     foreach ($rows as $row) {
-        $rowId = (int) ($row['id'] ?? 0);
-        $wallItemId = (int) ($row['wall_item_id'] ?? 0);
-        $wallStmt = pdo()->prepare('SELECT COUNT(*) FROM wall_items WHERE source_job_id = ? OR (? > 0 AND id = ?)');
-        $wallStmt->execute([$rowId, $wallItemId, $wallItemId]);
-        $hasWallReference = (int) $wallStmt->fetchColumn() > 0;
-
-        if ($hasWallReference) {
-            $detachWall = pdo()->prepare('UPDATE wall_items SET source_job_id = NULL WHERE source_job_id = ? OR (? > 0 AND id = ?)');
-            $detachWall->execute([$rowId, $wallItemId, $wallItemId]);
-        } else {
-            delete_generated_image_files($row);
-        }
+        detach_or_purge_job_files($row);
     }
 
     $stmt = pdo()->prepare('DELETE FROM image_jobs WHERE user_id = ? AND status = ?');
@@ -190,7 +186,7 @@ function handle_save_generated_image(array $user, array $body): array
     $image = is_array($body['image'] ?? null) ? $body['image'] : [];
     $form = is_array($body['form'] ?? null) ? $body['form'] : [];
     $params = is_array($body['params'] ?? null) ? $body['params'] : $form;
-    $stored = save_wall_image($image);
+    $stored = store_image_files($image);
     $requestId = preg_replace('/[^a-zA-Z0-9_.-]/', '-', (string) ($body['requestId'] ?? ($body['request_id'] ?? ('request-' . time()))));
     $mode = normalize_job_mode((string) ($body['mode'] ?? ($params['source'] ?? 'generation')));
     $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? ($params['prompt'] ?? ''))));

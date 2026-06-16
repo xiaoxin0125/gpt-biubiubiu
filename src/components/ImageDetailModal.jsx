@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { formatDate } from '../lib/board';
 import { getQualityLabel, getResponseFormatLabel } from '../lib/form';
 import { getSourceLabel } from '../lib/board';
@@ -22,9 +23,33 @@ export default function ImageDetailModal({
   deleteImage,
   toggleWall,
 }) {
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+
+  useEffect(() => {
+    setLightboxOpen(false);
+  }, [selectedImage]);
+
+  useEffect(() => {
+    if (!lightboxOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setLightboxOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [lightboxOpen]);
+
   if (!selectedImage) return null;
 
+  const lightboxSrc = detailDownloadSrc || detailSrc;
+  const openLightbox = () => {
+    if (detailSrc) setLightboxOpen(true);
+  };
+
   return (
+    <>
     <section className="modal-card image-detail-modal" role="dialog" aria-modal="true" aria-label="图片详情">
       <div className="detail-preview">
         <div className="detail-badges">
@@ -33,7 +58,21 @@ export default function ImageDetailModal({
           <span>{detailParams.response_format === 'url' ? detailParams.output_format || 'png' : getResponseFormatLabel(detailParams.response_format)}</span>
         </div>
         {detailSrc ? (
-          <img src={detailSrc} alt={detailRevisedPrompt || selectedImage.prompt || '图片详情'} />
+          <img
+            src={detailSrc}
+            alt={detailRevisedPrompt || selectedImage.prompt || '图片详情'}
+            className="detail-preview-image"
+            role="button"
+            tabIndex={0}
+            title="点击全屏查看"
+            onClick={openLightbox}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openLightbox();
+              }
+            }}
+          />
         ) : (
           <div className="pending-preview detail-pending-preview">
             <span className="loading-ring" aria-hidden="true" />
@@ -95,5 +134,16 @@ export default function ImageDetailModal({
         </div>
       </div>
     </section>
+
+    {lightboxOpen && lightboxSrc ? (
+      <div className="lightbox-layer" role="dialog" aria-modal="true" aria-label="图片全屏查看">
+        <button type="button" className="lightbox-backdrop" aria-label="关闭全屏" onClick={() => setLightboxOpen(false)} />
+        <figure className="lightbox-figure">
+          <img src={lightboxSrc} alt={detailRevisedPrompt || selectedImage.prompt || '图片全屏查看'} onClick={() => setLightboxOpen(false)} />
+        </figure>
+        <button type="button" className="close-button lightbox-close" aria-label="关闭全屏" onClick={() => setLightboxOpen(false)}>×</button>
+      </div>
+    ) : null}
+    </>
   );
 }

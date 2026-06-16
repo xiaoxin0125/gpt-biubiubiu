@@ -124,14 +124,15 @@ const normalizeDirectImageItem = (image, index, outputFormat) => {
   return nextImage;
 };
 
+const directImageItems = (data) => {
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.images)) return data.images;
+  const hasInlineImage = data?.b64_json || data?.url || data?.image || data?.data_url || (typeof data?.data === 'string' && data.data);
+  return hasInlineImage ? [data] : [];
+};
+
 export const normalizeDirectImageResponse = (data, outputFormat) => {
-  const rawItems = Array.isArray(data?.data)
-    ? data.data
-    : Array.isArray(data?.images)
-      ? data.images
-      : data?.b64_json || data?.url || data?.image || data?.data_url || (typeof data?.data === 'string' && data.data)
-        ? [data]
-        : [];
+  const rawItems = directImageItems(data);
 
   return {
     created: data?.created || Math.floor(Date.now() / 1000),
