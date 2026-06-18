@@ -381,7 +381,6 @@ function App() {
             setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
           });
           syncGeneratedImages();
-          if (nextUser.isAdmin) loadSiteSettings();
         } else {
           saveHistory([]);
           apiKeyVaultRef.current.clear();

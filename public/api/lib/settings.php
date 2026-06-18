@@ -379,8 +379,7 @@ function save_user_settings(array $user, array $body): array
         $placeholders = implode(',', array_fill(0, count($seenIds), '?'));
         $params = array_merge([$user['id']], $seenIds);
         $db->prepare("DELETE FROM user_api_configs WHERE user_id = ? AND id NOT IN ({$placeholders})")->execute($params);
-        if (!$wantShared && !in_array($activeId, $seenIds, true)) $activeId = $seenIds[0];
-        if ($wantShared) $activeId = $seenIds[0];
+        if (!in_array($activeId, $seenIds, true)) $activeId = $seenIds[0];
 
         $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
         $stmt->execute([$activeId, $user['id']]);
@@ -437,8 +436,7 @@ function build_api_models_url(string $apiBaseUrl): string
     $parts = parse_url($baseUrl);
     $path = rtrim((string) ($parts['path'] ?? ''), '/');
     if ($path !== '' && substr($path, -3) === '/v1') $path .= '/models';
-    elseif ($path !== '' && substr($path, -7) === '/models') $path = $path;
-    else $path .= '/v1/models';
+    elseif ($path === '' || substr($path, -7) !== '/models') $path .= '/v1/models';
 
     $port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
     $user = isset($parts['user']) ? rawurlencode((string) $parts['user']) : '';

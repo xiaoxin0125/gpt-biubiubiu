@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { defaultApiConfigItem, defaultForm } from '../constants/options';
 import {
   normalizeBackground,
@@ -73,6 +73,9 @@ export const buildEditPayload = (formDraft, apiConfig, referenceImages, maskImag
 };
 
 export const useGeneration = (deps) => {
+  const depsRef = useRef(deps);
+  depsRef.current = deps;
+
   const generate = useCallback(async (event) => {
     const {
       form,
@@ -95,7 +98,7 @@ export const useGeneration = (deps) => {
       setImages,
       setSelectedImage,
       setHistory,
-    } = deps;
+    } = depsRef.current;
 
     event.preventDefault();
     const prompt = form.prompt.trim();
@@ -253,7 +256,7 @@ export const useGeneration = (deps) => {
     } finally {
       setRunningGenerations((count) => Math.max(0, count - 1));
     }
-  }, [deps]);
+  }, []);
 
   return { generate };
 };
