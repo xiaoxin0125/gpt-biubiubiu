@@ -2,7 +2,7 @@
 
 一个面向 OpenAI 兼容图片接口的 Web 生图工作台。
 
-前端使用 Vite + React，后端使用 PHP 单入口 API，数据保存在 MySQL。项目重点是：账号登录、多套 API 配置、文生图、图生图、生成记录、作品墙和图片本地落盘。
+前端使用 Vite + React，后端使用 PHP 单入口 API，数据保存在 MySQL。项目重点是：账号登录、多套 API 配置、共享 API、管理员站点开关、模型列表获取、文生图、图生图、生成记录、作品墙和图片本地落盘。
 
 ## 功能概览
 
@@ -14,7 +14,10 @@
 - 支持 URL / Base64 两种响应格式
 - 支持 `png`、`jpeg`、`webp` 输出格式
 - 支持多套 OpenAI 兼容 API 配置
-- 用户 API Key 加密保存到 MySQL
+- 支持管理员共享 API，用户无私有 Key 时也可直接生成
+- 支持从上游 `/v1/models` 获取模型列表
+- 支持账号资料、密码修改、注册开关和作品墙访问开关
+- 用户 API Key 与共享 API Key 加密保存到 MySQL
 - 生成成功后可保存到个人记录
 - 作品可发布到公开作品墙
 - 服务端自动保存原图和压缩展示图
@@ -55,7 +58,8 @@ public/api/
   lib/
     auth.php               账号、登录态、资料、密码
     database.php           PDO、建表、补列
-    settings.php           API 配置、API Key 加密保存
+    settings.php           API 配置、模型列表、API Key 加密保存
+    site.php               站点开关、共享 API、管理员设置
     files.php              图片解码、压缩、落盘
     generated_images.php   生成记录
     wall.php               作品墙
@@ -71,7 +75,7 @@ server/
 
 ```text
 用户登录
-  -> 保存 API 配置和 API Key
+  -> 选择管理员共享 API，或保存自己的 API 配置和 API Key
   -> 浏览器直连 OpenAI 兼容图片接口
   -> 前端拿到图片结果
   -> 保存生成记录到本站 PHP API
@@ -79,7 +83,14 @@ server/
   -> 用户选择发布到作品墙
 ```
 
-这里的生图请求由浏览器直接访问用户配置的 API 地址，PHP 不做代理转发。PHP 只处理账号、配置、记录、图片落盘和作品墙。
+这里的生图请求由浏览器直接访问当前启用的 API 地址，PHP 不做代理转发。PHP 只处理账号、配置、模型列表、记录、图片落盘、作品墙和站点管理。
+
+共享 API 由管理员在「账号设置 -> 网站管理」中维护。开启后：
+
+- 没有私有 API Key 的用户会默认使用共享 API
+- 已保存私有 API Key 的用户仍可手动切换到共享 API
+- 共享配置不会写入用户自己的 `user_api_configs`
+- 共享 API Key 使用同一套 `user_api_key_secret` 加密保存
 
 ## 环境要求
 
@@ -154,11 +165,12 @@ mysql -u your-db-user -p your-db-name < server/schema.sql
 | 表 | 用途 |
 | --- | --- |
 | `users` | 用户账号、展示名、管理员标记 |
-| `user_settings` | 当前 API 配置、stream 等用户设置 |
+| `user_settings` | 当前 API 配置、stream、超时、共享配置选择等用户设置 |
 | `user_api_configs` | 多套 OpenAI 兼容 API 配置 |
 | `auth_rate_limits` | 登录、注册、改密频控 |
 | `image_jobs` | 生成记录、参数快照、图片地址 |
 | `wall_items` | 公开作品墙数据 |
+| `site_settings` | 注册开关、作品墙访问开关、共享 API 配置 |
 
 ## 配置说明
 
@@ -185,6 +197,14 @@ mysql -u your-db-user -p your-db-name < server/schema.sql
 
 这两个值只是默认值。用户登录后可以在页面中保存自己的 API 地址、模型和 API Key。
 
+### 可选兼容配置
+
+| 配置 | 说明 |
+| --- | --- |
+| `legacy_user_api_key_secrets` | 旧版 API Key 加密密钥列表，用于更换 `user_api_key_secret` 后平滑迁移 |
+
+如果需要轮换 `user_api_key_secret`，先把旧密钥放入 `legacy_user_api_key_secrets`，用户下次读取配置时会自动尝试用新密钥重写密文。
+
 ### 管理员初始化
 
 如需首次部署时自动创建管理员，可临时填写：
@@ -196,6 +216,17 @@ mysql -u your-db-user -p your-db-name < server/schema.sql
 ```
 
 管理员创建完成后，建议清空 `bootstrap_admin_password`，避免后续误改密码。
+
+### 站点管理
+
+管理员登录后可在「账号设置 -> 网站管理」中维护：
+
+- 开放注册：关闭后访客只能登录，注册入口和注册接口都会停用
+- 作品墙需登录：开启后未登录访客无法查看作品墙
+- 共享 API：开启后向登录用户注入一条只读的共享配置
+- 共享模型：可手动填写，也可通过上游 `/v1/models` 获取列表后选择
+
+共享 API 适合站点统一提供额度；用户保存自己的 API Key 后，默认优先使用自己的配置，也可以切回共享配置。
 
 ## 生产部署
 
@@ -209,10 +240,12 @@ npm run build
 
 - 站点运行目录指向 `dist`
 - `dist/api/index.php` 需要能被 PHP 执行
+- 构建不会清空整个 `dist`，但会清理 `dist/assets`、`dist/index.html`、`dist/favicon.ico` 和误放入 `dist/api/.php-api-config.php` 的配置文件
 - `.php-api-config.php` 放在项目根目录或 Web 根目录上级均可
-- `.php-api-config.php` 不要提交到仓库
+- `.php-api-config.php` 不要提交到仓库，也不要放入可被公开下载的位置
 - `wall-images` 目录需要 Web 用户可写
 - 反向代理的 Host、Scheme 需要和实际访问域名一致，否则写接口可能被同源校验拒绝
+- 如果启用了共享 API，管理员保存共享 Key 前必须确保 `user_api_key_secret` 已配置为强随机值
 
 如果构建产物没有包含 API 文件，需要确保以下文件存在：
 
@@ -256,6 +289,10 @@ GET    /api/settings
 GET    /api/settings/direct
 POST   /api/settings
 POST   /api/settings/active-api
+POST   /api/settings/models
+
+GET    /api/admin/site-settings
+POST   /api/admin/site-settings
 
 GET    /api/generated-images
 POST   /api/generated-images
@@ -309,6 +346,7 @@ php -l public/api/routes.php
 php -l public/api/lib/database.php
 php -l public/api/lib/auth.php
 php -l public/api/lib/settings.php
+php -l public/api/lib/site.php
 php -l public/api/lib/files.php
 php -l public/api/lib/generated_images.php
 php -l public/api/lib/wall.php
@@ -325,5 +363,7 @@ curl 'http://127.0.0.1:8088/api/index.php?route=/health'
 - 不要提交 `.php-api-config.php`
 - 不要使用示例密钥部署生产环境
 - 不要随意更换 `user_api_key_secret`，否则已保存的 API Key 将无法解密
+- 如需轮换 `user_api_key_secret`，先配置 `legacy_user_api_key_secrets` 做过渡
+- 生图请求由浏览器直连上游接口，当前启用的 API Key 会在已登录用户浏览器内使用；共享 API 只适合可信用户范围
 - 生产环境建议禁止直接访问配置文件
 - 写接口会校验 Origin / Referer，跨站请求会被拒绝
