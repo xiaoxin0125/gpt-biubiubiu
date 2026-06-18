@@ -2014,6 +2014,153 @@ select option {
   padding: 16px;
 }
 
+.profile-info-card {
+  gap: 14px;
+}
+
+.profile-inline-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
+}
+
+.profile-inline-fields label,
+.profile-readonly-label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+}
+
+.profile-inline-fields span,
+.profile-readonly-label span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
+.profile-identity-line {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.profile-readonly-label strong,
+.profile-plain-input {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  color: var(--black);
+  font-size: 0.92rem;
+  font-weight: 950;
+}
+
+.profile-plain-input {
+  height: auto;
+}
+
+.profile-plain-input:focus {
+  outline: 0;
+  box-shadow: none;
+}
+
+.profile-plain-input::placeholder {
+  color: var(--muted);
+}
+
+.profile-edit-label {
+  min-width: 0;
+}
+
+.profile-readonly-label small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 820;
+  overflow-wrap: anywhere;
+}
+
+.profile-save-row {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.profile-save-button {
+  width: 100%;
+}
+
+.shared-api-top-tip {
+  border-color: rgba(17, 17, 17, 0.72);
+  background: linear-gradient(135deg, #fffdf4 0%, var(--white) 100%);
+  box-shadow: 4px 4px 0 #d8d8d0;
+}
+
+.shared-api-summary {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 2px dashed rgba(17, 17, 17, 0.28);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+}
+
+.shared-api-summary strong {
+  color: var(--black);
+  font-size: 0.92rem;
+  font-weight: 950;
+}
+
+.shared-api-summary small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 780;
+  line-height: 1.55;
+}
+
+.generation-options-fields {
+  grid-template-columns: 1fr;
+}
+
+.model-picker-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.model-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.model-select-field {
+  min-width: 0;
+}
+
+.model-select-field .custom-select-trigger {
+  min-width: 0;
+}
+
+.model-select-field .custom-select-trigger strong,
+.model-select-field .custom-select-option {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-fetch-button {
+  justify-self: start;
+  min-width: 92px;
+  white-space: nowrap;
+}
+
 .modal-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2097,6 +2244,17 @@ select option {
 }
 
 @media (max-width: 640px) {
+  .profile-inline-fields,
+  .model-fetch-row,
+  .model-select-row {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-save-button,
+  .model-fetch-button {
+    width: 100%;
+  }
+
   .image-board.has-images {
     max-width: 100%;
     padding-inline: 8px;

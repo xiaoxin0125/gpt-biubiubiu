@@ -81,6 +81,8 @@ function App() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [status, setStatus] = useState({ loading: true, configured: false, message: '检查接口中' });
   const [apiKeySyncing, setApiKeySyncing] = useState(false);
+  const [apiModelOptionsByConfigId, setApiModelOptionsByConfigId] = useState({});
+  const [apiModelLoadingByConfigId, setApiModelLoadingByConfigId] = useState({});
   const [runningGenerations, setRunningGenerations] = useState(0);
   const [error, setError] = useState('');
   const [activeDialog, setActiveDialog] = useState(null);
@@ -133,7 +135,8 @@ function App() {
   const activeBoardFilter = activeFilterOptions.some((option) => option.value === boardFilter) ? boardFilter : 'all';
   const activeApiConfig = useMemo(() => {
     const configs = Array.isArray(apiConfigForm.apiConfigs) && apiConfigForm.apiConfigs.length ? apiConfigForm.apiConfigs : [normalizeApiConfigItem(apiConfigForm)];
-    return configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId)) || configs[0];
+    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId)) || configs[0];
+    return { ...activeConfig, requestTimeout: apiConfigForm.requestTimeout };
   }, [apiConfigForm]);
   const statusText = status.configured ? (status.apiName || activeApiConfig?.apiName || status.message || defaultApiConfigItem.apiName) : status.message;
   const canSubmitGeneration = Boolean(user) && !apiKeySyncing && (status.configured || Boolean(activeApiConfig?.hasApiKey));
@@ -253,7 +256,6 @@ function App() {
             apiName: siteSettings.sharedApi?.apiName,
             apiBaseUrl: siteSettings.sharedApi?.apiBaseUrl,
             model: siteSettings.sharedApi?.model,
-            requestTimeout: siteSettings.sharedApi?.requestTimeout,
             apiKey: siteSettings.sharedApi?.apiKey,
             clearApiKey: Boolean(siteSettings.sharedApi?.clearApiKey),
           },
@@ -707,6 +709,62 @@ function App() {
     setMaskImage(null);
   };
 
+  const fetchApiModels = async (configId) => {
+    const modelKey = String(configId);
+    const isSharedSiteConfig = modelKey === 'shared';
+    const config = isSharedSiteConfig
+      ? { ...(siteSettings.sharedApi || {}), id: 'shared' }
+      : (apiConfigForm.apiConfigs || []).find((item) => String(item.id) === modelKey);
+    if (!config) {
+      setError('API 配置不存在。');
+      return;
+    }
+
+    setApiModelLoadingByConfigId((current) => ({ ...current, [modelKey]: true }));
+    setError('');
+
+    try {
+      const data = await requestJson('/api/settings/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          configId: config.id,
+          apiBaseUrl: config.apiBaseUrl,
+          apiKey: config.apiKey || '',
+          requestTimeout: apiConfigForm.requestTimeout,
+        }),
+      });
+      const models = Array.isArray(data.models) ? data.models : [];
+      const options = models
+        .map((model) => (typeof model === 'string' ? model : model?.id || model?.value || model?.model || ''))
+        .map((model) => String(model).trim())
+        .filter(Boolean)
+        .filter((model, index, list) => list.indexOf(model) === index)
+        .map((model) => ({ label: model, value: model }));
+
+      setApiModelOptionsByConfigId((current) => ({ ...current, [modelKey]: options }));
+      if (!options.length) {
+        setError('没有获取到可用模型。');
+        return;
+      }
+      if (!String(config.model || '').trim()) {
+        if (isSharedSiteConfig) {
+          setSiteSettings((current) => ({
+            ...current,
+            sharedApi: { ...(current.sharedApi || {}), model: options[0].value },
+          }));
+        } else {
+          updateApiConfig(config.id, 'model', options[0].value);
+        }
+      }
+    } catch (modelError) {
+      setApiModelOptionsByConfigId((current) => ({ ...current, [modelKey]: [] }));
+      setError(modelError instanceof Error ? modelError.message : '获取模型失败');
+    } finally {
+      setApiModelLoadingByConfigId((current) => ({ ...current, [modelKey]: false }));
+    }
+  };
+
   const { generate } = useGeneration({
     form,
     hasReferenceImages,
@@ -755,6 +813,8 @@ function App() {
     setPasswordForm,
     setApiConfigForm,
     setApiKeySyncing,
+    setApiModelOptionsByConfigId,
+    setApiModelLoadingByConfigId,
     setStatus,
     setForm,
     setAuthForm,
@@ -915,6 +975,10 @@ function App() {
               addApiConfig={addApiConfig}
               resetDirectSettings={resetDirectSettings}
               saveAccountSettings={saveAccountSettings}
+              fetchApiModels={fetchApiModels}
+              apiModelOptionsByConfigId={apiModelOptionsByConfigId}
+              apiModelLoadingByConfigId={apiModelLoadingByConfigId}
+              renderSelect={renderSelect}
               siteFlags={siteFlags}
               siteSettings={siteSettings}
               setSiteSettings={setSiteSettings}

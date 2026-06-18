@@ -1,7 +1,16 @@
-import { MAX_REQUEST_TIMEOUT_SECONDS } from '../constants/options';
-
-export default function SiteAdminPanel({ siteSettings, setSiteSettings, saveSiteSettings }) {
+export default function SiteAdminPanel({
+  siteSettings,
+  setSiteSettings,
+  saveSiteSettings,
+  fetchApiModels,
+  apiModelOptionsByConfigId,
+  apiModelLoadingByConfigId,
+  renderSelect,
+}) {
   const shared = siteSettings.sharedApi || {};
+  const sharedModelKey = String(shared.id || 'shared');
+  const sharedModelOptions = apiModelOptionsByConfigId[sharedModelKey] || [];
+  const sharedModelLoading = Boolean(apiModelLoadingByConfigId[sharedModelKey]);
 
   const updateFlag = (key, value) => setSiteSettings((current) => ({ ...current, [key]: value }));
   const updateShared = (key, value) => setSiteSettings((current) => ({
@@ -44,22 +53,36 @@ export default function SiteAdminPanel({ siteSettings, setSiteSettings, saveSite
             <span>提供给全站登录用户使用</span>
           </div>
         </div>
-        <div className="api-config-fields">
+        <div className="api-config-fields api-config-fields-ordered">
           <label>
             <span>API 名称</span>
             <input value={shared.apiName || ''} onChange={(event) => updateShared('apiName', event.target.value)} placeholder="站点共享 API" />
           </label>
           <label>
-            <span>API 地址</span>
-            <input value={shared.apiBaseUrl || ''} onChange={(event) => updateShared('apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
-          </label>
-          <label>
             <span>模型 ID</span>
             <input value={shared.model || ''} onChange={(event) => updateShared('model', event.target.value)} placeholder="gpt-image-2" />
           </label>
-          <label>
-            <span>请求超时（秒）</span>
-            <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={shared.requestTimeout || ''} onChange={(event) => updateShared('requestTimeout', event.target.value)} placeholder="999" />
+          <div className="model-picker-field full-field">
+            <span>模型列表</span>
+            <div className="model-picker-row">
+              {renderSelect({
+                id: 'shared-api-model-select',
+                label: '',
+                value: shared.model || '',
+                options: sharedModelOptions.length ? sharedModelOptions : [{ label: shared.model || '暂无模型', value: shared.model || '' }],
+                onChange: (value) => updateShared('model', value),
+                disabled: !sharedModelOptions.length,
+                className: 'settings-select-field model-select-field',
+                menuDirection: 'down',
+              })}
+              <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(shared.id || 'shared')} disabled={sharedModelLoading}>
+                {sharedModelLoading ? '获取中' : '获取模型'}
+              </button>
+            </div>
+          </div>
+          <label className="full-field">
+            <span>API 地址</span>
+            <input value={shared.apiBaseUrl || ''} onChange={(event) => updateShared('apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
           </label>
           <label className="full-field">
             <span>密钥设置</span>

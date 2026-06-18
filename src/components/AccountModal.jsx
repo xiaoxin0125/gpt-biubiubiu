@@ -26,6 +26,10 @@ export default function AccountModal({
   addApiConfig,
   resetDirectSettings,
   saveAccountSettings,
+  fetchApiModels,
+  apiModelOptionsByConfigId,
+  apiModelLoadingByConfigId,
+  renderSelect,
   siteFlags,
   siteSettings,
   setSiteSettings,
@@ -33,6 +37,11 @@ export default function AccountModal({
 }) {
   const isAdmin = Boolean(user?.isAdmin);
   const registrationEnabled = siteFlags?.registrationEnabled !== false;
+  const apiConfigs = apiConfigForm.apiConfigs || [];
+  const sharedApiConfig = apiConfigs.find((config) => config.isShared);
+  const editableApiConfigs = apiConfigs.filter((config) => !config.isShared);
+  const hasSharedApiConfig = Boolean(sharedApiConfig);
+  const isSharedActive = hasSharedApiConfig && String(sharedApiConfig.id) === String(apiConfigForm.activeApiConfigId);
   return (
     <section className="modal-card account-modal" role="dialog" aria-modal="true" aria-label="账号设置">
       <div className="modal-head">
@@ -55,26 +64,28 @@ export default function AccountModal({
 
           {authTab === 'profile' ? (
             <div className="account-section-grid profile-stack">
-              <section className="api-config-card full-field">
+              <section className="api-config-card full-field profile-info-card">
                 <div className="api-config-card-head">
                   <div>
                     <strong>账号信息</strong>
-                    <span>当前登录身份与展示名称</span>
+                    <span>当前登录身份、展示名称与修改入口</span>
                   </div>
                 </div>
-                <div className="api-config-fields">
-                  <div className="summary-box full-field">
-                    <span>当前账号</span>
-                    <strong>{userDisplayName}</strong>
-                    <small>@{user.username}</small>
-                  </div>
-                  <label className="full-field">
+                <div className="profile-inline-fields">
+                  <label className="profile-readonly-label">
+                    <span>当前登录身份</span>
+                    <div className="profile-identity-line">
+                      <strong>{userDisplayName}</strong>
+                      <small>@{user.username}</small>
+                    </div>
+                  </label>
+                  <label className="profile-readonly-label profile-edit-label">
                     <span>展示名称</span>
-                    <input value={profileForm.displayName} onChange={(event) => setProfileForm((current) => ({ ...current, displayName: event.target.value }))} placeholder="留空则使用用户名" />
+                    <input className="profile-plain-input" value={profileForm.displayName} onChange={(event) => setProfileForm((current) => ({ ...current, displayName: event.target.value }))} placeholder="留空则使用用户名" />
                   </label>
                 </div>
-                <div className="card-actions full-field">
-                  <button type="button" className="secondary-action" onClick={saveProfile}>保存名称</button>
+                <div className="profile-save-row">
+                  <button type="button" className="secondary-action profile-save-button" onClick={saveProfile}>保存名称</button>
                 </div>
               </section>
 
@@ -108,6 +119,24 @@ export default function AccountModal({
 
           {authTab === 'settings' ? (
             <div className="settings-grid account-settings-grid direct-settings-grid profile-stack">
+              {hasSharedApiConfig ? (
+                <section className={isSharedActive ? 'api-config-card full-field shared-api-top-tip is-active' : 'api-config-card full-field shared-api-top-tip'}>
+                  <div className="api-config-card-head">
+                    <div>
+                      <strong>共享 API 配置</strong>
+                      <span>管理员提供的默认配置，未保存自己的 API 时可直接使用。</span>
+                    </div>
+                    <div className="api-config-actions">
+                      <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, activeApiConfigId: sharedApiConfig.id }))} disabled={isSharedActive}>{isSharedActive ? '当前启用' : '启用共享'}</button>
+                    </div>
+                  </div>
+                  <div className="shared-api-summary">
+                    <strong>{sharedApiConfig.apiName || '管理员共享配置'}</strong>
+                    <small>管理员共享配置。你保存自己的 API 后，将优先使用自己的配置。</small>
+                  </div>
+                </section>
+              ) : null}
+
               <section className="api-config-card full-field is-intro">
                 <div className="api-config-card-head">
                   <div>
@@ -117,46 +146,55 @@ export default function AccountModal({
                 </div>
               </section>
 
-              {(apiConfigForm.apiConfigs || []).map((config, index) => {
+              {editableApiConfigs.map((config, index) => {
                 const isActiveConfig = String(config.id) === String(apiConfigForm.activeApiConfigId);
-                const isShared = Boolean(config.isShared);
                 return (
                   <section className={isActiveConfig ? 'api-config-card full-field is-active' : 'api-config-card full-field'} key={config.id}>
                     <div className="api-config-card-head">
                       <div>
                         <strong>{config.apiName || `API 配置 ${index + 1}`}</strong>
-                        <span>{isShared ? '站点共享，不可编辑' : isActiveConfig ? '当前启用' : '备用配置'}</span>
+                        <span>{isActiveConfig ? '当前启用' : '备用配置'}</span>
                       </div>
                       <div className="api-config-actions">
                         <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, activeApiConfigId: config.id }))}>启用</button>
-                        {isShared ? null : (
-                          <button type="button" className="secondary-action danger-action" onClick={() => removeApiConfig(config.id)} disabled={(apiConfigForm.apiConfigs || []).filter((item) => !item.isShared).length <= 1}>删除</button>
-                        )}
+                        <button type="button" className="secondary-action danger-action" onClick={() => removeApiConfig(config.id)} disabled={editableApiConfigs.length <= 1}>删除</button>
                       </div>
                     </div>
-                    <div className="api-config-fields">
+                    <div className="api-config-fields api-config-fields-ordered">
                       <label>
                         <span>API 名称</span>
-                        <input value={config.apiName} onChange={(event) => updateApiConfig(config.id, 'apiName', event.target.value)} placeholder="OpenAI gpt-image-2" disabled={isShared} />
-                      </label>
-                      <label>
-                        <span>API 地址</span>
-                        <input value={config.apiBaseUrl} onChange={(event) => updateApiConfig(config.id, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" disabled={isShared} />
+                        <input value={config.apiName} onChange={(event) => updateApiConfig(config.id, 'apiName', event.target.value)} placeholder="OpenAI gpt-image-2" />
                       </label>
                       <label>
                         <span>模型 ID</span>
-                        <input value={config.model} onChange={(event) => updateApiConfig(config.id, 'model', event.target.value)} placeholder="gpt-image-2" disabled={isShared} />
+                        <input value={config.model} onChange={(event) => updateApiConfig(config.id, 'model', event.target.value)} placeholder="gpt-image-2" />
                       </label>
-                      <label>
-                        <span>请求超时（秒）</span>
-                        <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={config.requestTimeout} onChange={(event) => updateApiConfig(config.id, 'requestTimeout', event.target.value)} placeholder="999" disabled={isShared} />
+                      <div className="model-picker-field full-field">
+                        <span>模型列表</span>
+                        <div className="model-picker-row">
+                          {renderSelect({
+                            id: `api-model-select-${config.id}`,
+                            label: '',
+                            value: config.model,
+                            options: (apiModelOptionsByConfigId[String(config.id)] || []).length ? apiModelOptionsByConfigId[String(config.id)] : [{ label: config.model || '暂无模型', value: config.model || '' }],
+                            onChange: (value) => updateApiConfig(config.id, 'model', value),
+                            disabled: !(apiModelOptionsByConfigId[String(config.id)] || []).length,
+                            className: 'settings-select-field model-select-field',
+                            menuDirection: 'down',
+                          })}
+                          <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(config.id)} disabled={apiModelLoadingByConfigId[String(config.id)]}>
+                            {apiModelLoadingByConfigId[String(config.id)] ? '获取中' : '获取模型'}
+                          </button>
+                        </div>
+                      </div>
+                      <label className="full-field">
+                        <span>API 地址</span>
+                        <input value={config.apiBaseUrl} onChange={(event) => updateApiConfig(config.id, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
                       </label>
-                      {isShared ? null : (
-                        <label className="full-field">
-                          <span>密钥设置</span>
-                          <input type="password" value={config.apiKey || ''} onChange={(event) => updateApiConfig(config.id, 'apiKey', event.target.value)} placeholder={config.hasApiKey ? `已保存：${config.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
-                        </label>
-                      )}
+                      <label className="full-field">
+                        <span>密钥设置</span>
+                        <input type="password" value={config.apiKey || ''} onChange={(event) => updateApiConfig(config.id, 'apiKey', event.target.value)} placeholder={config.hasApiKey ? `已保存：${config.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
+                      </label>
                     </div>
                   </section>
                 );
@@ -169,7 +207,11 @@ export default function AccountModal({
                     <span>账号级通用设置，切换 API 配置时不会变化</span>
                   </div>
                 </div>
-                <div className="api-config-fields">
+                <div className="api-config-fields generation-options-fields">
+                  <label className="full-field">
+                    <span>请求超时（秒）</span>
+                    <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={apiConfigForm.requestTimeout} onChange={(event) => setApiConfigForm((current) => ({ ...current, requestTimeout: event.target.value }))} placeholder="999" />
+                  </label>
                   <label className="toggle-row full-field">
                     <input type="checkbox" checked={apiConfigForm.stream} onChange={(event) => setApiConfigForm((current) => ({ ...current, stream: event.target.checked }))} />
                     <span>启用流式传输功能</span>
@@ -191,6 +233,10 @@ export default function AccountModal({
               siteSettings={siteSettings}
               setSiteSettings={setSiteSettings}
               saveSiteSettings={saveSiteSettings}
+              fetchApiModels={fetchApiModels}
+              apiModelOptionsByConfigId={apiModelOptionsByConfigId}
+              apiModelLoadingByConfigId={apiModelLoadingByConfigId}
+              renderSelect={renderSelect}
             />
           ) : null}
         </div>

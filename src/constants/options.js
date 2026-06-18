@@ -14,7 +14,7 @@ export const SHARED_API_CONFIG_ID = 'shared';
 export const defaultSiteFlags = {
   wallRequireLogin: false,
   registrationEnabled: true,
-  sharedApiEnabled: false,
+  sharedApiEnabled: true,
 };
 
 export const qualityOptions = [

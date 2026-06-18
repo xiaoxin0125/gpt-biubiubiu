@@ -33,6 +33,8 @@ export const useSession = (deps) => {
     setPasswordForm,
     setApiConfigForm,
     setApiKeySyncing,
+    setApiModelOptionsByConfigId,
+    setApiModelLoadingByConfigId,
     setStatus,
     setForm,
     setAuthForm,
@@ -82,6 +84,8 @@ export const useSession = (deps) => {
       setPasswordForm(emptyPasswordForm);
       apiKeyVaultRef.current.clear();
       setApiConfigForm(defaultApiConfigForm);
+      setApiModelOptionsByConfigId({});
+      setApiModelLoadingByConfigId({});
       setApiKeySyncing(false);
       setStatus((current) => ({ ...current, configured: false, apiName: '', message: '请先登录' }));
     }
@@ -102,22 +106,24 @@ export const useSession = (deps) => {
       apiConfigs: apiConfigForm.apiConfigs,
       activeApiConfigId: apiConfigForm.activeApiConfigId,
       stream: apiConfigForm.stream,
+      requestTimeout: apiConfigForm.requestTimeout,
     });
+    const activeApiConfigId = String(apiConfigForm.activeApiConfigId) === 'shared' ? 'shared' : nextSettings.activeApiConfigId;
     try {
       const data = await requestJson('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           settings: {
-            activeApiConfigId: nextSettings.activeApiConfigId,
+            activeApiConfigId,
             stream: nextSettings.stream,
+            requestTimeout: nextSettings.requestTimeout,
           },
           apiConfigs: (apiConfigForm.apiConfigs || []).filter((item) => !item.isShared).map((item) => ({
             id: item.id,
             apiName: item.apiName,
             apiBaseUrl: item.apiBaseUrl,
             model: item.model,
-            requestTimeout: item.requestTimeout,
             apiKey: item.apiKey,
             confirmApiKeySave: Boolean(item.apiKey),
           })),

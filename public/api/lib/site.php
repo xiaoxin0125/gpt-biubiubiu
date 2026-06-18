@@ -16,7 +16,7 @@ function site_settings_row(): array
     return $row ?: [
         'wall_require_login' => 0,
         'registration_enabled' => 1,
-        'shared_api_enabled' => 0,
+        'shared_api_enabled' => 1,
         'shared_api_name' => DEFAULT_API_NAME,
         'shared_api_base_url' => DEFAULT_API_BASE_URL,
         'shared_model' => DEFAULT_IMAGE_MODEL,
@@ -76,7 +76,6 @@ function shared_api_config_client(?array $row = null): array
         'apiName' => trim((string) ($row['shared_api_name'] ?? '')) ?: DEFAULT_API_NAME,
         'apiBaseUrl' => trim((string) ($row['shared_api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
         'model' => trim((string) ($row['shared_model'] ?? '')) ?: DEFAULT_IMAGE_MODEL,
-        'requestTimeout' => (int) ($row['shared_request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
         'hasApiKey' => !empty($row['shared_api_key_ciphertext']),
         'apiKeyHint' => (string) ($row['shared_api_key_hint'] ?? ''),
         'sortOrder' => -1,
@@ -134,7 +133,6 @@ function save_site_settings(array $body): array
     if ($apiBaseUrl === '') $apiBaseUrl = DEFAULT_API_BASE_URL;
     if (!valid_api_base_url($apiBaseUrl)) json_response(['error' => 'API 地址必须是 http 或 https 地址'], 400);
     $model = trim((string) ($shared['model'] ?? '')) ?: DEFAULT_IMAGE_MODEL;
-    $requestTimeout = normalize_request_timeout($shared['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT);
 
     $apiKey = trim((string) ($shared['apiKey'] ?? ''));
     $clearApiKey = !empty($shared['clearApiKey']);
@@ -157,8 +155,8 @@ function save_site_settings(array $body): array
         $keyParams = [];
     }
 
-    $sql = 'UPDATE site_settings SET wall_require_login = ?, registration_enabled = ?, shared_api_enabled = ?, shared_api_name = ?, shared_api_base_url = ?, shared_model = ?, shared_request_timeout = ?' . $keyClause . ' WHERE id = 1';
-    $params = array_merge([$wallRequireLogin, $registrationEnabled, $sharedApiEnabled, $apiName, $apiBaseUrl, $model, $requestTimeout], $keyParams);
+    $sql = 'UPDATE site_settings SET wall_require_login = ?, registration_enabled = ?, shared_api_enabled = ?, shared_api_name = ?, shared_api_base_url = ?, shared_model = ?' . $keyClause . ' WHERE id = 1';
+    $params = array_merge([$wallRequireLogin, $registrationEnabled, $sharedApiEnabled, $apiName, $apiBaseUrl, $model], $keyParams);
     $db->prepare($sql)->execute($params);
 
     return admin_site_settings_view();

@@ -203,7 +203,7 @@ function ensure_schema(): void
       id TINYINT UNSIGNED NOT NULL PRIMARY KEY DEFAULT 1,
       wall_require_login TINYINT(1) NOT NULL DEFAULT 0,
       registration_enabled TINYINT(1) NOT NULL DEFAULT 1,
-      shared_api_enabled TINYINT(1) NOT NULL DEFAULT 0,
+      shared_api_enabled TINYINT(1) NOT NULL DEFAULT 1,
       shared_api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
       shared_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
       shared_model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',

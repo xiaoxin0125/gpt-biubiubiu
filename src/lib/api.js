@@ -85,8 +85,11 @@ export const normalizeServerSettings = (value = {}) => {
   const activeApiConfigId = value.activeApiConfigId ?? value.active_api_config_id ?? value.activeConfig?.id ?? value.active_config?.id ?? safeConfigs[0].id;
   const activeConfig = safeConfigs.find((item) => String(item.id) === String(activeApiConfigId)) || safeConfigs[0];
 
+  const requestTimeout = clampNumber(Number(value.requestTimeout || value.request_timeout || activeConfig.requestTimeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS);
+
   return {
     ...activeConfig,
+    requestTimeout,
     stream: Boolean(value.stream),
     activeApiConfigId: activeConfig.id,
     apiConfigs: safeConfigs,

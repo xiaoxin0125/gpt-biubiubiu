@@ -2,7 +2,6 @@ import {
   defaultApiConfigForm,
   defaultApiConfigItem,
   defaultForm,
-  MAX_REQUEST_TIMEOUT_SECONDS,
 } from '../constants/options';
 import { createLocalApiConfigId, normalizeApiConfigItem } from '../lib/api';
 
@@ -22,7 +21,6 @@ export const useApiConfig = (deps) => {
       apiName: `API 配置 ${(apiConfigForm.apiConfigs || []).length + 1}`,
       apiBaseUrl: activeApiConfig?.apiBaseUrl || defaultApiConfigItem.apiBaseUrl,
       model: activeApiConfig?.model || defaultForm.model,
-      requestTimeout: activeApiConfig?.requestTimeout || MAX_REQUEST_TIMEOUT_SECONDS,
     }, (apiConfigForm.apiConfigs || []).length);
     setApiConfigForm((current) => ({
       ...current,
@@ -49,6 +47,7 @@ export const useApiConfig = (deps) => {
     setApiConfigForm((current) => ({
       ...defaultApiConfigForm,
       stream: current.stream,
+      requestTimeout: current.requestTimeout,
       apiConfigs: current.apiConfigs?.length ? current.apiConfigs.map((item, index) => ({
         ...normalizeApiConfigItem(index === 0 ? defaultApiConfigItem : item, index),
         id: item.id,

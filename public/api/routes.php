@@ -76,6 +76,10 @@ function api_exact_routes(): array
             $user = require_user();
             return ['settings' => switch_active_api_config($user, $body)];
         }],
+        ['POST', '/settings/models', function (array $body): array {
+            $user = require_user();
+            return fetch_api_models_for_user($user, $body);
+        }],
         ['GET', '/admin/site-settings', function (): array {
             require_admin();
             return ['site' => admin_site_settings_view()];
