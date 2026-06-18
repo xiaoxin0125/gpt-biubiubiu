@@ -1723,6 +1723,45 @@ input::placeholder {
   font-weight: 900;
 }
 
+.profile-stack {
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.card-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.card-actions .secondary-action,
+.card-actions .primary-action {
+  width: 100%;
+}
+
+.account-footer {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.account-footer .danger-action {
+  min-width: 160px;
+}
+
+.api-config-card.is-intro {
+  padding: 12px;
+  box-shadow: none;
+  background: transparent;
+  border-style: dashed;
+}
+
+.api-config-card.is-intro .api-config-card-head {
+  margin: 0;
+}
+
 .summary-box small {
   color: var(--muted);
   font-size: 0.78rem;
@@ -1902,6 +1941,7 @@ select option {
   display: grid;
   grid-template-columns: 44px 1fr;
   align-items: center;
+  align-content: center;
   column-gap: 12px;
   min-height: 70px;
   padding: 14px 16px;
@@ -1913,6 +1953,8 @@ select option {
 
 .toggle-row input[type="checkbox"] {
   position: relative;
+  grid-row: 1 / span 2;
+  align-self: center;
   width: 42px;
   min-width: 42px;
   height: 24px;
@@ -1954,7 +1996,7 @@ select option {
 }
 
 .toggle-row span {
-  align-self: end;
+  align-self: center;
   color: var(--black);
   font-size: 0.9rem;
   font-weight: 950;

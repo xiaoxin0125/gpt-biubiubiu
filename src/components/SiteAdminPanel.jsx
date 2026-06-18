@@ -10,29 +10,32 @@ export default function SiteAdminPanel({ siteSettings, setSiteSettings, saveSite
   }));
 
   return (
-    <div className="settings-grid account-settings-grid direct-settings-grid">
-      <div className="settings-section-title full-field">
-        <strong>站点开关</strong>
-        <span>仅管理员可见。控制全站注册、作品墙访问与共享 API。</span>
-      </div>
-
-      <label className="toggle-row full-field">
-        <input type="checkbox" checked={Boolean(siteSettings.registrationEnabled)} onChange={(event) => updateFlag('registrationEnabled', event.target.checked)} />
-        <span>开放注册</span>
-        <small>关闭后访客只能登录，注册入口与接口都会停用。</small>
-      </label>
-
-      <label className="toggle-row full-field">
-        <input type="checkbox" checked={Boolean(siteSettings.wallRequireLogin)} onChange={(event) => updateFlag('wallRequireLogin', event.target.checked)} />
-        <span>作品墙需登录</span>
-        <small>开启后未登录访客无法查看作品墙。</small>
-      </label>
-
-      <label className="toggle-row full-field">
-        <input type="checkbox" checked={Boolean(siteSettings.sharedApiEnabled)} onChange={(event) => updateFlag('sharedApiEnabled', event.target.checked)} />
-        <span>启用共享 API</span>
-        <small>开启后所有登录用户会自动获得一条只读的「共享」配置，可直接启用生成。</small>
-      </label>
+    <div className="settings-grid account-settings-grid direct-settings-grid profile-stack">
+      <section className="api-config-card full-field">
+        <div className="api-config-card-head">
+          <div>
+            <strong>站点开关</strong>
+            <span>仅管理员可见。控制全站注册、作品墙访问与共享 API。</span>
+          </div>
+        </div>
+        <div className="api-config-fields">
+          <label className="toggle-row full-field">
+            <input type="checkbox" checked={Boolean(siteSettings.registrationEnabled)} onChange={(event) => updateFlag('registrationEnabled', event.target.checked)} />
+            <span>开放注册</span>
+            <small>关闭后访客只能登录，注册入口与接口都会停用。</small>
+          </label>
+          <label className="toggle-row full-field">
+            <input type="checkbox" checked={Boolean(siteSettings.wallRequireLogin)} onChange={(event) => updateFlag('wallRequireLogin', event.target.checked)} />
+            <span>作品墙需登录</span>
+            <small>开启后未登录访客无法查看作品墙。</small>
+          </label>
+          <label className="toggle-row full-field">
+            <input type="checkbox" checked={Boolean(siteSettings.sharedApiEnabled)} onChange={(event) => updateFlag('sharedApiEnabled', event.target.checked)} />
+            <span>启用共享 API</span>
+            <small>开启后所有登录用户会自动获得一条只读的「共享」配置，可直接启用生成。</small>
+          </label>
+        </div>
+      </section>
 
       <section className="api-config-card full-field">
         <div className="api-config-card-head">
@@ -71,7 +74,7 @@ export default function SiteAdminPanel({ siteSettings, setSiteSettings, saveSite
         </div>
       </section>
 
-      <div className="modal-actions full-field">
+      <div className="account-footer full-field">
         <button type="button" className="primary-action" onClick={saveSiteSettings}>保存网站设置</button>
       </div>
     </div>
