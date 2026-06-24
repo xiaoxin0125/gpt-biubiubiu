@@ -2,24 +2,34 @@
 
 declare(strict_types=1);
 
-function prompt_tools_rule_text(string $type, string $rule, string $customRule = ''): string
+function prompt_tools_language_rule(string $outputLanguage): string
+{
+    $language = strtolower(trim($outputLanguage));
+    if (in_array($language, ['zh', 'chinese', '中文'], true)) return '输出语言：中文。';
+    if (in_array($language, ['en', 'english'], true)) return 'Output language: English.';
+    return '输出语言：自动识别用户输入语言，用户用中文则输出中文，用户用英文则输出英文；如果输入语言混合，以用户主要语言输出。';
+}
+
+function prompt_tools_rule_text(string $type, string $rule, string $customRule = '', string $outputLanguage = 'auto'): string
 {
     $optimizeRules = [
-        'general' => '将原始提示词扩写为更完整的图像生成提示词，补足主体、场景、构图、光线、材质、风格和画面细节。保留用户原意，不添加解释。',
-        'tags' => '将原始提示词优化为英文 tags 风格，使用逗号分隔，适合 Stable Diffusion / LoRA / 通用生图模型。只输出 tags。',
-        'qwen-edit' => '将原始提示词优化为 Qwen-Image-Edit 图像编辑指令，明确要保留的元素、要修改的区域、目标效果和约束。只输出编辑指令。',
-        'kontext' => '将原始提示词优化为 Kontext 图像编辑指令，并翻译成自然、准确的英文。强调主体一致性、局部编辑范围和最终效果。只输出英文指令。',
+        'general' => '你是一位拥有全学科视觉知识的图像生成提示词专家。将原始提示词扩写为更完整的图像生成提示词，先判断内容所属领域，再补足主体、场景、构图、光线、材质、风格和画面细节。严格保留用户原意和核心关键词，不输出解释、Markdown、标题、前缀或引号。',
+        'portrait' => '你是一位追求自然真实感与极致细节的人像摄影提示词专家。将用户的人像描述扩写为画面感强、细节丰富、符合自然审美的高质量提示词，重点补足皮肤质感、五官情绪、服饰材质、构图视角、光影色彩和环境氛围。严格保留用户原意和核心关键词，不输出解释、Markdown、标题、前缀或引号。',
+        'tags' => '你是一位精通 Danbooru 标签体系与 Stable Diffusion 权重语法的提示词工程师。将原始提示词转为 tags 风格，使用逗号分隔，按画质词、主体、服饰与特征、背景、光影构图、风格后缀的顺序组织。可按重要程度合理使用括号权重，只输出 tags，不输出完整自然语言句子。',
     ];
     $captionRules = [
-        'natural' => '根据图片反推出适合生图的自然语言提示词，描述主体、场景、构图、光照、色彩、风格和关键细节。只输出提示词。',
-        'tags' => '根据图片反推出英文 tags 风格提示词，使用逗号分隔，优先输出可用于图像生成的视觉标签。只输出 tags。',
-        'edit' => '根据图片内容反推出适合图像编辑模型的指令，描述需要保留的画面信息和可执行的编辑方向。只输出编辑指令。',
+        'natural' => '根据图片反推出适合生图的自然语言提示词，描述主体、场景、构图、光照、色彩、风格和关键细节。只输出提示词，不输出解释、Markdown、标题、前缀或引号。',
+        'tags' => '根据图片反推出 tags 风格提示词，使用逗号分隔，优先输出可用于图像生成的视觉标签，可包含画质词、主体细节、环境、构图、光影和风格词。只输出 tags，不输出解释、Markdown、标题、前缀或引号。',
     ];
 
+    $legacyRules = $type === 'caption' ? ['edit' => 'natural'] : ['qwen-edit' => 'general', 'kontext' => 'general'];
+    $ruleKey = $legacyRules[$rule] ?? $rule;
     $rules = $type === 'caption' ? $captionRules : $optimizeRules;
-    $base = $rules[$rule] ?? reset($rules);
+    $base = $rules[$ruleKey] ?? reset($rules);
     $custom = trim($customRule);
-    return $custom === '' ? $base : $base . "\n额外规则：" . $custom;
+    $segments = [$base, prompt_tools_language_rule($outputLanguage)];
+    if ($custom !== '') $segments[] = '额外规则：' . $custom;
+    return implode("\n", $segments);
 }
 
 function prompt_tools_chat_url(string $apiBaseUrl): string
@@ -192,8 +202,9 @@ function handle_prompt_optimize(array $body): array
     if (mb_strlen($prompt) > 8000) json_response(['error' => '提示词过长，请控制在 8000 字以内'], 400);
 
     $rule = trim((string) ($body['rule'] ?? 'general')) ?: 'general';
+    $outputLanguage = trim((string) ($body['outputLanguage'] ?? ($body['output_language'] ?? 'auto'))) ?: 'auto';
     $customRule = trim((string) ($body['customRule'] ?? ($body['custom_rule'] ?? '')));
-    $ruleText = prompt_tools_rule_text('optimize', $rule, $customRule);
+    $ruleText = prompt_tools_rule_text('optimize', $rule, $customRule, $outputLanguage);
     $config = prompt_tools_active_config($user, 'prompt');
 
     $messages = [
@@ -256,9 +267,10 @@ function handle_prompt_caption(array $body): array
 
     $dataUrl = prompt_tools_image_data_url($body);
     $rule = trim((string) ($_POST['rule'] ?? ($body['rule'] ?? 'natural'))) ?: 'natural';
+    $outputLanguage = trim((string) ($_POST['outputLanguage'] ?? ($_POST['output_language'] ?? ($body['outputLanguage'] ?? ($body['output_language'] ?? 'auto'))))) ?: 'auto';
     $customRule = trim((string) ($_POST['customRule'] ?? ($_POST['custom_rule'] ?? ($body['customRule'] ?? ($body['custom_rule'] ?? '')))));
     $extraPrompt = trim((string) ($_POST['extraPrompt'] ?? ($_POST['extra_prompt'] ?? ($body['extraPrompt'] ?? ($body['extra_prompt'] ?? '')))));
-    $ruleText = prompt_tools_rule_text('caption', $rule, $customRule);
+    $ruleText = prompt_tools_rule_text('caption', $rule, $customRule, $outputLanguage);
     $config = prompt_tools_active_config($user, 'vision');
 
     $text = "规则：{$ruleText}";

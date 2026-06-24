@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { imageCaptionRules, promptOptimizeRules } from '../constants/options';
+import { imageCaptionRules, promptOptimizeRules, promptToolLanguageOptions } from '../constants/options';
 import { requestImageCaption, requestPromptOptimize } from '../lib/api';
 
 const copyText = async (text) => {
@@ -30,12 +30,14 @@ export default function PromptTools({
   const [captionFile, setCaptionFile] = useState(null);
   const [captionPreview, setCaptionPreview] = useState('');
   const [captionRule, setCaptionRule] = useState(imageCaptionRules[0].value);
+  const [captionLanguage, setCaptionLanguage] = useState(promptToolLanguageOptions[0].value);
   const [captionCustomRule, setCaptionCustomRule] = useState('');
   const [captionExtraPrompt, setCaptionExtraPrompt] = useState('');
   const [captionResult, setCaptionResult] = useState('');
   const [captionLoading, setCaptionLoading] = useState(false);
   const [optimizeInput, setOptimizeInput] = useState('');
   const [optimizeRule, setOptimizeRule] = useState(promptOptimizeRules[0].value);
+  const [optimizeLanguage, setOptimizeLanguage] = useState(promptToolLanguageOptions[0].value);
   const [optimizeCustomRule, setOptimizeCustomRule] = useState('');
   const [optimizeResult, setOptimizeResult] = useState('');
   const [optimizeLoading, setOptimizeLoading] = useState(false);
@@ -87,6 +89,7 @@ export default function PromptTools({
     const payload = new FormData();
     payload.append('image', captionFile);
     payload.append('rule', captionRule);
+    payload.append('outputLanguage', captionLanguage);
     payload.append('customRule', captionCustomRule);
     payload.append('extraPrompt', captionExtraPrompt);
 
@@ -122,6 +125,7 @@ export default function PromptTools({
       const data = await requestPromptOptimize({
         prompt: optimizeInput,
         rule: optimizeRule,
+        outputLanguage: optimizeLanguage,
         customRule: optimizeCustomRule,
       });
       setOptimizeResult(String(data.result || '').trim());
@@ -196,6 +200,16 @@ export default function PromptTools({
               menuDirection: 'down',
             })}
 
+            {renderSelect({
+              id: 'caption-language-select',
+              label: '输出语言',
+              value: captionLanguage,
+              options: promptToolLanguageOptions,
+              onChange: setCaptionLanguage,
+              className: 'prompt-tool-select',
+              menuDirection: 'down',
+            })}
+
             <label>
               <span>额外要求</span>
               <textarea value={captionExtraPrompt} onChange={(event) => setCaptionExtraPrompt(event.target.value)} rows={3} placeholder="例如：更偏摄影感、输出英文、强调主体细节" />
@@ -222,7 +236,7 @@ export default function PromptTools({
           <div className="api-config-card-head">
             <div>
               <strong>提示词优化 / 润色</strong>
-              <span>输入原提示词，使用文本模型扩写、润色或转换成编辑指令。</span>
+              <span>输入原提示词，使用文本模型扩写、润色或转换成 Tags 风格。</span>
             </div>
           </div>
 
@@ -238,6 +252,16 @@ export default function PromptTools({
               value: optimizeRule,
               options: promptOptimizeRules,
               onChange: setOptimizeRule,
+              className: 'prompt-tool-select',
+              menuDirection: 'down',
+            })}
+
+            {renderSelect({
+              id: 'optimize-language-select',
+              label: '输出语言',
+              value: optimizeLanguage,
+              options: promptToolLanguageOptions,
+              onChange: setOptimizeLanguage,
               className: 'prompt-tool-select',
               menuDirection: 'down',
             })}

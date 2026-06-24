@@ -19,16 +19,20 @@ export const defaultSiteFlags = {
 };
 
 export const promptOptimizeRules = [
-  { label: '扩写-通用', value: 'general' },
-  { label: '扩写-Tags风格', value: 'tags' },
-  { label: 'Qwen-Image-Edit指令优化', value: 'qwen-edit' },
-  { label: 'Kontext指令优化并翻译', value: 'kontext' },
+  { label: '通用', value: 'general' },
+  { label: '人像大师', value: 'portrait' },
+  { label: 'Tags风格', value: 'tags' },
 ];
 
 export const imageCaptionRules = [
-  { label: '反推-自然语言', value: 'natural' },
-  { label: '反推-Tags风格', value: 'tags' },
-  { label: '反推-编辑指令', value: 'edit' },
+  { label: '自然语言', value: 'natural' },
+  { label: 'Tags风格', value: 'tags' },
+];
+
+export const promptToolLanguageOptions = [
+  { label: '自动', value: 'auto' },
+  { label: '中文', value: 'zh' },
+  { label: 'English', value: 'en' },
 ];
 
 export const qualityOptions = [
