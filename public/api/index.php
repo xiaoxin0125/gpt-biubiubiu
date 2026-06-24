@@ -10,6 +10,7 @@ require_once __DIR__ . '/lib/site.php';
 require_once __DIR__ . '/lib/files.php';
 require_once __DIR__ . '/lib/generated_images.php';
 require_once __DIR__ . '/lib/wall.php';
+require_once __DIR__ . '/lib/prompt_tools.php';
 require_once __DIR__ . '/routes.php';
 
 try {

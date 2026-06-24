@@ -9,6 +9,7 @@ export default function Topbar({
   statusText,
   activeApiConfig,
   apiConfigForm,
+  siteFlags,
   switchActiveApiConfig,
   renderSelect,
   openAccount,
@@ -43,6 +44,15 @@ export default function Topbar({
         >
           作品墙
         </button>
+        {siteFlags?.promptToolsEnabled !== false ? (
+          <button
+            type="button"
+            className={view === 'prompt-tools' ? 'is-active' : ''}
+            onClick={() => setView('prompt-tools')}
+          >
+            提示词助手
+          </button>
+        ) : null}
       </nav>
 
       <div className="topbar-actions">

@@ -43,6 +43,11 @@ export default function SiteAdminPanel({
             <span>启用共享 API</span>
             <small>开启后所有登录用户会自动获得一条只读的「共享」配置，可直接启用生成。</small>
           </label>
+          <label className="toggle-row full-field">
+            <input type="checkbox" checked={siteSettings.promptToolsEnabled !== false} onChange={(event) => updateFlag('promptToolsEnabled', event.target.checked)} />
+            <span>启用提示词助手</span>
+            <small>控制图片反推提示词和提示词优化两个入口。</small>
+          </label>
         </div>
       </section>
 
@@ -62,6 +67,14 @@ export default function SiteAdminPanel({
             <span>模型 ID</span>
             <input value={shared.model || ''} onChange={(event) => updateShared('model', event.target.value)} placeholder="gpt-image-2" />
           </label>
+          <label>
+            <span>提示词优化模型</span>
+            <input value={shared.promptModel || ''} onChange={(event) => updateShared('promptModel', event.target.value)} placeholder="例如 gpt-4o-mini" />
+          </label>
+          <label>
+            <span>图片反推模型</span>
+            <input value={shared.visionModel || ''} onChange={(event) => updateShared('visionModel', event.target.value)} placeholder="例如 gpt-4o" />
+          </label>
           <div className="model-picker-field full-field">
             <span>模型列表</span>
             <div className="model-picker-row">
@@ -71,6 +84,26 @@ export default function SiteAdminPanel({
                 value: shared.model || '',
                 options: sharedModelOptions.length ? sharedModelOptions : [{ label: shared.model || '暂无模型', value: shared.model || '' }],
                 onChange: (value) => updateShared('model', value),
+                disabled: !sharedModelOptions.length,
+                className: 'settings-select-field model-select-field',
+                menuDirection: 'down',
+              })}
+              {renderSelect({
+                id: 'shared-api-prompt-model-select',
+                label: '',
+                value: shared.promptModel || shared.model || '',
+                options: sharedModelOptions.length ? sharedModelOptions : [{ label: shared.promptModel || '提示词模型', value: shared.promptModel || '' }],
+                onChange: (value) => updateShared('promptModel', value),
+                disabled: !sharedModelOptions.length,
+                className: 'settings-select-field model-select-field',
+                menuDirection: 'down',
+              })}
+              {renderSelect({
+                id: 'shared-api-vision-model-select',
+                label: '',
+                value: shared.visionModel || shared.model || '',
+                options: sharedModelOptions.length ? sharedModelOptions : [{ label: shared.visionModel || '视觉模型', value: shared.visionModel || '' }],
+                onChange: (value) => updateShared('visionModel', value),
                 disabled: !sharedModelOptions.length,
                 className: 'settings-select-field model-select-field',
                 menuDirection: 'down',

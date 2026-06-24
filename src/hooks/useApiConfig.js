@@ -21,6 +21,8 @@ export const useApiConfig = (deps) => {
       apiName: `API 配置 ${(apiConfigForm.apiConfigs || []).length + 1}`,
       apiBaseUrl: activeApiConfig?.apiBaseUrl || defaultApiConfigItem.apiBaseUrl,
       model: activeApiConfig?.model || defaultForm.model,
+      promptModel: activeApiConfig?.promptModel || '',
+      visionModel: activeApiConfig?.visionModel || '',
     }, (apiConfigForm.apiConfigs || []).length);
     setApiConfigForm((current) => ({
       ...current,

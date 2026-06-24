@@ -2134,7 +2134,7 @@ select option {
 
 .model-picker-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 8px;
   align-items: start;
   min-width: 0;
@@ -2159,6 +2159,208 @@ select option {
   justify-self: start;
   min-width: 92px;
   white-space: nowrap;
+}
+
+.prompt-tools-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+  width: min(1180px, 100%);
+  min-height: 0;
+  margin: 0 auto;
+  padding: 18px 0 96px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.prompt-tools-page.is-disabled {
+  place-items: center;
+  padding: 18px 0;
+}
+
+.prompt-tools-hero {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-hard);
+}
+
+.prompt-tools-hero span,
+.prompt-result-panel > span,
+.prompt-tool-fields label > span,
+.model-picker-field > span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.prompt-tools-hero h1 {
+  margin: 4px 0 6px;
+  color: var(--black);
+  font-size: clamp(2rem, 6vw, 4.4rem);
+  font-weight: 980;
+  letter-spacing: -0.08em;
+  line-height: 0.92;
+}
+
+.prompt-tools-hero p {
+  max-width: 540px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 780;
+  line-height: 1.55;
+}
+
+.prompt-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  min-height: 0;
+}
+
+.prompt-tool-card {
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.prompt-tool-fields,
+.prompt-result-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.prompt-tool-fields label,
+.prompt-result-panel {
+  min-width: 0;
+}
+
+.prompt-tool-fields label {
+  display: grid;
+  gap: 7px;
+}
+
+.prompt-tool-fields textarea,
+.prompt-result-panel textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--black);
+  padding: 11px 12px;
+  box-shadow: inset 2px 2px 0 rgba(11, 11, 11, 0.06);
+  font-size: 0.88rem;
+  font-weight: 760;
+  line-height: 1.55;
+}
+
+.prompt-tool-fields textarea:focus,
+.prompt-result-panel textarea:focus {
+  outline: 3px solid rgba(11, 11, 11, 0.12);
+}
+
+.tool-upload-zone {
+  position: relative;
+  display: grid;
+  min-height: 240px;
+  place-items: center;
+  overflow: hidden;
+  border: 2px dashed var(--line);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(0, 0, 0, 0.04) 25%, transparent 25%) 0 0 / 18px 18px,
+    var(--paper-2);
+  cursor: pointer;
+}
+
+.tool-upload-zone:hover {
+  background:
+    linear-gradient(135deg, rgba(0, 0, 0, 0.06) 25%, transparent 25%) 0 0 / 18px 18px,
+    var(--white);
+}
+
+.tool-upload-zone input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tool-upload-zone span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  box-shadow: var(--shadow-hard);
+  color: var(--black);
+  font-weight: 940;
+}
+
+.tool-upload-zone img {
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  background: var(--paper-2);
+}
+
+.tool-upload-zone.has-image {
+  border-style: solid;
+  background: var(--paper-2);
+}
+
+.prompt-tool-actions,
+.prompt-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.prompt-tool-actions .primary-action {
+  flex: 1 1 160px;
+}
+
+.prompt-result-actions .secondary-action {
+  flex: 1 1 110px;
+}
+
+.prompt-result-panel {
+  padding: 12px;
+  border: 2px dashed rgba(17, 17, 17, 0.28);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+}
+
+.prompt-tools-empty {
+  display: grid;
+  gap: 8px;
+  width: min(520px, 100%);
+  text-align: center;
+}
+
+.prompt-tools-empty strong {
+  font-size: 1.1rem;
+  font-weight: 950;
+}
+
+.prompt-tools-empty span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 780;
 }
 
 .modal-actions {
@@ -2246,12 +2448,32 @@ select option {
 @media (max-width: 640px) {
   .profile-inline-fields,
   .model-fetch-row,
-  .model-select-row {
+  .model-select-row,
+  .model-picker-row {
     grid-template-columns: 1fr;
   }
 
   .profile-save-button,
   .model-fetch-button {
+    width: 100%;
+  }
+
+  .prompt-tools-hero {
+    padding: 15px;
+  }
+
+  .tool-upload-zone {
+    min-height: 180px;
+  }
+
+  .prompt-tool-actions,
+  .prompt-result-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-tool-actions .primary-action,
+  .prompt-result-actions .secondary-action {
     width: 100%;
   }
 
@@ -2268,6 +2490,15 @@ select option {
 @media (max-width: 980px) {
   .workbench-actions {
     gap: 7px;
+  }
+
+  .prompt-tools-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-tools-page {
+    width: 100%;
+    padding-bottom: 32px;
   }
 
   .control-field {
@@ -2358,7 +2589,7 @@ select option {
     order: 3;
     grid-column: 1 / -1;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
     justify-self: stretch;
     width: 100%;
   }
@@ -2377,6 +2608,11 @@ select option {
   .canvas-stage {
     min-height: 76vh;
     padding-bottom: 220px;
+  }
+
+  .prompt-tools-page {
+    padding: 6px 0 24px;
+    overflow: visible;
   }
 
   .canvas-stage.is-wall-view {

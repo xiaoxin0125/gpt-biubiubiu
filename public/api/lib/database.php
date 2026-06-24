@@ -116,6 +116,7 @@ function ensure_schema(): void
       request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
       stream TINYINT(1) NOT NULL DEFAULT 0,
       active_api_config_id BIGINT UNSIGNED DEFAULT NULL,
+      active_shared TINYINT(1) NOT NULL DEFAULT 0,
       api_key_ciphertext TEXT DEFAULT NULL,
       api_key_iv VARCHAR(64) DEFAULT NULL,
       api_key_tag VARCHAR(64) DEFAULT NULL,
@@ -130,6 +131,8 @@ function ensure_schema(): void
       api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
       api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
       model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
+      prompt_model VARCHAR(128) DEFAULT NULL,
+      vision_model VARCHAR(128) DEFAULT NULL,
       request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
       api_key_ciphertext TEXT DEFAULT NULL,
       api_key_iv VARCHAR(64) DEFAULT NULL,
@@ -207,6 +210,9 @@ function ensure_schema(): void
       shared_api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
       shared_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
       shared_model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
+      prompt_tools_enabled TINYINT(1) NOT NULL DEFAULT 1,
+      shared_prompt_model VARCHAR(128) DEFAULT NULL,
+      shared_vision_model VARCHAR(128) DEFAULT NULL,
       shared_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
       shared_api_key_ciphertext TEXT DEFAULT NULL,
       shared_api_key_iv VARCHAR(64) DEFAULT NULL,
@@ -228,6 +234,8 @@ function ensure_schema(): void
     ensure_column($db, 'user_settings', 'api_key_iv', 'api_key_iv VARCHAR(64) DEFAULT NULL AFTER api_key_ciphertext');
     ensure_column($db, 'user_settings', 'api_key_tag', 'api_key_tag VARCHAR(64) DEFAULT NULL AFTER api_key_iv');
     ensure_column($db, 'user_settings', 'api_key_hint', 'api_key_hint VARCHAR(24) DEFAULT NULL AFTER api_key_tag');
+    ensure_column($db, 'user_api_configs', 'prompt_model', 'prompt_model VARCHAR(128) DEFAULT NULL AFTER model');
+    ensure_column($db, 'user_api_configs', 'vision_model', 'vision_model VARCHAR(128) DEFAULT NULL AFTER prompt_model');
     ensure_column($db, 'user_api_configs', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER request_timeout');
     ensure_column($db, 'user_api_configs', 'api_key_iv', 'api_key_iv VARCHAR(64) DEFAULT NULL AFTER api_key_ciphertext');
     ensure_column($db, 'user_api_configs', 'api_key_tag', 'api_key_tag VARCHAR(64) DEFAULT NULL AFTER api_key_iv');
@@ -269,6 +277,9 @@ function ensure_schema(): void
     ensure_column($db, 'image_jobs', 'result_json', 'result_json JSON DEFAULT NULL AFTER params_json');
     ensure_column($db, 'image_jobs', 'created_at', 'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER result_json');
     ensure_column($db, 'image_jobs', 'completed_at', 'completed_at TIMESTAMP NULL DEFAULT NULL AFTER created_at');
+    ensure_column($db, 'site_settings', 'prompt_tools_enabled', 'prompt_tools_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER shared_model');
+    ensure_column($db, 'site_settings', 'shared_prompt_model', 'shared_prompt_model VARCHAR(128) DEFAULT NULL AFTER prompt_tools_enabled');
+    ensure_column($db, 'site_settings', 'shared_vision_model', 'shared_vision_model VARCHAR(128) DEFAULT NULL AFTER shared_prompt_model');
     ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
 

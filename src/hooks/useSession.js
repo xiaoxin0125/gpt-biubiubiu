@@ -124,6 +124,8 @@ export const useSession = (deps) => {
             apiName: item.apiName,
             apiBaseUrl: item.apiBaseUrl,
             model: item.model,
+            promptModel: item.promptModel,
+            visionModel: item.visionModel,
             apiKey: item.apiKey,
             confirmApiKeySave: Boolean(item.apiKey),
           })),

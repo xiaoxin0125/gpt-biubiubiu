@@ -80,6 +80,12 @@ function api_exact_routes(): array
             $user = require_user();
             return fetch_api_models_for_user($user, $body);
         }],
+        ['POST', '/prompt-tools/optimize', function (array $body): array {
+            return handle_prompt_optimize($body);
+        }],
+        ['POST', '/prompt-tools/caption', function (array $body): array {
+            return handle_prompt_caption($body);
+        }],
         ['GET', '/admin/site-settings', function (): array {
             require_admin();
             return ['site' => admin_site_settings_view()];

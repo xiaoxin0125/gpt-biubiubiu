@@ -15,7 +15,21 @@ export const defaultSiteFlags = {
   wallRequireLogin: false,
   registrationEnabled: true,
   sharedApiEnabled: true,
+  promptToolsEnabled: true,
 };
+
+export const promptOptimizeRules = [
+  { label: '扩写-通用', value: 'general' },
+  { label: '扩写-Tags风格', value: 'tags' },
+  { label: 'Qwen-Image-Edit指令优化', value: 'qwen-edit' },
+  { label: 'Kontext指令优化并翻译', value: 'kontext' },
+];
+
+export const imageCaptionRules = [
+  { label: '反推-自然语言', value: 'natural' },
+  { label: '反推-Tags风格', value: 'tags' },
+  { label: '反推-编辑指令', value: 'edit' },
+];
 
 export const qualityOptions = [
   { label: 'auto', value: 'auto' },
@@ -161,6 +175,8 @@ export const defaultApiConfigItem = {
   apiName: 'OpenAI gpt-image-2',
   apiBaseUrl: DEFAULT_DIRECT_API_BASE_URL,
   model: defaultForm.model,
+  promptModel: '',
+  visionModel: '',
   apiKey: '',
   hasApiKey: false,
   apiKeyHint: '',

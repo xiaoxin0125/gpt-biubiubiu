@@ -20,6 +20,9 @@ function site_settings_row(): array
         'shared_api_name' => DEFAULT_API_NAME,
         'shared_api_base_url' => DEFAULT_API_BASE_URL,
         'shared_model' => DEFAULT_IMAGE_MODEL,
+        'prompt_tools_enabled' => 1,
+        'shared_prompt_model' => '',
+        'shared_vision_model' => '',
         'shared_request_timeout' => DEFAULT_REQUEST_TIMEOUT,
     ];
 }
@@ -58,6 +61,15 @@ function shared_api_enabled(): bool
     }
 }
 
+function prompt_tools_enabled(): bool
+{
+    try {
+        return !empty(site_settings_row()['prompt_tools_enabled']);
+    } catch (Throwable $error) {
+        return true;
+    }
+}
+
 function public_site_flags(): array
 {
     $row = site_settings_row();
@@ -65,6 +77,7 @@ function public_site_flags(): array
         'wallRequireLogin' => !empty($row['wall_require_login']),
         'registrationEnabled' => !empty($row['registration_enabled']),
         'sharedApiEnabled' => !empty($row['shared_api_enabled']),
+        'promptToolsEnabled' => !empty($row['prompt_tools_enabled']),
     ];
 }
 
@@ -76,6 +89,8 @@ function shared_api_config_client(?array $row = null): array
         'apiName' => trim((string) ($row['shared_api_name'] ?? '')) ?: DEFAULT_API_NAME,
         'apiBaseUrl' => trim((string) ($row['shared_api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
         'model' => trim((string) ($row['shared_model'] ?? '')) ?: DEFAULT_IMAGE_MODEL,
+        'promptModel' => trim((string) ($row['shared_prompt_model'] ?? '')),
+        'visionModel' => trim((string) ($row['shared_vision_model'] ?? '')),
         'hasApiKey' => !empty($row['shared_api_key_ciphertext']),
         'apiKeyHint' => (string) ($row['shared_api_key_hint'] ?? ''),
         'sortOrder' => -1,
@@ -114,6 +129,7 @@ function admin_site_settings_view(): array
         'wallRequireLogin' => !empty($row['wall_require_login']),
         'registrationEnabled' => !empty($row['registration_enabled']),
         'sharedApiEnabled' => !empty($row['shared_api_enabled']),
+        'promptToolsEnabled' => !empty($row['prompt_tools_enabled']),
         'sharedApi' => shared_api_config_client($row),
     ];
 }
@@ -126,6 +142,7 @@ function save_site_settings(array $body): array
     $wallRequireLogin = !empty($body['wallRequireLogin']) ? 1 : 0;
     $registrationEnabled = !empty($body['registrationEnabled']) ? 1 : 0;
     $sharedApiEnabled = !empty($body['sharedApiEnabled']) ? 1 : 0;
+    $promptToolsEnabled = array_key_exists('promptToolsEnabled', $body) ? (!empty($body['promptToolsEnabled']) ? 1 : 0) : 1;
 
     $shared = is_array($body['sharedApi'] ?? null) ? $body['sharedApi'] : [];
     $apiName = trim((string) ($shared['apiName'] ?? '')) ?: DEFAULT_API_NAME;
@@ -133,6 +150,8 @@ function save_site_settings(array $body): array
     if ($apiBaseUrl === '') $apiBaseUrl = DEFAULT_API_BASE_URL;
     if (!valid_api_base_url($apiBaseUrl)) json_response(['error' => 'API 地址必须是 http 或 https 地址'], 400);
     $model = trim((string) ($shared['model'] ?? '')) ?: DEFAULT_IMAGE_MODEL;
+    $promptModel = trim((string) ($shared['promptModel'] ?? ($shared['prompt_model'] ?? '')));
+    $visionModel = trim((string) ($shared['visionModel'] ?? ($shared['vision_model'] ?? '')));
 
     $apiKey = trim((string) ($shared['apiKey'] ?? ''));
     $clearApiKey = !empty($shared['clearApiKey']);
@@ -155,8 +174,8 @@ function save_site_settings(array $body): array
         $keyParams = [];
     }
 
-    $sql = 'UPDATE site_settings SET wall_require_login = ?, registration_enabled = ?, shared_api_enabled = ?, shared_api_name = ?, shared_api_base_url = ?, shared_model = ?' . $keyClause . ' WHERE id = 1';
-    $params = array_merge([$wallRequireLogin, $registrationEnabled, $sharedApiEnabled, $apiName, $apiBaseUrl, $model], $keyParams);
+    $sql = 'UPDATE site_settings SET wall_require_login = ?, registration_enabled = ?, shared_api_enabled = ?, prompt_tools_enabled = ?, shared_api_name = ?, shared_api_base_url = ?, shared_model = ?, shared_prompt_model = ?, shared_vision_model = ?' . $keyClause . ' WHERE id = 1';
+    $params = array_merge([$wallRequireLogin, $registrationEnabled, $sharedApiEnabled, $promptToolsEnabled, $apiName, $apiBaseUrl, $model, $promptModel, $visionModel], $keyParams);
     $db->prepare($sql)->execute($params);
 
     return admin_site_settings_view();

@@ -40,6 +40,17 @@ export const requestJson = async (input, init) => {
   return data;
 };
 
+export const requestPromptOptimize = (payload) => requestJson('/api/prompt-tools/optimize', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(payload),
+});
+
+export const requestImageCaption = (formData) => requestJson('/api/prompt-tools/caption', {
+  method: 'POST',
+  body: formData,
+});
+
 export const normalizeApiBaseUrl = (value) => String(value || DEFAULT_DIRECT_API_BASE_URL).replace(/\s+/g, '').replace(/\/+$/, '') || DEFAULT_DIRECT_API_BASE_URL;
 
 const requestTimeoutMs = (config = {}) => clampNumber(Number(config.requestTimeout || config.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS) * 1000;
@@ -69,6 +80,8 @@ export const normalizeApiConfigItem = (value = {}, index = 0) => ({
   apiName: String(value.apiName || value.api_name || (index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`)).trim() || defaultApiConfigItem.apiName,
   apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url || defaultApiConfigItem.apiBaseUrl),
   model: String(value.model || defaultApiConfigItem.model).trim() || defaultApiConfigItem.model,
+  promptModel: String(value.promptModel || value.prompt_model || '').trim(),
+  visionModel: String(value.visionModel || value.vision_model || '').trim(),
   apiKey: String(value.apiKey || value.api_key || '').trim(),
   hasApiKey: Boolean(value.hasApiKey || value.has_api_key || value.apiKey || value.api_key),
   apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),

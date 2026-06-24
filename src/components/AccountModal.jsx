@@ -169,6 +169,14 @@ export default function AccountModal({
                         <span>模型 ID</span>
                         <input value={config.model} onChange={(event) => updateApiConfig(config.id, 'model', event.target.value)} placeholder="gpt-image-2" />
                       </label>
+                      <label>
+                        <span>提示词优化模型</span>
+                        <input value={config.promptModel || ''} onChange={(event) => updateApiConfig(config.id, 'promptModel', event.target.value)} placeholder="例如 gpt-4o-mini" />
+                      </label>
+                      <label>
+                        <span>图片反推模型</span>
+                        <input value={config.visionModel || ''} onChange={(event) => updateApiConfig(config.id, 'visionModel', event.target.value)} placeholder="例如 gpt-4o" />
+                      </label>
                       <div className="model-picker-field full-field">
                         <span>模型列表</span>
                         <div className="model-picker-row">
@@ -178,6 +186,26 @@ export default function AccountModal({
                             value: config.model,
                             options: (apiModelOptionsByConfigId[String(config.id)] || []).length ? apiModelOptionsByConfigId[String(config.id)] : [{ label: config.model || '暂无模型', value: config.model || '' }],
                             onChange: (value) => updateApiConfig(config.id, 'model', value),
+                            disabled: !(apiModelOptionsByConfigId[String(config.id)] || []).length,
+                            className: 'settings-select-field model-select-field',
+                            menuDirection: 'down',
+                          })}
+                          {renderSelect({
+                            id: `api-prompt-model-select-${config.id}`,
+                            label: '',
+                            value: config.promptModel || config.model,
+                            options: (apiModelOptionsByConfigId[String(config.id)] || []).length ? apiModelOptionsByConfigId[String(config.id)] : [{ label: config.promptModel || '提示词模型', value: config.promptModel || '' }],
+                            onChange: (value) => updateApiConfig(config.id, 'promptModel', value),
+                            disabled: !(apiModelOptionsByConfigId[String(config.id)] || []).length,
+                            className: 'settings-select-field model-select-field',
+                            menuDirection: 'down',
+                          })}
+                          {renderSelect({
+                            id: `api-vision-model-select-${config.id}`,
+                            label: '',
+                            value: config.visionModel || config.model,
+                            options: (apiModelOptionsByConfigId[String(config.id)] || []).length ? apiModelOptionsByConfigId[String(config.id)] : [{ label: config.visionModel || '视觉模型', value: config.visionModel || '' }],
+                            onChange: (value) => updateApiConfig(config.id, 'visionModel', value),
                             disabled: !(apiModelOptionsByConfigId[String(config.id)] || []).length,
                             className: 'settings-select-field model-select-field',
                             menuDirection: 'down',

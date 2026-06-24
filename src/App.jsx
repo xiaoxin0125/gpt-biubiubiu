@@ -3,6 +3,7 @@ import AccountModal from './components/AccountModal';
 import CustomSelect from './components/CustomSelect';
 import ImageBoard from './components/ImageBoard';
 import ImageDetailModal from './components/ImageDetailModal';
+import PromptTools from './components/PromptTools';
 import SizeDialog from './components/SizeDialog';
 import Topbar from './components/Topbar';
 import Workbench from './components/Workbench';
@@ -252,10 +253,13 @@ function App() {
           wallRequireLogin: siteSettings.wallRequireLogin,
           registrationEnabled: siteSettings.registrationEnabled,
           sharedApiEnabled: siteSettings.sharedApiEnabled,
+          promptToolsEnabled: siteSettings.promptToolsEnabled,
           sharedApi: {
             apiName: siteSettings.sharedApi?.apiName,
             apiBaseUrl: siteSettings.sharedApi?.apiBaseUrl,
             model: siteSettings.sharedApi?.model,
+            promptModel: siteSettings.sharedApi?.promptModel,
+            visionModel: siteSettings.sharedApi?.visionModel,
             apiKey: siteSettings.sharedApi?.apiKey,
             clearApiKey: Boolean(siteSettings.sharedApi?.clearApiKey),
           },
@@ -267,6 +271,7 @@ function App() {
           wallRequireLogin: Boolean(data.site.wallRequireLogin),
           registrationEnabled: Boolean(data.site.registrationEnabled),
           sharedApiEnabled: Boolean(data.site.sharedApiEnabled),
+          promptToolsEnabled: Boolean(data.site.promptToolsEnabled),
         });
       }
       setError('');
@@ -365,6 +370,7 @@ function App() {
             wallRequireLogin: Boolean(data.site.wallRequireLogin),
             registrationEnabled: Boolean(data.site.registrationEnabled),
             sharedApiEnabled: Boolean(data.site.sharedApiEnabled),
+            promptToolsEnabled: Boolean(data.site.promptToolsEnabled),
           });
         }
       })
@@ -406,6 +412,10 @@ function App() {
   useEffect(() => {
     if (view === 'wall') loadWall();
   }, [view, user, siteFlags.wallRequireLogin]);
+
+  useEffect(() => {
+    if (view === 'prompt-tools' && siteFlags.promptToolsEnabled === false) setView('generate');
+  }, [siteFlags.promptToolsEnabled, view]);
 
   useEffect(() => {
     setProfileForm({ displayName: user?.displayName || user?.username || '' });
@@ -857,6 +867,7 @@ function App() {
         statusText={statusText}
         activeApiConfig={activeApiConfig}
         apiConfigForm={apiConfigForm}
+        siteFlags={siteFlags}
         switchActiveApiConfig={switchActiveApiConfig}
         renderSelect={renderSelect}
         openAccount={() => {
@@ -865,36 +876,49 @@ function App() {
         }}
       />
 
-      <ImageBoard
-        view={view}
-        boardScope={boardScope}
-        setBoardScope={setBoardScope}
-        boardFilter={boardFilter}
-        setBoardFilter={setBoardFilter}
-        activeBoardFilter={activeBoardFilter}
-        boardSearch={boardSearch}
-        setBoardSearch={setBoardSearch}
-        renderSelect={renderSelect}
-        loadWall={loadWall}
-        refreshHistory={refreshBoard}
-        clearHistory={clearHistory}
-        history={history}
-        renderableBoardItems={renderableBoardItems}
-        masonryColumnCount={masonryColumnCount}
-        masonryColumns={masonryColumns}
-        boardRef={boardRef}
-        boardLoadSentinelRef={boardLoadSentinelRef}
-        hasMoreBoardItems={hasMoreBoardItems}
-        boardLoadingMore={boardLoadingMore}
-        imageLayoutMeta={imageLayoutMeta}
-        setImageLayoutMeta={setImageLayoutMeta}
-        openDetail={openDetail}
-        deleteImage={deleteImage}
-        status={status}
-        activeApiConfig={activeApiConfig}
-        userDisplayName={userDisplayName}
-        wallLocked={wallLocked}
-      />
+      {view !== 'prompt-tools' ? (
+        <ImageBoard
+          view={view}
+          boardScope={boardScope}
+          setBoardScope={setBoardScope}
+          boardFilter={boardFilter}
+          setBoardFilter={setBoardFilter}
+          activeBoardFilter={activeBoardFilter}
+          boardSearch={boardSearch}
+          setBoardSearch={setBoardSearch}
+          renderSelect={renderSelect}
+          loadWall={loadWall}
+          refreshHistory={refreshBoard}
+          clearHistory={clearHistory}
+          history={history}
+          renderableBoardItems={renderableBoardItems}
+          masonryColumnCount={masonryColumnCount}
+          masonryColumns={masonryColumns}
+          boardRef={boardRef}
+          boardLoadSentinelRef={boardLoadSentinelRef}
+          hasMoreBoardItems={hasMoreBoardItems}
+          boardLoadingMore={boardLoadingMore}
+          imageLayoutMeta={imageLayoutMeta}
+          setImageLayoutMeta={setImageLayoutMeta}
+          openDetail={openDetail}
+          deleteImage={deleteImage}
+          status={status}
+          activeApiConfig={activeApiConfig}
+          userDisplayName={userDisplayName}
+          wallLocked={wallLocked}
+        />
+      ) : null}
+
+      {view === 'prompt-tools' ? (
+        <PromptTools
+          user={user}
+          siteFlags={siteFlags}
+          renderSelect={renderSelect}
+          setView={setView}
+          updateForm={updateForm}
+          setError={setError}
+        />
+      ) : null}
 
       {view === 'generate' ? (
         <Workbench

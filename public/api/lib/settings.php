@@ -138,6 +138,8 @@ function config_from_row(array $row): array
         'apiName' => $row['api_name'] ?: DEFAULT_API_NAME,
         'apiBaseUrl' => $row['api_base_url'] ?: DEFAULT_API_BASE_URL,
         'model' => $row['model'] ?: DEFAULT_IMAGE_MODEL,
+        'promptModel' => trim((string) ($row['prompt_model'] ?? '')),
+        'visionModel' => trim((string) ($row['vision_model'] ?? '')),
         'requestTimeout' => (int) ($row['request_timeout'] ?: DEFAULT_REQUEST_TIMEOUT),
         'hasApiKey' => !empty($row['api_key_ciphertext']),
         'apiKeyHint' => $row['api_key_hint'] ?: '',
@@ -151,6 +153,8 @@ function legacy_settings_config(array $settings): array
         'apiName' => trim((string) ($settings['api_name'] ?? '')) ?: DEFAULT_API_NAME,
         'apiBaseUrl' => trim((string) ($settings['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
         'model' => trim((string) ($settings['model'] ?? '')) ?: DEFAULT_IMAGE_MODEL,
+        'promptModel' => trim((string) ($settings['prompt_model'] ?? '')),
+        'visionModel' => trim((string) ($settings['vision_model'] ?? '')),
         'requestTimeout' => normalize_request_timeout($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
         'api_key_ciphertext' => $settings['api_key_ciphertext'] ?? null,
         'api_key_iv' => $settings['api_key_iv'] ?? null,
@@ -169,12 +173,14 @@ function ensure_user_api_config(int $userId): ?array
 
     $settings = stored_user_settings_row($userId) ?: [];
     $legacy = legacy_settings_config($settings);
-    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
+    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_name, api_base_url, model, prompt_model, vision_model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
     $stmt->execute([
         $userId,
         $legacy['apiName'],
         $legacy['apiBaseUrl'],
         $legacy['model'],
+        $legacy['promptModel'],
+        $legacy['visionModel'],
         $legacy['requestTimeout'],
         $legacy['api_key_ciphertext'],
         $legacy['api_key_iv'],
@@ -267,6 +273,8 @@ function settings_for_user(int $userId): ?array
         'apiConfigs' => $apiConfigs,
         'activeConfig' => $activeClient,
         'model' => $activeClient['model'] ?? DEFAULT_IMAGE_MODEL,
+        'promptModel' => $activeClient['promptModel'] ?? '',
+        'visionModel' => $activeClient['visionModel'] ?? '',
         'apiName' => $activeClient['apiName'] ?? DEFAULT_API_NAME,
         'apiBaseUrl' => $activeClient['apiBaseUrl'] ?? DEFAULT_API_BASE_URL,
         'requestTimeout' => normalize_request_timeout($settings['request_timeout'] ?? ($activeClient['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
@@ -340,6 +348,8 @@ function save_user_settings(array $user, array $body): array
             $apiName = trim((string) ($config['apiName'] ?? ($config['api_name'] ?? 'OpenAI Compatible'))) ?: 'OpenAI Compatible';
             $apiBaseUrl = normalize_api_base_url((string) ($config['apiBaseUrl'] ?? ($config['api_base_url'] ?? '')));
             $model = trim((string) ($config['model'] ?? cfg('openai_image_model', 'gpt-image-2'))) ?: 'gpt-image-2';
+            $promptModel = trim((string) ($config['promptModel'] ?? ($config['prompt_model'] ?? '')));
+            $visionModel = trim((string) ($config['visionModel'] ?? ($config['vision_model'] ?? '')));
             $apiKey = trim((string) ($config['apiKey'] ?? ''));
             $clearApiKey = !empty($config['clearApiKey']);
             if (!valid_api_base_url($apiBaseUrl)) json_response(['error' => 'API 地址必须是 http 或 https 地址'], 400);
@@ -363,11 +373,11 @@ function save_user_settings(array $user, array $body): array
             ];
 
             if ($configId > 0) {
-                $stmt = $db->prepare('UPDATE user_api_configs SET api_name = ?, api_base_url = ?, model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
-                $stmt->execute([$apiName, $apiBaseUrl, $model, $requestTimeout, $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3], $index, $configId, $user['id']]);
+                $stmt = $db->prepare('UPDATE user_api_configs SET api_name = ?, api_base_url = ?, model = ?, prompt_model = ?, vision_model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
+                $stmt->execute([$apiName, $apiBaseUrl, $model, $promptModel, $visionModel, $requestTimeout, $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3], $index, $configId, $user['id']]);
             } else {
-                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-                $stmt->execute([$user['id'], $apiName, $apiBaseUrl, $model, $requestTimeout, $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3], $index]);
+                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_name, api_base_url, model, prompt_model, vision_model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt->execute([$user['id'], $apiName, $apiBaseUrl, $model, $promptModel, $visionModel, $requestTimeout, $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3], $index]);
                 $configId = (int) $db->lastInsertId();
             }
 
