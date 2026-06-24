@@ -16,7 +16,6 @@ export default function SizeDialog({
           <h2>设置图像尺寸</h2>
           <p>当前：{displaySize}</p>
         </div>
-        <button type="button" className="close-button" onClick={closeDialog}>×</button>
       </div>
 
       <div className="segmented-control">

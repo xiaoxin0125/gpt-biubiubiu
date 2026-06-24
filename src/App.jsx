@@ -878,6 +878,12 @@ function App() {
   const selectedJobId = getGeneratedImageJobId(selectedImage);
   const canManageSelectedWall = Boolean(user && (user.isAdmin || (selectedOwnerId && Number(selectedOwnerId) === Number(user.id)) || (!selectedOnWall && selectedJobId)));
   const busySelected = selectedImage && wallBusyId === String(selectedImage.wallItemId || selectedImage.id || detailSrc);
+  const modalFrameClassByDialog = {
+    auth: 'modal-frame account-modal-frame',
+    detail: 'modal-frame detail-modal-frame',
+    size: 'modal-frame size-modal-frame',
+  };
+  const modalFrameClass = modalFrameClassByDialog[activeDialog] || 'modal-frame';
 
   return (
     <main className="playground-shell">
@@ -974,7 +980,10 @@ function App() {
         <div className="modal-layer" role="presentation">
           <button type="button" className="modal-backdrop" aria-label="关闭弹窗" onClick={closeDialog} />
 
-          {activeDialog === 'detail' && selectedImage ? (
+          <div className={modalFrameClass}>
+            <button type="button" className="close-button modal-close-button" aria-label="关闭弹窗" onClick={closeDialog}>×</button>
+
+            {activeDialog === 'detail' && selectedImage ? (
             <ImageDetailModal
               selectedImage={selectedImage}
               view={view}
@@ -989,7 +998,6 @@ function App() {
               selectedOnWall={selectedOnWall}
               canManageSelectedWall={canManageSelectedWall}
               busySelected={busySelected}
-              closeDialog={closeDialog}
               reuseConfig={reuseConfig}
               checkWallState={checkWallState}
               deleteImage={deleteImage}
@@ -1013,7 +1021,6 @@ function App() {
               apiConfigForm={apiConfigForm}
               setApiConfigForm={setApiConfigForm}
               userDisplayName={userDisplayName}
-              closeDialog={closeDialog}
               submitAuth={submitAuth}
               saveProfile={saveProfile}
               changePassword={changePassword}
@@ -1044,6 +1051,7 @@ function App() {
               applySize={applySize}
             />
           ) : null}
+          </div>
 
         </div>
       ) : null}

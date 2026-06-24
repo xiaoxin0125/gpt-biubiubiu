@@ -43,7 +43,6 @@ export default function AccountModal({
   apiConfigForm,
   setApiConfigForm,
   userDisplayName,
-  closeDialog,
   submitAuth,
   saveProfile,
   changePassword,
@@ -106,7 +105,6 @@ export default function AccountModal({
           <h2>{user ? '账号设置' : (registrationEnabled && authMode === 'register') ? '注册' : '登录'}</h2>
           <p>{user ? '账号信息、密码和参数设置' : '登录后可保存配置，上墙作品显示展示名称'}</p>
         </div>
-        <button type="button" className="close-button" onClick={closeDialog}>×</button>
       </div>
 
       {user ? (

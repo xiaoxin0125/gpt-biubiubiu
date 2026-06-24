@@ -17,7 +17,6 @@ export default function ImageDetailModal({
   selectedOnWall,
   canManageSelectedWall,
   busySelected,
-  closeDialog,
   reuseConfig,
   checkWallState,
   deleteImage,
@@ -88,7 +87,6 @@ export default function ImageDetailModal({
             <h2>{detailIsPending ? '请求详情' : detailIsFailed ? '失败详情' : '图片详情'}</h2>
             <p>{detailIsPending ? '生成中' : detailIsFailed ? '请求失败' : selectedImage.authorName || (selectedOnWall ? '已上墙' : '本地生成')}</p>
           </div>
-          <button type="button" className="close-button" onClick={closeDialog}>×</button>
         </div>
 
         <div className="prompt-detail prompt-detail-stack">

@@ -1207,6 +1207,28 @@ input::placeholder {
   padding: 18px;
 }
 
+.modal-frame {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: min(100%, 430px);
+  max-height: min(760px, calc(100vh - 36px));
+}
+
+.account-modal-frame {
+  width: min(100%, 540px);
+}
+
+.size-modal-frame {
+  width: min(100%, 430px);
+}
+
+.detail-modal-frame {
+  width: min(100%, 1120px);
+  height: min(760px, calc(100vh - 36px));
+  max-height: calc(100vh - 36px);
+}
+
 .lightbox-layer {
   position: fixed;
   z-index: 40;
@@ -1407,6 +1429,22 @@ input::placeholder {
   color: var(--black);
   font-size: 1.35rem;
   line-height: 1;
+}
+
+.modal-frame > .modal-close-button {
+  position: absolute;
+  z-index: 14;
+  top: 12px;
+  right: 12px;
+  background: var(--white);
+}
+
+.modal-card > .modal-head {
+  padding-right: 46px;
+}
+
+.image-detail-modal .detail-panel > .modal-head {
+  padding-right: 46px;
 }
 
 .prompt-detail,
@@ -2082,6 +2120,11 @@ select option {
 
   .image-detail-modal {
     grid-template-columns: 1fr;
+    width: min(100%, 620px);
+    height: min(820px, calc(100vh - 36px));
+  }
+
+  .detail-modal-frame {
     width: min(100%, 620px);
     height: min(820px, calc(100vh - 36px));
   }
@@ -3029,9 +3072,8 @@ select option {
   }
 
   .image-detail-modal .modal-head {
-    position: sticky;
-    z-index: 5;
-    top: 0;
+    position: static;
+    z-index: auto;
     align-items: center;
     padding: 8px;
     border: 2px solid var(--line);
