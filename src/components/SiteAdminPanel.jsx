@@ -69,7 +69,7 @@ export default function SiteAdminPanel({
         <div className="api-config-card-head">
           <div>
             <strong>站点开关</strong>
-            <span>仅管理员可见。控制全站注册、作品墙访问与共享 API。</span>
+            <span>仅管理员可见。控制全站注册、作品墙访问与提示词助手。</span>
           </div>
         </div>
         <div className="api-config-fields">
@@ -84,11 +84,6 @@ export default function SiteAdminPanel({
             <small>开启后未登录访客无法查看作品墙。</small>
           </label>
           <label className="toggle-row full-field">
-            <input type="checkbox" checked={Boolean(siteSettings.sharedApiEnabled)} onChange={(event) => updateFlag('sharedApiEnabled', event.target.checked)} />
-            <span>启用共享 API</span>
-            <small>开启后所有登录用户会自动获得一条只读的「共享」配置，可直接启用生成。</small>
-          </label>
-          <label className="toggle-row full-field">
             <input type="checkbox" checked={siteSettings.promptToolsEnabled !== false} onChange={(event) => updateFlag('promptToolsEnabled', event.target.checked)} />
             <span>启用提示词助手</span>
             <small>控制图片反推提示词和提示词优化两个入口。</small>
@@ -100,7 +95,7 @@ export default function SiteAdminPanel({
         <div className="api-config-card-head">
           <div>
             <strong>共享 API 参数</strong>
-            <span>三类共享配置互相独立，用户启用共享后按功能分别使用。</span>
+            <span>三类共享配置互相独立，按功能分别使用。</span>
           </div>
         </div>
         <div className="api-category-stack">
@@ -115,9 +110,6 @@ export default function SiteAdminPanel({
                     <strong>{section.title}</strong>
                     <span>{section.description}</span>
                   </div>
-                  <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(shared.id || 'shared', section.key)} disabled={loading}>
-                    {loading ? '获取中' : '获取模型'}
-                  </button>
                 </div>
                 <div className="api-config-fields api-config-fields-ordered">
                   <label>
@@ -147,10 +139,11 @@ export default function SiteAdminPanel({
                     <span>API 地址</span>
                     <input value={category.apiBaseUrl || ''} onChange={(event) => updateSharedCategory(section.key, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
                   </label>
-                  <label>
-                    <span>请求超时（秒）</span>
-                    <input min="10" max="999" type="number" value={category.requestTimeout || 999} onChange={(event) => updateSharedCategory(section.key, 'requestTimeout', event.target.value)} placeholder="999" />
-                  </label>
+                  <div className="model-fetch-field">
+                    <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(shared.id || 'shared', section.key)} disabled={loading}>
+                      {loading ? '获取中' : '获取模型'}
+                    </button>
+                  </div>
                   <label className="full-field">
                     <span>密钥设置</span>
                     <input type="password" value={category.apiKey || ''} onChange={(event) => updateSharedCategory(section.key, 'apiKey', event.target.value)} placeholder={category.hasApiKey ? `已保存：${category.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />

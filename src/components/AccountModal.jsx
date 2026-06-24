@@ -183,9 +183,6 @@ export default function AccountModal({
                       <strong>共享 API 配置</strong>
                       <span>管理员提供的默认配置，未保存自己的 API 时可直接使用。</span>
                     </div>
-                    <div className="api-config-actions">
-                      <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, activeApiConfigId: sharedApiConfig.id }))} disabled={isSharedActive}>{isSharedActive ? '当前启用' : '启用共享'}</button>
-                    </div>
                   </div>
                   <div className="shared-api-summary">
                     <strong>{sharedApiConfig.configName || sharedApiConfig.apiName || '管理员共享配置'}</strong>
@@ -236,9 +233,6 @@ export default function AccountModal({
                                 <strong>{section.title}</strong>
                                 <span>{section.description}</span>
                               </div>
-                              <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(config.id, section.key)} disabled={loading}>
-                                {loading ? '获取中' : '获取模型'}
-                              </button>
                             </div>
                             <div className="api-config-fields api-config-fields-ordered">
                               <label>
@@ -268,10 +262,11 @@ export default function AccountModal({
                                 <span>API 地址</span>
                                 <input value={category.apiBaseUrl || ''} onChange={(event) => updateApiConfigCategory(config.id, section.key, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
                               </label>
-                              <label>
-                                <span>请求超时（秒）</span>
-                                <input min="10" max={MAX_REQUEST_TIMEOUT_SECONDS} type="number" value={category.requestTimeout || apiConfigForm.requestTimeout} onChange={(event) => updateApiConfigCategory(config.id, section.key, 'requestTimeout', event.target.value)} placeholder="999" />
-                              </label>
+                              <div className="model-fetch-field">
+                                <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(config.id, section.key)} disabled={loading}>
+                                  {loading ? '获取中' : '获取模型'}
+                                </button>
+                              </div>
                               <label className="full-field">
                                 <span>密钥设置</span>
                                 <input type="password" value={category.apiKey || ''} onChange={(event) => updateApiConfigCategory(config.id, section.key, 'apiKey', event.target.value)} placeholder={category.hasApiKey ? `已保存：${category.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />

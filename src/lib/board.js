@@ -80,7 +80,7 @@ export const getMasonryColumns = (items, columnCount, imageMeta) => {
 
 export const getResponsiveMasonryColumnCount = () => {
   if (typeof window === 'undefined') return 4;
-  if (window.innerWidth <= 640) return 1;
+  if (window.innerWidth <= 640) return 2;
   if (window.innerWidth <= 1024) return 2;
   return 4;
 };
