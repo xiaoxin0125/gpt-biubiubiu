@@ -88,6 +88,11 @@ export default function SiteAdminPanel({
             <span>启用提示词助手</span>
             <small>控制图片反推提示词和提示词优化两个入口。</small>
           </label>
+          <label className="toggle-row full-field">
+            <input type="checkbox" checked={siteSettings.sharedApiEnabled !== false} onChange={(event) => updateFlag('sharedApiEnabled', event.target.checked)} />
+            <span>启用共享 API 参数设置</span>
+            <small>关闭后用户不会使用管理员提供的共享 API 配置。</small>
+          </label>
         </div>
       </section>
 
