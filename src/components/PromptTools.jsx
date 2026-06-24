@@ -163,14 +163,6 @@ export default function PromptTools({
 
   return (
     <section className="prompt-tools-page">
-      <div className="prompt-tools-hero">
-        <div>
-          <span>Prompt Assistant</span>
-          <h1>提示词助手</h1>
-          <p>同一页完成图片反推和提示词优化，结果可直接填入生图工作台。</p>
-        </div>
-      </div>
-
       <div className="prompt-tools-grid">
         <section className="prompt-tool-card api-config-card">
           <div className="api-config-card-head">
@@ -190,25 +182,27 @@ export default function PromptTools({
               )}
             </label>
 
-            {renderSelect({
-              id: 'caption-rule-select',
-              label: '反推规则',
-              value: captionRule,
-              options: imageCaptionRules,
-              onChange: setCaptionRule,
-              className: 'prompt-tool-select',
-              menuDirection: 'down',
-            })}
+            <div className="prompt-tool-select-row">
+              {renderSelect({
+                id: 'caption-rule-select',
+                label: '反推规则',
+                value: captionRule,
+                options: imageCaptionRules,
+                onChange: setCaptionRule,
+                className: 'prompt-tool-select',
+                menuDirection: 'down',
+              })}
 
-            {renderSelect({
-              id: 'caption-language-select',
-              label: '输出语言',
-              value: captionLanguage,
-              options: promptToolLanguageOptions,
-              onChange: setCaptionLanguage,
-              className: 'prompt-tool-select',
-              menuDirection: 'down',
-            })}
+              {renderSelect({
+                id: 'caption-language-select',
+                label: '输出语言',
+                value: captionLanguage,
+                options: promptToolLanguageOptions,
+                onChange: setCaptionLanguage,
+                className: 'prompt-tool-select',
+                menuDirection: 'down',
+              })}
+            </div>
 
             <label>
               <span>额外要求</span>
@@ -246,25 +240,27 @@ export default function PromptTools({
               <textarea value={optimizeInput} onChange={(event) => setOptimizeInput(event.target.value)} rows={7} placeholder="输入需要优化的提示词" />
             </label>
 
-            {renderSelect({
-              id: 'optimize-rule-select',
-              label: '优化规则',
-              value: optimizeRule,
-              options: promptOptimizeRules,
-              onChange: setOptimizeRule,
-              className: 'prompt-tool-select',
-              menuDirection: 'down',
-            })}
+            <div className="prompt-tool-select-row">
+              {renderSelect({
+                id: 'optimize-rule-select',
+                label: '优化规则',
+                value: optimizeRule,
+                options: promptOptimizeRules,
+                onChange: setOptimizeRule,
+                className: 'prompt-tool-select',
+                menuDirection: 'down',
+              })}
 
-            {renderSelect({
-              id: 'optimize-language-select',
-              label: '输出语言',
-              value: optimizeLanguage,
-              options: promptToolLanguageOptions,
-              onChange: setOptimizeLanguage,
-              className: 'prompt-tool-select',
-              menuDirection: 'down',
-            })}
+              {renderSelect({
+                id: 'optimize-language-select',
+                label: '输出语言',
+                value: optimizeLanguage,
+                options: promptToolLanguageOptions,
+                onChange: setOptimizeLanguage,
+                className: 'prompt-tool-select',
+                menuDirection: 'down',
+              })}
+            </div>
 
             <label>
               <span>自定义规则</span>

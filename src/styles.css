@@ -190,7 +190,8 @@ button {
 .custom-ratio,
 .send-button,
 .result-card a,
-.wall-icon {
+.wall-icon,
+.tool-upload-zone span {
   border: 2px solid var(--line);
   background: var(--white);
   color: var(--black);
@@ -305,7 +306,9 @@ button {
 .close-button:hover,
 .option-row:hover,
 .result-card a:hover,
-.wall-icon:hover:not(:disabled) {
+.wall-icon:hover:not(:disabled),
+.tool-upload-zone:hover span,
+.tool-upload-zone:focus-within span {
   background: var(--black);
   color: var(--white);
   transform: translate(-3px, -3px);
@@ -2215,7 +2218,7 @@ select option {
 
 .prompt-tools-page {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
   width: min(1180px, 100%);
   min-height: 0;
@@ -2230,19 +2233,6 @@ select option {
   padding: 18px 0;
 }
 
-.prompt-tools-hero {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 20px;
-  border: 2px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: var(--shadow-hard);
-}
-
-.prompt-tools-hero span,
 .prompt-result-panel > span,
 .prompt-tool-fields label > span,
 .model-picker-field > span {
@@ -2250,24 +2240,6 @@ select option {
   font-size: 0.76rem;
   font-weight: 900;
   letter-spacing: 0.04em;
-}
-
-.prompt-tools-hero h1 {
-  margin: 4px 0 6px;
-  color: var(--black);
-  font-size: clamp(2rem, 6vw, 4.4rem);
-  font-weight: 980;
-  letter-spacing: -0.08em;
-  line-height: 0.92;
-}
-
-.prompt-tools-hero p {
-  max-width: 540px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.92rem;
-  font-weight: 780;
-  line-height: 1.55;
 }
 
 .prompt-tools-grid {
@@ -2298,6 +2270,17 @@ select option {
 .prompt-tool-fields label {
   display: grid;
   gap: 7px;
+}
+
+.prompt-tool-select-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.prompt-tool-select-row > * {
+  min-width: 0;
 }
 
 .prompt-tool-fields textarea,
@@ -2350,17 +2333,7 @@ select option {
 }
 
 .tool-upload-zone span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 42px;
-  padding: 0 14px;
-  border: 2px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--white);
-  box-shadow: var(--shadow-hard);
-  color: var(--black);
-  font-weight: 940;
+  min-width: 128px;
 }
 
 .tool-upload-zone img {
@@ -2427,7 +2400,8 @@ select option {
 
 .secondary-action,
 .primary-action,
-.text-button {
+.text-button,
+.tool-upload-zone span {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2510,8 +2484,8 @@ select option {
     width: 100%;
   }
 
-  .prompt-tools-hero {
-    padding: 15px;
+  .prompt-tool-select-row {
+    grid-template-columns: 1fr;
   }
 
   .tool-upload-zone {
