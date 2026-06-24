@@ -170,17 +170,47 @@ export const emptyPasswordForm = {
   newPassword: '',
 };
 
+export const defaultApiCategory = {
+  apiName: 'OpenAI Compatible',
+  apiBaseUrl: DEFAULT_DIRECT_API_BASE_URL,
+  model: '',
+  apiKey: '',
+  hasApiKey: false,
+  apiKeyHint: '',
+  requestTimeout: MAX_REQUEST_TIMEOUT_SECONDS,
+};
+
+export const defaultImageApiCategory = {
+  ...defaultApiCategory,
+  apiName: 'OpenAI gpt-image-2',
+  model: defaultForm.model,
+};
+
+export const defaultPromptApiCategory = {
+  ...defaultApiCategory,
+  apiName: '提示词优化 API',
+};
+
+export const defaultVisionApiCategory = {
+  ...defaultApiCategory,
+  apiName: '图片反推/视觉 API',
+};
+
 export const defaultApiConfigItem = {
   id: 'default-api-config',
-  apiName: 'OpenAI gpt-image-2',
-  apiBaseUrl: DEFAULT_DIRECT_API_BASE_URL,
-  model: defaultForm.model,
+  configName: 'API 配置 1',
+  apiName: defaultImageApiCategory.apiName,
+  apiBaseUrl: defaultImageApiCategory.apiBaseUrl,
+  model: defaultImageApiCategory.model,
   promptModel: '',
   visionModel: '',
   apiKey: '',
   hasApiKey: false,
   apiKeyHint: '',
   requestTimeout: MAX_REQUEST_TIMEOUT_SECONDS,
+  imageApi: defaultImageApiCategory,
+  promptApi: defaultPromptApiCategory,
+  visionApi: defaultVisionApiCategory,
 };
 
 export const defaultApiConfigForm = {

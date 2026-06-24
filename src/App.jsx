@@ -139,7 +139,7 @@ function App() {
     const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId)) || configs[0];
     return { ...activeConfig, requestTimeout: apiConfigForm.requestTimeout };
   }, [apiConfigForm]);
-  const statusText = status.configured ? (status.apiName || activeApiConfig?.apiName || status.message || defaultApiConfigItem.apiName) : status.message;
+  const statusText = status.configured ? (activeApiConfig?.configName || status.apiName || activeApiConfig?.apiName || status.message || defaultApiConfigItem.configName) : status.message;
   const canSubmitGeneration = Boolean(user) && !apiKeySyncing && (status.configured || Boolean(activeApiConfig?.hasApiKey));
 
   const { updateApiConfig, addApiConfig, removeApiConfig, resetDirectSettings } = useApiConfig({
@@ -255,13 +255,18 @@ function App() {
           sharedApiEnabled: siteSettings.sharedApiEnabled,
           promptToolsEnabled: siteSettings.promptToolsEnabled,
           sharedApi: {
-            apiName: siteSettings.sharedApi?.apiName,
-            apiBaseUrl: siteSettings.sharedApi?.apiBaseUrl,
-            model: siteSettings.sharedApi?.model,
-            promptModel: siteSettings.sharedApi?.promptModel,
-            visionModel: siteSettings.sharedApi?.visionModel,
-            apiKey: siteSettings.sharedApi?.apiKey,
-            clearApiKey: Boolean(siteSettings.sharedApi?.clearApiKey),
+            imageApi: {
+              ...(siteSettings.sharedApi?.imageApi || {}),
+              confirmApiKeySave: Boolean(siteSettings.sharedApi?.imageApi?.apiKey),
+            },
+            promptApi: {
+              ...(siteSettings.sharedApi?.promptApi || {}),
+              confirmApiKeySave: Boolean(siteSettings.sharedApi?.promptApi?.apiKey),
+            },
+            visionApi: {
+              ...(siteSettings.sharedApi?.visionApi || {}),
+              confirmApiKeySave: Boolean(siteSettings.sharedApi?.visionApi?.apiKey),
+            },
           },
         }),
       });
@@ -718,12 +723,15 @@ function App() {
     setMaskImage(null);
   };
 
-  const fetchApiModels = async (configId) => {
-    const modelKey = String(configId);
-    const isSharedSiteConfig = modelKey === 'shared';
+  const fetchApiModels = async (configId, categoryKey = 'imageApi') => {
+    const modelKey = `${configId}:${categoryKey}`;
+    const rawConfigId = String(configId);
+    const isSharedSiteConfig = rawConfigId === 'shared';
     const config = isSharedSiteConfig
       ? { ...(siteSettings.sharedApi || {}), id: 'shared' }
-      : (apiConfigForm.apiConfigs || []).find((item) => String(item.id) === modelKey);
+      : (apiConfigForm.apiConfigs || []).find((item) => String(item.id) === rawConfigId);
+    const category = config?.[categoryKey] || (categoryKey === 'imageApi' ? config : {});
+    const apiCategory = categoryKey === 'promptApi' ? 'prompt' : categoryKey === 'visionApi' ? 'vision' : 'image';
     if (!config) {
       setError('API 配置不存在。');
       return;
@@ -738,9 +746,10 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           configId: config.id,
-          apiBaseUrl: config.apiBaseUrl,
-          apiKey: config.apiKey || '',
-          requestTimeout: apiConfigForm.requestTimeout,
+          category: apiCategory,
+          apiBaseUrl: category.apiBaseUrl,
+          apiKey: category.apiKey || '',
+          requestTimeout: category.requestTimeout || apiConfigForm.requestTimeout,
         }),
       });
       const models = Array.isArray(data.models) ? data.models : [];
@@ -756,14 +765,30 @@ function App() {
         setError('没有获取到可用模型。');
         return;
       }
-      if (!String(config.model || '').trim()) {
+      if (!String(category.model || '').trim()) {
         if (isSharedSiteConfig) {
           setSiteSettings((current) => ({
             ...current,
-            sharedApi: { ...(current.sharedApi || {}), model: options[0].value },
+            sharedApi: {
+              ...(current.sharedApi || {}),
+              [categoryKey]: { ...((current.sharedApi || {})[categoryKey] || {}), model: options[0].value },
+            },
           }));
         } else {
-          updateApiConfig(config.id, 'model', options[0].value);
+          setApiConfigForm((current) => ({
+            ...current,
+            apiConfigs: (current.apiConfigs || []).map((item) => (
+              String(item.id) === rawConfigId
+                ? {
+                    ...item,
+                    [categoryKey]: { ...(item[categoryKey] || {}), model: options[0].value },
+                    ...(categoryKey === 'imageApi' ? { model: options[0].value } : {}),
+                    ...(categoryKey === 'promptApi' ? { promptModel: options[0].value } : {}),
+                    ...(categoryKey === 'visionApi' ? { visionModel: options[0].value } : {}),
+                  }
+                : item
+            )),
+          }));
         }
       }
     } catch (modelError) {

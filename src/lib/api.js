@@ -1,4 +1,10 @@
-import { DEFAULT_DIRECT_API_BASE_URL, defaultApiConfigItem, MAX_REQUEST_TIMEOUT_SECONDS } from '../constants/options';
+import {
+  DEFAULT_DIRECT_API_BASE_URL,
+  defaultApiConfigItem,
+  defaultPromptApiCategory,
+  defaultVisionApiCategory,
+  MAX_REQUEST_TIMEOUT_SECONDS,
+} from '../constants/options';
 import { normalizeRevisedPrompt } from './form';
 import { getDataImageMime, imageMimeForOutputFormat, isDataImageValue, stripDataImagePrefix } from './images';
 import { clampNumber } from './math';
@@ -53,6 +59,16 @@ export const requestImageCaption = (formData) => requestJson('/api/prompt-tools/
 
 export const normalizeApiBaseUrl = (value) => String(value || DEFAULT_DIRECT_API_BASE_URL).replace(/\s+/g, '').replace(/\/+$/, '') || DEFAULT_DIRECT_API_BASE_URL;
 
+const normalizeApiCategory = (value = {}, fallback = {}) => ({
+  apiName: String(value.apiName || value.api_name || fallback.apiName || defaultApiConfigItem.apiName).trim() || defaultApiConfigItem.apiName,
+  apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url || fallback.apiBaseUrl || defaultApiConfigItem.apiBaseUrl),
+  model: String(value.model || fallback.model || '').trim(),
+  apiKey: String(value.apiKey || value.api_key || '').trim(),
+  hasApiKey: Boolean(value.hasApiKey || value.has_api_key || value.apiKey || value.api_key),
+  apiKeyHint: String(value.apiKeyHint || value.api_key_hint || fallback.apiKeyHint || ''),
+  requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || fallback.requestTimeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
+});
+
 const requestTimeoutMs = (config = {}) => clampNumber(Number(config.requestTimeout || config.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS) * 1000;
 
 const createTimeoutSignal = (config = {}) => {
@@ -75,19 +91,48 @@ const fetchWithTimeout = async (url, init = {}, config = {}) => {
 
 export const createLocalApiConfigId = () => `api-config-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-export const normalizeApiConfigItem = (value = {}, index = 0) => ({
-  id: value.id ?? value.configId ?? value.config_id ?? createLocalApiConfigId(),
-  apiName: String(value.apiName || value.api_name || (index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`)).trim() || defaultApiConfigItem.apiName,
-  apiBaseUrl: normalizeApiBaseUrl(value.apiBaseUrl || value.api_base_url || defaultApiConfigItem.apiBaseUrl),
-  model: String(value.model || defaultApiConfigItem.model).trim() || defaultApiConfigItem.model,
-  promptModel: String(value.promptModel || value.prompt_model || '').trim(),
-  visionModel: String(value.visionModel || value.vision_model || '').trim(),
-  apiKey: String(value.apiKey || value.api_key || '').trim(),
-  hasApiKey: Boolean(value.hasApiKey || value.has_api_key || value.apiKey || value.api_key),
-  apiKeyHint: String(value.apiKeyHint || value.api_key_hint || ''),
-  requestTimeout: clampNumber(Number(value.requestTimeout || value.request_timeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS),
-  isShared: Boolean(value.isShared || value.is_shared),
-});
+export const normalizeApiConfigItem = (value = {}, index = 0) => {
+  const fallbackImageApi = {
+    apiName: index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`,
+    apiBaseUrl: defaultApiConfigItem.apiBaseUrl,
+    model: defaultApiConfigItem.model,
+    requestTimeout: defaultApiConfigItem.requestTimeout,
+  };
+  const imageApi = normalizeApiCategory(value.imageApi || value.image_api || value, fallbackImageApi);
+  const promptApi = normalizeApiCategory(value.promptApi || value.prompt_api || {}, {
+    apiName: value.promptApiName || value.prompt_api_name || defaultPromptApiCategory.apiName,
+    apiBaseUrl: value.promptApiBaseUrl || value.prompt_api_base_url || imageApi.apiBaseUrl,
+    model: value.promptModel || value.prompt_model || '',
+    requestTimeout: value.promptRequestTimeout || value.prompt_request_timeout || imageApi.requestTimeout,
+    apiKeyHint: value.promptApiKeyHint || value.prompt_api_key_hint || '',
+  });
+  const visionApi = normalizeApiCategory(value.visionApi || value.vision_api || {}, {
+    apiName: value.visionApiName || value.vision_api_name || defaultVisionApiCategory.apiName,
+    apiBaseUrl: value.visionApiBaseUrl || value.vision_api_base_url || imageApi.apiBaseUrl,
+    model: value.visionModel || value.vision_model || '',
+    requestTimeout: value.visionRequestTimeout || value.vision_request_timeout || imageApi.requestTimeout,
+    apiKeyHint: value.visionApiKeyHint || value.vision_api_key_hint || '',
+  });
+
+  return {
+    id: value.id ?? value.configId ?? value.config_id ?? createLocalApiConfigId(),
+    configName: String(value.configName || value.config_name || fallbackImageApi.configName || `API 配置 ${index + 1}`).trim() || `API 配置 ${index + 1}`,
+    apiName: imageApi.apiName,
+    apiBaseUrl: imageApi.apiBaseUrl,
+    model: imageApi.model || defaultApiConfigItem.model,
+    promptModel: promptApi.model,
+    visionModel: visionApi.model,
+    apiKey: imageApi.apiKey,
+    hasApiKey: imageApi.hasApiKey,
+    apiKeyHint: imageApi.apiKeyHint,
+    requestTimeout: imageApi.requestTimeout,
+    imageApi: { ...imageApi, model: imageApi.model || defaultApiConfigItem.model },
+    promptApi,
+    visionApi,
+    hasAnyApiKey: Boolean(value.hasAnyApiKey || value.has_any_api_key || imageApi.hasApiKey || promptApi.hasApiKey || visionApi.hasApiKey),
+    isShared: Boolean(value.isShared || value.is_shared),
+  };
+};
 
 export const normalizeServerSettings = (value = {}) => {
   const rawConfigs = Array.isArray(value.apiConfigs || value.api_configs)

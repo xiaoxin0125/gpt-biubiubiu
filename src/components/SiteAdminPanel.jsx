@@ -1,3 +1,30 @@
+const sharedApiSections = [
+  {
+    key: 'imageApi',
+    title: '共享生图 API 参数',
+    description: '提供给文生图、图生图和编辑生成。',
+    modelLabel: '生图模型 ID',
+    modelPlaceholder: 'gpt-image-2',
+    namePlaceholder: '共享生图 API',
+  },
+  {
+    key: 'promptApi',
+    title: '共享提示词优化 API 参数',
+    description: '提供给提示词润色、扩写和翻译。',
+    modelLabel: '提示词优化模型 ID',
+    modelPlaceholder: '例如 gpt-4o-mini',
+    namePlaceholder: '共享提示词 API',
+  },
+  {
+    key: 'visionApi',
+    title: '共享图片反推/视觉 API 参数',
+    description: '提供给图片描述和反推提示词。',
+    modelLabel: '视觉模型 ID',
+    modelPlaceholder: '例如 gpt-4o',
+    namePlaceholder: '共享视觉 API',
+  },
+];
+
 export default function SiteAdminPanel({
   siteSettings,
   setSiteSettings,
@@ -8,15 +35,33 @@ export default function SiteAdminPanel({
   renderSelect,
 }) {
   const shared = siteSettings.sharedApi || {};
-  const sharedModelKey = String(shared.id || 'shared');
-  const sharedModelOptions = apiModelOptionsByConfigId[sharedModelKey] || [];
-  const sharedModelLoading = Boolean(apiModelLoadingByConfigId[sharedModelKey]);
 
   const updateFlag = (key, value) => setSiteSettings((current) => ({ ...current, [key]: value }));
-  const updateShared = (key, value) => setSiteSettings((current) => ({
-    ...current,
-    sharedApi: { ...(current.sharedApi || {}), [key]: value },
-  }));
+  const updateSharedCategory = (categoryKey, field, value) => setSiteSettings((current) => {
+    const currentShared = current.sharedApi || {};
+    const nextCategory = { ...(currentShared[categoryKey] || {}), [field]: value };
+    const nextShared = { ...currentShared, [categoryKey]: nextCategory };
+    if (categoryKey === 'imageApi') {
+      nextShared.apiName = nextCategory.apiName;
+      nextShared.apiBaseUrl = nextCategory.apiBaseUrl;
+      nextShared.model = nextCategory.model;
+      nextShared.apiKey = nextCategory.apiKey;
+      nextShared.hasApiKey = nextCategory.hasApiKey;
+      nextShared.apiKeyHint = nextCategory.apiKeyHint;
+      nextShared.requestTimeout = nextCategory.requestTimeout;
+    } else if (categoryKey === 'promptApi') {
+      nextShared.promptModel = nextCategory.model;
+    } else if (categoryKey === 'visionApi') {
+      nextShared.visionModel = nextCategory.model;
+    }
+    return { ...current, sharedApi: nextShared };
+  });
+  const modelOptionsFor = (categoryKey, currentModel) => {
+    const key = `shared:${categoryKey}`;
+    const options = apiModelOptionsByConfigId[key] || [];
+    return options.length ? options : [{ label: currentModel || '暂无模型', value: currentModel || '' }];
+  };
+  const isModelLoading = (categoryKey) => Boolean(apiModelLoadingByConfigId[`shared:${categoryKey}`]);
 
   return (
     <div className="settings-grid account-settings-grid direct-settings-grid profile-stack">
@@ -55,78 +100,71 @@ export default function SiteAdminPanel({
         <div className="api-config-card-head">
           <div>
             <strong>共享 API 参数</strong>
-            <span>提供给全站登录用户使用</span>
+            <span>三类共享配置互相独立，用户启用共享后按功能分别使用。</span>
           </div>
         </div>
-        <div className="api-config-fields api-config-fields-ordered">
-          <label>
-            <span>API 名称</span>
-            <input value={shared.apiName || ''} onChange={(event) => updateShared('apiName', event.target.value)} placeholder="站点共享 API" />
-          </label>
-          <label>
-            <span>模型 ID</span>
-            <input value={shared.model || ''} onChange={(event) => updateShared('model', event.target.value)} placeholder="gpt-image-2" />
-          </label>
-          <label>
-            <span>提示词优化模型</span>
-            <input value={shared.promptModel || ''} onChange={(event) => updateShared('promptModel', event.target.value)} placeholder="例如 gpt-4o-mini" />
-          </label>
-          <label>
-            <span>图片反推模型</span>
-            <input value={shared.visionModel || ''} onChange={(event) => updateShared('visionModel', event.target.value)} placeholder="例如 gpt-4o" />
-          </label>
-          <div className="model-picker-field full-field">
-            <span>模型列表</span>
-            <div className="model-picker-row">
-              {renderSelect({
-                id: 'shared-api-model-select',
-                label: '',
-                value: shared.model || '',
-                options: sharedModelOptions.length ? sharedModelOptions : [{ label: shared.model || '暂无模型', value: shared.model || '' }],
-                onChange: (value) => updateShared('model', value),
-                disabled: !sharedModelOptions.length,
-                className: 'settings-select-field model-select-field',
-                menuDirection: 'down',
-              })}
-              {renderSelect({
-                id: 'shared-api-prompt-model-select',
-                label: '',
-                value: shared.promptModel || shared.model || '',
-                options: sharedModelOptions.length ? sharedModelOptions : [{ label: shared.promptModel || '提示词模型', value: shared.promptModel || '' }],
-                onChange: (value) => updateShared('promptModel', value),
-                disabled: !sharedModelOptions.length,
-                className: 'settings-select-field model-select-field',
-                menuDirection: 'down',
-              })}
-              {renderSelect({
-                id: 'shared-api-vision-model-select',
-                label: '',
-                value: shared.visionModel || shared.model || '',
-                options: sharedModelOptions.length ? sharedModelOptions : [{ label: shared.visionModel || '视觉模型', value: shared.visionModel || '' }],
-                onChange: (value) => updateShared('visionModel', value),
-                disabled: !sharedModelOptions.length,
-                className: 'settings-select-field model-select-field',
-                menuDirection: 'down',
-              })}
-              <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(shared.id || 'shared')} disabled={sharedModelLoading}>
-                {sharedModelLoading ? '获取中' : '获取模型'}
-              </button>
-            </div>
-          </div>
-          <label className="full-field">
-            <span>API 地址</span>
-            <input value={shared.apiBaseUrl || ''} onChange={(event) => updateShared('apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
-          </label>
-          <label className="full-field">
-            <span>密钥设置</span>
-            <input type="password" value={shared.apiKey || ''} onChange={(event) => updateShared('apiKey', event.target.value)} placeholder={shared.hasApiKey ? `已保存：${shared.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
-          </label>
-          {shared.hasApiKey ? (
-            <label className="toggle-row full-field">
-              <input type="checkbox" checked={Boolean(shared.clearApiKey)} onChange={(event) => updateShared('clearApiKey', event.target.checked)} />
-              <span>清除已保存的共享 Key</span>
-            </label>
-          ) : null}
+        <div className="api-category-stack">
+          {sharedApiSections.map((section) => {
+            const category = shared[section.key] || {};
+            const options = modelOptionsFor(section.key, category.model || '');
+            const loading = isModelLoading(section.key);
+            return (
+              <section className="api-category-card" key={section.key}>
+                <div className="api-category-head">
+                  <div>
+                    <strong>{section.title}</strong>
+                    <span>{section.description}</span>
+                  </div>
+                  <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(shared.id || 'shared', section.key)} disabled={loading}>
+                    {loading ? '获取中' : '获取模型'}
+                  </button>
+                </div>
+                <div className="api-config-fields api-config-fields-ordered">
+                  <label>
+                    <span>API 名称</span>
+                    <input value={category.apiName || ''} onChange={(event) => updateSharedCategory(section.key, 'apiName', event.target.value)} placeholder={section.namePlaceholder} />
+                  </label>
+                  <label>
+                    <span>{section.modelLabel}</span>
+                    <input value={category.model || ''} onChange={(event) => updateSharedCategory(section.key, 'model', event.target.value)} placeholder={section.modelPlaceholder} />
+                  </label>
+                  <div className="model-picker-field full-field">
+                    <span>模型列表</span>
+                    <div className="model-picker-row single-model-picker-row">
+                      {renderSelect({
+                        id: `shared-${section.key}-model-select`,
+                        label: '',
+                        value: category.model || '',
+                        options,
+                        onChange: (value) => updateSharedCategory(section.key, 'model', value),
+                        disabled: !options.length || !options[0]?.value,
+                        className: 'settings-select-field model-select-field',
+                        menuDirection: 'down',
+                      })}
+                    </div>
+                  </div>
+                  <label>
+                    <span>API 地址</span>
+                    <input value={category.apiBaseUrl || ''} onChange={(event) => updateSharedCategory(section.key, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
+                  </label>
+                  <label>
+                    <span>请求超时（秒）</span>
+                    <input min="10" max="999" type="number" value={category.requestTimeout || 999} onChange={(event) => updateSharedCategory(section.key, 'requestTimeout', event.target.value)} placeholder="999" />
+                  </label>
+                  <label className="full-field">
+                    <span>密钥设置</span>
+                    <input type="password" value={category.apiKey || ''} onChange={(event) => updateSharedCategory(section.key, 'apiKey', event.target.value)} placeholder={category.hasApiKey ? `已保存：${category.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
+                  </label>
+                  {category.hasApiKey ? (
+                    <label className="toggle-row full-field compact-toggle-row">
+                      <input type="checkbox" checked={Boolean(category.clearApiKey)} onChange={(event) => updateSharedCategory(section.key, 'clearApiKey', event.target.checked)} />
+                      <span>清除已保存的共享 Key</span>
+                    </label>
+                  ) : null}
+                </div>
+              </section>
+            );
+          })}
         </div>
       </section>
 

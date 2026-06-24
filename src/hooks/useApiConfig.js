@@ -16,13 +16,39 @@ export const useApiConfig = (deps) => {
   };
 
   const addApiConfig = () => {
+    const nextIndex = (apiConfigForm.apiConfigs || []).length + 1;
+    const imageApi = activeApiConfig?.imageApi || activeApiConfig || defaultApiConfigItem.imageApi;
+    const promptApi = activeApiConfig?.promptApi || defaultApiConfigItem.promptApi;
+    const visionApi = activeApiConfig?.visionApi || defaultApiConfigItem.visionApi;
+    const nextPromptApi = {
+      ...promptApi,
+      apiName: promptApi.apiName || defaultApiConfigItem.promptApi.apiName,
+      apiKey: '',
+      hasApiKey: false,
+      apiKeyHint: '',
+    };
+    const nextVisionApi = {
+      ...visionApi,
+      apiName: visionApi.apiName || defaultApiConfigItem.visionApi.apiName,
+      apiKey: '',
+      hasApiKey: false,
+      apiKeyHint: '',
+    };
     const nextConfig = normalizeApiConfigItem({
       id: createLocalApiConfigId(),
-      apiName: `API 配置 ${(apiConfigForm.apiConfigs || []).length + 1}`,
-      apiBaseUrl: activeApiConfig?.apiBaseUrl || defaultApiConfigItem.apiBaseUrl,
-      model: activeApiConfig?.model || defaultForm.model,
-      promptModel: activeApiConfig?.promptModel || '',
-      visionModel: activeApiConfig?.visionModel || '',
+      configName: `API 配置 ${nextIndex}`,
+      apiName: imageApi.apiName || defaultApiConfigItem.apiName,
+      apiBaseUrl: imageApi.apiBaseUrl || defaultApiConfigItem.apiBaseUrl,
+      model: imageApi.model || defaultForm.model,
+      imageApi: {
+        ...imageApi,
+        apiName: imageApi.apiName || defaultApiConfigItem.imageApi.apiName,
+        apiKey: '',
+        hasApiKey: false,
+        apiKeyHint: '',
+      },
+      promptApi: nextPromptApi,
+      visionApi: nextVisionApi,
     }, (apiConfigForm.apiConfigs || []).length);
     setApiConfigForm((current) => ({
       ...current,
@@ -50,13 +76,19 @@ export const useApiConfig = (deps) => {
       ...defaultApiConfigForm,
       stream: current.stream,
       requestTimeout: current.requestTimeout,
-      apiConfigs: current.apiConfigs?.length ? current.apiConfigs.map((item, index) => ({
-        ...normalizeApiConfigItem(index === 0 ? defaultApiConfigItem : item, index),
-        id: item.id,
-        hasApiKey: item.hasApiKey,
-        apiKeyHint: item.apiKeyHint,
-        apiKey: '',
-      })) : [defaultApiConfigItem],
+      apiConfigs: current.apiConfigs?.length ? current.apiConfigs.map((item, index) => {
+        const normalized = normalizeApiConfigItem(index === 0 ? defaultApiConfigItem : item, index);
+        return {
+          ...normalized,
+          id: item.id,
+          hasApiKey: item.hasApiKey,
+          apiKeyHint: item.apiKeyHint,
+          apiKey: '',
+          imageApi: { ...normalized.imageApi, hasApiKey: item.imageApi?.hasApiKey || item.hasApiKey, apiKeyHint: item.imageApi?.apiKeyHint || item.apiKeyHint || '', apiKey: '' },
+          promptApi: { ...normalized.promptApi, hasApiKey: item.promptApi?.hasApiKey || false, apiKeyHint: item.promptApi?.apiKeyHint || '', apiKey: '' },
+          visionApi: { ...normalized.visionApi, hasApiKey: item.visionApi?.hasApiKey || false, apiKeyHint: item.visionApi?.apiKeyHint || '', apiKey: '' },
+        };
+      }) : [defaultApiConfigItem],
       activeApiConfigId: current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
     }));
     setForm(defaultForm);

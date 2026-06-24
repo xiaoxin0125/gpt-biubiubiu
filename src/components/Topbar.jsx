@@ -60,7 +60,7 @@ export default function Topbar({
           id: 'topbar-api-switch',
           label: '',
           value: activeApiConfig?.id || apiConfigForm.activeApiConfigId,
-          options: (apiConfigForm.apiConfigs || []).filter((item) => item.hasApiKey || item.isShared).map((item) => ({ label: item.apiName || defaultApiConfigItem.apiName, value: item.id })),
+          options: (apiConfigForm.apiConfigs || []).filter((item) => item.hasApiKey || item.isShared).map((item) => ({ label: item.configName || item.apiName || defaultApiConfigItem.configName, value: item.id })),
           onChange: switchActiveApiConfig,
           className: 'status-api-select',
           menuDirection: 'down',

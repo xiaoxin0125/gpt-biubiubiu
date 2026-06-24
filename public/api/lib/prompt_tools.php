@@ -46,39 +46,46 @@ function prompt_tools_chat_url(string $apiBaseUrl): string
     return strtolower((string) $parts['scheme']) . '://' . $auth . strtolower((string) $parts['host']) . $port . $path;
 }
 
-function prompt_tools_active_config(array $user, string $modelField, string $sharedModelField): array
+function prompt_tools_active_config(array $user, string $category): array
 {
     $userId = (int) $user['id'];
     $settings = ensure_user_settings_row($userId);
     $configs = user_api_config_rows($userId);
-    $keyedOwnConfig = first_keyed_user_api_config_row($configs);
+    $keyedOwnConfig = first_keyed_user_api_config_row_for_category($configs, $category);
+    $categoryLabel = $category === 'vision' ? '图片反推/视觉' : '提示词优化';
 
     if (shared_api_enabled() && (!$keyedOwnConfig || !empty($settings['active_shared']))) {
         $row = site_settings_row();
+        $client = shared_api_category_client($row, $category);
         return [
-            'apiName' => trim((string) ($row['shared_api_name'] ?? '')) ?: DEFAULT_API_NAME,
-            'apiBaseUrl' => trim((string) ($row['shared_api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
-            'model' => trim((string) ($row[$sharedModelField] ?? '')),
-            'requestTimeout' => normalize_request_timeout($row['shared_request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
-            'apiKey' => decrypt_shared_api_key($row),
+            'apiName' => $client['apiName'],
+            'apiBaseUrl' => $client['apiBaseUrl'],
+            'model' => $client['model'],
+            'requestTimeout' => $client['requestTimeout'],
+            'apiKey' => decrypt_shared_api_key($row, $category),
             'isShared' => true,
+            'categoryLabel' => $categoryLabel,
         ];
     }
 
     $active = active_api_config_row($userId) ?: [];
-    $apiKey = decrypt_api_key($active);
+    $prefix = $category === 'vision' ? 'vision_' : 'prompt_';
+    $client = api_client_category($active, $category);
+    $apiKey = decrypt_prefixed_api_key($active, $prefix);
     if ($apiKey === '' && $keyedOwnConfig) {
         $active = $keyedOwnConfig;
-        $apiKey = decrypt_api_key($active);
+        $client = api_client_category($active, $category);
+        $apiKey = decrypt_prefixed_api_key($active, $prefix);
     }
 
     return [
-        'apiName' => trim((string) ($active['api_name'] ?? '')) ?: DEFAULT_API_NAME,
-        'apiBaseUrl' => trim((string) ($active['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
-        'model' => trim((string) ($active[$modelField] ?? '')),
-        'requestTimeout' => normalize_request_timeout($active['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
+        'apiName' => $client['apiName'],
+        'apiBaseUrl' => $client['apiBaseUrl'],
+        'model' => $client['model'],
+        'requestTimeout' => $client['requestTimeout'],
         'apiKey' => $apiKey,
         'isShared' => false,
+        'categoryLabel' => $categoryLabel,
     ];
 }
 
@@ -129,8 +136,8 @@ function prompt_tools_post_chat(array $config, array $messages): array
 {
     $apiKey = trim((string) ($config['apiKey'] ?? ''));
     $model = trim((string) ($config['model'] ?? ''));
-    if ($apiKey === '') json_response(['error' => '当前 API 配置缺少 API Key'], 400);
-    if ($model === '') json_response(['error' => '请先配置提示词助手使用的模型'], 400);
+    if ($apiKey === '') json_response(['error' => '当前' . ($config['categoryLabel'] ?? '提示词助手') . ' API 配置缺少 API Key'], 400);
+    if ($model === '') json_response(['error' => '请先配置' . ($config['categoryLabel'] ?? '提示词助手') . '使用的模型'], 400);
 
     $payload = [
         'model' => $model,
@@ -187,7 +194,7 @@ function handle_prompt_optimize(array $body): array
     $rule = trim((string) ($body['rule'] ?? 'general')) ?: 'general';
     $customRule = trim((string) ($body['customRule'] ?? ($body['custom_rule'] ?? '')));
     $ruleText = prompt_tools_rule_text('optimize', $rule, $customRule);
-    $config = prompt_tools_active_config($user, 'prompt_model', 'shared_prompt_model');
+    $config = prompt_tools_active_config($user, 'prompt');
 
     $messages = [
         ['role' => 'system', 'content' => '你是图像生成提示词优化助手。严格遵守用户给出的规则，只输出最终提示词文本，不输出解释、Markdown、标题、前缀或引号。'],
@@ -204,6 +211,23 @@ function handle_prompt_optimize(array $body): array
     ];
 }
 
+function prompt_tools_image_mime(string $bytes, array $file): string
+{
+    if (class_exists('finfo')) {
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $mime = $finfo->buffer($bytes);
+        if (is_string($mime) && $mime !== '') return $mime;
+    }
+
+    if (function_exists('getimagesizefromstring')) {
+        $info = @getimagesizefromstring($bytes);
+        if (is_array($info) && !empty($info['mime'])) return (string) $info['mime'];
+    }
+
+    $uploadedMime = trim((string) ($file['type'] ?? ''));
+    return $uploadedMime !== '' ? $uploadedMime : 'application/octet-stream';
+}
+
 function prompt_tools_image_data_url(array $body): string
 {
     $file = $_FILES['image'] ?? null;
@@ -213,8 +237,7 @@ function prompt_tools_image_data_url(array $body): string
         if ($size > MAX_IMAGE_UPLOAD_BYTES) json_response(['error' => '图片不能超过 20MB'], 400);
         $bytes = @file_get_contents((string) ($file['tmp_name'] ?? ''));
         if ($bytes === false || $bytes === '') json_response(['error' => '图片读取失败'], 400);
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $mime = $finfo->buffer($bytes) ?: 'application/octet-stream';
+        $mime = prompt_tools_image_mime($bytes, $file);
         if (!in_array($mime, ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], true)) json_response(['error' => '仅支持 PNG、JPEG、WEBP 或 GIF 图片'], 400);
         return 'data:' . $mime . ';base64,' . base64_encode($bytes);
     }
@@ -236,7 +259,7 @@ function handle_prompt_caption(array $body): array
     $customRule = trim((string) ($_POST['customRule'] ?? ($_POST['custom_rule'] ?? ($body['customRule'] ?? ($body['custom_rule'] ?? '')))));
     $extraPrompt = trim((string) ($_POST['extraPrompt'] ?? ($_POST['extra_prompt'] ?? ($body['extraPrompt'] ?? ($body['extra_prompt'] ?? '')))));
     $ruleText = prompt_tools_rule_text('caption', $rule, $customRule);
-    $config = prompt_tools_active_config($user, 'vision_model', 'shared_vision_model');
+    $config = prompt_tools_active_config($user, 'vision');
 
     $text = "规则：{$ruleText}";
     if ($extraPrompt !== '') $text .= "\n额外要求：{$extraPrompt}";

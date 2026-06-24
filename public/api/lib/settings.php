@@ -101,6 +101,93 @@ function decrypt_api_key(?array $settings): string
     return '';
 }
 
+function prefixed_api_key_fields(array $row, string $prefix = ''): array
+{
+    return [
+        'api_key_ciphertext' => $row[$prefix . 'api_key_ciphertext'] ?? null,
+        'api_key_iv' => $row[$prefix . 'api_key_iv'] ?? null,
+        'api_key_tag' => $row[$prefix . 'api_key_tag'] ?? null,
+    ];
+}
+
+function prefixed_api_key_hint(array $row, string $prefix = ''): string
+{
+    return (string) ($row[$prefix . 'api_key_hint'] ?? '');
+}
+
+function has_prefixed_api_key(array $row, string $prefix = ''): bool
+{
+    return !empty($row[$prefix . 'api_key_ciphertext']);
+}
+
+function config_has_category_api_key(array $row, string $category): bool
+{
+    if ($category === 'prompt') return has_prefixed_api_key($row, 'prompt_');
+    if ($category === 'vision') return has_prefixed_api_key($row, 'vision_');
+    return has_prefixed_api_key($row);
+}
+
+function config_has_any_api_key(array $row): bool
+{
+    return has_prefixed_api_key($row) || has_prefixed_api_key($row, 'prompt_') || has_prefixed_api_key($row, 'vision_');
+}
+
+function decrypt_prefixed_api_key(array $row, string $prefix = ''): string
+{
+    $fields = prefixed_api_key_fields($row, $prefix);
+    $plain = decrypt_api_key_with_secret($fields, api_key_secret());
+    if ($plain !== '') return $plain;
+
+    foreach (legacy_api_key_secrets() as $legacySecret) {
+        $plain = decrypt_api_key_with_secret($fields, $legacySecret);
+        if ($plain !== '') return $plain;
+    }
+
+    return '';
+}
+
+function api_client_category(array $row, string $category): array
+{
+    if ($category === 'prompt') {
+        return [
+            'apiName' => trim((string) ($row['prompt_api_name'] ?? '')) ?: DEFAULT_PROMPT_API_NAME,
+            'apiBaseUrl' => trim((string) ($row['prompt_api_base_url'] ?? '')) ?: (trim((string) ($row['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL),
+            'model' => trim((string) ($row['prompt_model'] ?? '')),
+            'requestTimeout' => normalize_request_timeout($row['prompt_request_timeout'] ?? ($row['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
+            'hasApiKey' => has_prefixed_api_key($row, 'prompt_'),
+            'apiKeyHint' => prefixed_api_key_hint($row, 'prompt_'),
+        ];
+    }
+
+    if ($category === 'vision') {
+        return [
+            'apiName' => trim((string) ($row['vision_api_name'] ?? '')) ?: DEFAULT_VISION_API_NAME,
+            'apiBaseUrl' => trim((string) ($row['vision_api_base_url'] ?? '')) ?: (trim((string) ($row['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL),
+            'model' => trim((string) ($row['vision_model'] ?? '')),
+            'requestTimeout' => normalize_request_timeout($row['vision_request_timeout'] ?? ($row['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
+            'hasApiKey' => has_prefixed_api_key($row, 'vision_'),
+            'apiKeyHint' => prefixed_api_key_hint($row, 'vision_'),
+        ];
+    }
+
+    return [
+        'apiName' => trim((string) ($row['api_name'] ?? '')) ?: DEFAULT_API_NAME,
+        'apiBaseUrl' => trim((string) ($row['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
+        'model' => trim((string) ($row['model'] ?? '')) ?: DEFAULT_IMAGE_MODEL,
+        'requestTimeout' => normalize_request_timeout($row['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
+        'hasApiKey' => has_prefixed_api_key($row),
+        'apiKeyHint' => prefixed_api_key_hint($row),
+    ];
+}
+
+function api_client_with_legacy_model_fields(array $client): array
+{
+    return $client + [
+        'promptModel' => $client['promptApi']['model'] ?? '',
+        'visionModel' => $client['visionApi']['model'] ?? '',
+    ];
+}
+
 function stored_user_settings_row(int $userId): ?array
 {
     $stmt = pdo()->prepare('SELECT * FROM user_settings WHERE user_id = ? LIMIT 1');
@@ -133,18 +220,22 @@ function ensure_user_settings_row(int $userId): array
 
 function config_from_row(array $row): array
 {
-    return [
+    $imageApi = api_client_category($row, 'image');
+    return api_client_with_legacy_model_fields([
         'id' => (int) $row['id'],
-        'apiName' => $row['api_name'] ?: DEFAULT_API_NAME,
-        'apiBaseUrl' => $row['api_base_url'] ?: DEFAULT_API_BASE_URL,
-        'model' => $row['model'] ?: DEFAULT_IMAGE_MODEL,
-        'promptModel' => trim((string) ($row['prompt_model'] ?? '')),
-        'visionModel' => trim((string) ($row['vision_model'] ?? '')),
-        'requestTimeout' => (int) ($row['request_timeout'] ?: DEFAULT_REQUEST_TIMEOUT),
-        'hasApiKey' => !empty($row['api_key_ciphertext']),
-        'apiKeyHint' => $row['api_key_hint'] ?: '',
+        'configName' => trim((string) ($row['config_name'] ?? '')) ?: 'API 配置 ' . (((int) ($row['sort_order'] ?? 0)) + 1),
+        'apiName' => $imageApi['apiName'],
+        'apiBaseUrl' => $imageApi['apiBaseUrl'],
+        'model' => $imageApi['model'],
+        'requestTimeout' => $imageApi['requestTimeout'],
+        'hasApiKey' => $imageApi['hasApiKey'],
+        'apiKeyHint' => $imageApi['apiKeyHint'],
+        'imageApi' => $imageApi,
+        'promptApi' => api_client_category($row, 'prompt'),
+        'visionApi' => api_client_category($row, 'vision'),
+        'hasAnyApiKey' => config_has_any_api_key($row),
         'sortOrder' => (int) ($row['sort_order'] ?? 0),
-    ];
+    ]);
 }
 
 function legacy_settings_config(array $settings): array
@@ -173,13 +264,28 @@ function ensure_user_api_config(int $userId): ?array
 
     $settings = stored_user_settings_row($userId) ?: [];
     $legacy = legacy_settings_config($settings);
-    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_name, api_base_url, model, prompt_model, vision_model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
+    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, config_name, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, vision_api_name, vision_api_base_url, vision_model, vision_request_timeout, vision_api_key_ciphertext, vision_api_key_iv, vision_api_key_tag, vision_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
     $stmt->execute([
         $userId,
+        'API 配置 1',
         $legacy['apiName'],
         $legacy['apiBaseUrl'],
         $legacy['model'],
+        $legacy['requestTimeout'],
+        $legacy['api_key_ciphertext'],
+        $legacy['api_key_iv'],
+        $legacy['api_key_tag'],
+        $legacy['api_key_hint'],
+        DEFAULT_PROMPT_API_NAME,
+        $legacy['apiBaseUrl'],
         $legacy['promptModel'],
+        $legacy['requestTimeout'],
+        $legacy['api_key_ciphertext'],
+        $legacy['api_key_iv'],
+        $legacy['api_key_tag'],
+        $legacy['api_key_hint'],
+        DEFAULT_VISION_API_NAME,
+        $legacy['apiBaseUrl'],
         $legacy['visionModel'],
         $legacy['requestTimeout'],
         $legacy['api_key_ciphertext'],
@@ -218,7 +324,16 @@ function user_api_config_rows(int $userId): array
 function first_keyed_user_api_config_row(array $configs): ?array
 {
     foreach ($configs as $config) {
-        if (!empty($config['api_key_ciphertext'])) return $config;
+        if (config_has_any_api_key($config)) return $config;
+    }
+
+    return null;
+}
+
+function first_keyed_user_api_config_row_for_category(array $configs, string $category): ?array
+{
+    foreach ($configs as $config) {
+        if (config_has_category_api_key($config, $category)) return $config;
     }
 
     return null;
@@ -255,7 +370,7 @@ function settings_for_user(int $userId): ?array
     $apiConfigs = array_map('config_from_row', $configs);
     if (shared_api_enabled()) {
         $sharedClient = shared_api_config_client();
-        $keyedOwnConfig = first_keyed_user_api_config_row($configs);
+        $keyedOwnConfig = first_keyed_user_api_config_row_for_category($configs, 'image');
         $wantsShared = !empty($settings['active_shared']);
         if ($keyedOwnConfig) {
             $apiConfigs[] = $sharedClient;
@@ -273,8 +388,11 @@ function settings_for_user(int $userId): ?array
         'apiConfigs' => $apiConfigs,
         'activeConfig' => $activeClient,
         'model' => $activeClient['model'] ?? DEFAULT_IMAGE_MODEL,
-        'promptModel' => $activeClient['promptModel'] ?? '',
-        'visionModel' => $activeClient['visionModel'] ?? '',
+        'promptModel' => $activeClient['promptApi']['model'] ?? ($activeClient['promptModel'] ?? ''),
+        'visionModel' => $activeClient['visionApi']['model'] ?? ($activeClient['visionModel'] ?? ''),
+        'imageApi' => $activeClient['imageApi'] ?? null,
+        'promptApi' => $activeClient['promptApi'] ?? null,
+        'visionApi' => $activeClient['visionApi'] ?? null,
         'apiName' => $activeClient['apiName'] ?? DEFAULT_API_NAME,
         'apiBaseUrl' => $activeClient['apiBaseUrl'] ?? DEFAULT_API_BASE_URL,
         'requestTimeout' => normalize_request_timeout($settings['request_timeout'] ?? ($activeClient['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
@@ -290,13 +408,13 @@ function stored_user_api_key(): string
     $settings = ensure_user_settings_row($userId);
     if (shared_api_enabled()) {
         $configs = user_api_config_rows($userId);
-        $keyedOwnConfig = first_keyed_user_api_config_row($configs);
-        if (!$keyedOwnConfig || !empty($settings['active_shared'])) return decrypt_shared_api_key();
+        $keyedOwnConfig = first_keyed_user_api_config_row_for_category($configs, 'image');
+        if (!$keyedOwnConfig || !empty($settings['active_shared'])) return decrypt_shared_api_key(null, 'image');
 
         $active = active_api_config_row($userId);
-        return decrypt_api_key($active) ?: decrypt_api_key($keyedOwnConfig);
+        return decrypt_prefixed_api_key($active ?: [], '') ?: decrypt_prefixed_api_key($keyedOwnConfig, '');
     }
-    return decrypt_api_key(active_api_config_row($userId));
+    return decrypt_prefixed_api_key(active_api_config_row($userId) ?: [], '');
 }
 
 function upsert_user_settings_from_config(int $userId, array $active, int $activeId, int $stream, bool $updateStream, ?int $requestTimeout = null): void
@@ -317,6 +435,65 @@ function upsert_user_settings_from_config(int $userId, array $active, int $activ
         $active['api_key_tag'],
         $active['api_key_hint'],
     ]);
+}
+
+function api_config_category_input(array $config, string $category, int $globalRequestTimeout): array
+{
+    $nested = is_array($config[$category . 'Api'] ?? null) ? $config[$category . 'Api'] : [];
+    if ($category === 'image') {
+        return [
+            'apiName' => trim((string) ($nested['apiName'] ?? ($nested['api_name'] ?? ($config['apiName'] ?? ($config['api_name'] ?? 'OpenAI Compatible'))))) ?: 'OpenAI Compatible',
+            'apiBaseUrl' => normalize_api_base_url((string) ($nested['apiBaseUrl'] ?? ($nested['api_base_url'] ?? ($config['apiBaseUrl'] ?? ($config['api_base_url'] ?? ''))))),
+            'model' => trim((string) ($nested['model'] ?? ($config['model'] ?? cfg('openai_image_model', DEFAULT_IMAGE_MODEL)))) ?: DEFAULT_IMAGE_MODEL,
+            'requestTimeout' => normalize_request_timeout($nested['requestTimeout'] ?? ($nested['request_timeout'] ?? ($config['requestTimeout'] ?? ($config['request_timeout'] ?? $globalRequestTimeout)))),
+            'apiKey' => trim((string) ($nested['apiKey'] ?? ($nested['api_key'] ?? ($config['apiKey'] ?? ($config['api_key'] ?? ''))))),
+            'clearApiKey' => !empty($nested['clearApiKey']) || !empty($nested['clear_api_key']) || !empty($config['clearApiKey']) || !empty($config['clear_api_key']),
+            'confirmApiKeySave' => !empty($nested['confirmApiKeySave']) || !empty($nested['confirm_api_key_save']) || !empty($config['confirmApiKeySave']) || !empty($config['confirm_api_key_save']),
+        ];
+    }
+
+    $legacyModelKey = $category === 'prompt' ? 'promptModel' : 'visionModel';
+    $snakeModelKey = $category === 'prompt' ? 'prompt_model' : 'vision_model';
+    $camelApiNameKey = $category . 'ApiName';
+    $camelApiBaseUrlKey = $category . 'ApiBaseUrl';
+    $camelRequestTimeoutKey = $category . 'RequestTimeout';
+    $camelApiKeyKey = $category . 'ApiKey';
+    $camelClearKey = $category . 'ClearApiKey';
+    $camelConfirmKey = $category . 'ConfirmApiKeySave';
+    $snakeApiNameKey = $category . '_api_name';
+    $snakeApiBaseUrlKey = $category . '_api_base_url';
+    $snakeRequestTimeoutKey = $category . '_request_timeout';
+    $snakeApiKeyKey = $category . '_api_key';
+    $snakeClearKey = $category . '_clear_api_key';
+    $snakeConfirmKey = $category . '_confirm_api_key_save';
+
+    $defaultApiName = $category === 'prompt' ? DEFAULT_PROMPT_API_NAME : DEFAULT_VISION_API_NAME;
+
+    return [
+        'apiName' => trim((string) ($nested['apiName'] ?? ($nested['api_name'] ?? ($config[$camelApiNameKey] ?? ($config[$snakeApiNameKey] ?? $defaultApiName))))) ?: $defaultApiName,
+        'apiBaseUrl' => normalize_api_base_url((string) ($nested['apiBaseUrl'] ?? ($nested['api_base_url'] ?? ($config[$camelApiBaseUrlKey] ?? ($config[$snakeApiBaseUrlKey] ?? ($config['apiBaseUrl'] ?? ($config['api_base_url'] ?? ''))))))),
+        'model' => trim((string) ($nested['model'] ?? ($config[$legacyModelKey] ?? ($config[$snakeModelKey] ?? '')))),
+        'requestTimeout' => normalize_request_timeout($nested['requestTimeout'] ?? ($nested['request_timeout'] ?? ($config[$camelRequestTimeoutKey] ?? ($config[$snakeRequestTimeoutKey] ?? $globalRequestTimeout)))),
+        'apiKey' => trim((string) ($nested['apiKey'] ?? ($nested['api_key'] ?? ($config[$camelApiKeyKey] ?? ($config[$snakeApiKeyKey] ?? ($config['apiKey'] ?? ($config['api_key'] ?? ''))))))),
+        'clearApiKey' => !empty($nested['clearApiKey']) || !empty($nested['clear_api_key']) || !empty($config[$camelClearKey]) || !empty($config[$snakeClearKey]),
+        'confirmApiKeySave' => !empty($nested['confirmApiKeySave']) || !empty($nested['confirm_api_key_save']) || !empty($config[$camelConfirmKey]) || !empty($config[$snakeConfirmKey]) || !empty($config['confirmApiKeySave']) || !empty($config['confirm_api_key_save']),
+    ];
+}
+
+function api_key_storage_fields_for_category(array $input, array $existing, string $prefix = ''): array
+{
+    $apiKey = trim((string) ($input['apiKey'] ?? ''));
+    if ($apiKey !== '' && empty($input['confirmApiKeySave'])) json_response(['error' => '保存 API Key 前需要确认'], 400);
+    if ($apiKey !== '' && api_key_secret() === '') json_response(['error' => '服务端未配置 USER_API_KEY_SECRET'], 500);
+    if (!empty($input['clearApiKey'])) return [null, null, null, null];
+
+    $encrypted = $apiKey !== '' ? encrypt_api_key($apiKey) : [];
+    return [
+        $encrypted['api_key_ciphertext'] ?? ($existing[$prefix . 'api_key_ciphertext'] ?? null),
+        $encrypted['api_key_iv'] ?? ($existing[$prefix . 'api_key_iv'] ?? null),
+        $encrypted['api_key_tag'] ?? ($existing[$prefix . 'api_key_tag'] ?? null),
+        $encrypted['api_key_hint'] ?? ($existing[$prefix . 'api_key_hint'] ?? null),
+    ];
 }
 
 function save_user_settings(array $user, array $body): array
@@ -345,16 +522,12 @@ function save_user_settings(array $user, array $body): array
     try {
         foreach ($configs as $index => $config) {
             $configId = (int) ($config['id'] ?? 0);
-            $apiName = trim((string) ($config['apiName'] ?? ($config['api_name'] ?? 'OpenAI Compatible'))) ?: 'OpenAI Compatible';
-            $apiBaseUrl = normalize_api_base_url((string) ($config['apiBaseUrl'] ?? ($config['api_base_url'] ?? '')));
-            $model = trim((string) ($config['model'] ?? cfg('openai_image_model', 'gpt-image-2'))) ?: 'gpt-image-2';
-            $promptModel = trim((string) ($config['promptModel'] ?? ($config['prompt_model'] ?? '')));
-            $visionModel = trim((string) ($config['visionModel'] ?? ($config['vision_model'] ?? '')));
-            $apiKey = trim((string) ($config['apiKey'] ?? ''));
-            $clearApiKey = !empty($config['clearApiKey']);
-            if (!valid_api_base_url($apiBaseUrl)) json_response(['error' => 'API 地址必须是 http 或 https 地址'], 400);
-            if ($apiKey !== '' && empty($config['confirmApiKeySave'])) json_response(['error' => '保存 API Key 前需要确认'], 400);
-            if ($apiKey !== '' && api_key_secret() === '') json_response(['error' => '服务端未配置 USER_API_KEY_SECRET'], 500);
+            $imageInput = api_config_category_input($config, 'image', $requestTimeout);
+            $promptInput = api_config_category_input($config, 'prompt', $requestTimeout);
+            $visionInput = api_config_category_input($config, 'vision', $requestTimeout);
+            if (!valid_api_base_url($imageInput['apiBaseUrl'])) json_response(['error' => '生图 API 地址必须是 http 或 https 地址'], 400);
+            if (!valid_api_base_url($promptInput['apiBaseUrl'])) json_response(['error' => '提示词优化 API 地址必须是 http 或 https 地址'], 400);
+            if (!valid_api_base_url($visionInput['apiBaseUrl'])) json_response(['error' => '图片反推 API 地址必须是 http 或 https 地址'], 400);
 
             $existing = [];
             if ($configId > 0) {
@@ -364,20 +537,76 @@ function save_user_settings(array $user, array $body): array
                 if (!$existing) $configId = 0;
             }
 
-            $encrypted = $apiKey !== '' ? encrypt_api_key($apiKey) : [];
-            $apiFields = $clearApiKey ? [null, null, null, null] : [
-                $encrypted['api_key_ciphertext'] ?? ($existing['api_key_ciphertext'] ?? null),
-                $encrypted['api_key_iv'] ?? ($existing['api_key_iv'] ?? null),
-                $encrypted['api_key_tag'] ?? ($existing['api_key_tag'] ?? null),
-                $encrypted['api_key_hint'] ?? ($existing['api_key_hint'] ?? null),
-            ];
+            $imageApiFields = api_key_storage_fields_for_category($imageInput, $existing);
+            $promptApiFields = api_key_storage_fields_for_category($promptInput, $existing, 'prompt_');
+            $visionApiFields = api_key_storage_fields_for_category($visionInput, $existing, 'vision_');
+            $configName = trim((string) ($config['configName'] ?? ($config['config_name'] ?? '')));
+            if (mb_strlen($configName) > 128) json_response(['error' => '设置名称不能超过 128 个字符'], 400);
+            if ($configName === '') $configName = 'API 配置 ' . ($index + 1);
 
             if ($configId > 0) {
-                $stmt = $db->prepare('UPDATE user_api_configs SET api_name = ?, api_base_url = ?, model = ?, prompt_model = ?, vision_model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
-                $stmt->execute([$apiName, $apiBaseUrl, $model, $promptModel, $visionModel, $requestTimeout, $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3], $index, $configId, $user['id']]);
+                $stmt = $db->prepare('UPDATE user_api_configs SET config_name = ?, api_name = ?, api_base_url = ?, model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, prompt_api_name = ?, prompt_api_base_url = ?, prompt_model = ?, prompt_request_timeout = ?, prompt_api_key_ciphertext = ?, prompt_api_key_iv = ?, prompt_api_key_tag = ?, prompt_api_key_hint = ?, vision_api_name = ?, vision_api_base_url = ?, vision_model = ?, vision_request_timeout = ?, vision_api_key_ciphertext = ?, vision_api_key_iv = ?, vision_api_key_tag = ?, vision_api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
+                $stmt->execute([
+                    $configName,
+                    $imageInput['apiName'],
+                    $imageInput['apiBaseUrl'],
+                    $imageInput['model'],
+                    $imageInput['requestTimeout'],
+                    $imageApiFields[0],
+                    $imageApiFields[1],
+                    $imageApiFields[2],
+                    $imageApiFields[3],
+                    $promptInput['apiName'],
+                    $promptInput['apiBaseUrl'],
+                    $promptInput['model'],
+                    $promptInput['requestTimeout'],
+                    $promptApiFields[0],
+                    $promptApiFields[1],
+                    $promptApiFields[2],
+                    $promptApiFields[3],
+                    $visionInput['apiName'],
+                    $visionInput['apiBaseUrl'],
+                    $visionInput['model'],
+                    $visionInput['requestTimeout'],
+                    $visionApiFields[0],
+                    $visionApiFields[1],
+                    $visionApiFields[2],
+                    $visionApiFields[3],
+                    $index,
+                    $configId,
+                    $user['id'],
+                ]);
             } else {
-                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_name, api_base_url, model, prompt_model, vision_model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-                $stmt->execute([$user['id'], $apiName, $apiBaseUrl, $model, $promptModel, $visionModel, $requestTimeout, $apiFields[0], $apiFields[1], $apiFields[2], $apiFields[3], $index]);
+                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, config_name, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, vision_api_name, vision_api_base_url, vision_model, vision_request_timeout, vision_api_key_ciphertext, vision_api_key_iv, vision_api_key_tag, vision_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt->execute([
+                    $user['id'],
+                    $configName,
+                    $imageInput['apiName'],
+                    $imageInput['apiBaseUrl'],
+                    $imageInput['model'],
+                    $imageInput['requestTimeout'],
+                    $imageApiFields[0],
+                    $imageApiFields[1],
+                    $imageApiFields[2],
+                    $imageApiFields[3],
+                    $promptInput['apiName'],
+                    $promptInput['apiBaseUrl'],
+                    $promptInput['model'],
+                    $promptInput['requestTimeout'],
+                    $promptApiFields[0],
+                    $promptApiFields[1],
+                    $promptApiFields[2],
+                    $promptApiFields[3],
+                    $visionInput['apiName'],
+                    $visionInput['apiBaseUrl'],
+                    $visionInput['model'],
+                    $visionInput['requestTimeout'],
+                    $visionApiFields[0],
+                    $visionApiFields[1],
+                    $visionApiFields[2],
+                    $visionApiFields[3],
+                    $index,
+                ]);
                 $configId = (int) $db->lastInsertId();
             }
 
@@ -468,40 +697,47 @@ function model_ids_from_response(array $data): array
     return array_values(array_unique($models));
 }
 
-function api_config_for_model_fetch(array $user, string $rawId): array
+function api_config_for_model_fetch(array $user, string $rawId, string $category): array
 {
     if (shared_api_enabled() && $rawId === SHARED_API_CONFIG_ID) {
         $row = site_settings_row();
+        $client = shared_api_category_client($row, $category);
         return [
-            'apiBaseUrl' => trim((string) ($row['shared_api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
-            'apiKey' => decrypt_shared_api_key($row),
+            'apiBaseUrl' => $client['apiBaseUrl'],
+            'apiKey' => decrypt_shared_api_key($row, $category),
+            'requestTimeout' => $client['requestTimeout'],
         ];
     }
 
     $configId = (int) $rawId;
-    if ($configId <= 0) return ['apiBaseUrl' => DEFAULT_API_BASE_URL, 'apiKey' => ''];
+    if ($configId <= 0) return ['apiBaseUrl' => DEFAULT_API_BASE_URL, 'apiKey' => '', 'requestTimeout' => DEFAULT_REQUEST_TIMEOUT];
 
     $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
     $stmt->execute([$configId, $user['id']]);
     $row = $stmt->fetch() ?: [];
+    $client = api_client_category($row, $category);
+    $prefix = $category === 'prompt' ? 'prompt_' : ($category === 'vision' ? 'vision_' : '');
 
     return [
-        'apiBaseUrl' => trim((string) ($row['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
-        'apiKey' => decrypt_api_key($row),
+        'apiBaseUrl' => $client['apiBaseUrl'],
+        'apiKey' => decrypt_prefixed_api_key($row, $prefix),
+        'requestTimeout' => $client['requestTimeout'],
     ];
 }
 
 function fetch_api_models_for_user(array $user, array $body): array
 {
     $rawId = (string) ($body['configId'] ?? ($body['config_id'] ?? ''));
-    $stored = api_config_for_model_fetch($user, $rawId);
+    $category = (string) ($body['category'] ?? ($body['apiCategory'] ?? ($body['api_category'] ?? 'image')));
+    if (!in_array($category, ['image', 'prompt', 'vision'], true)) $category = 'image';
+    $stored = api_config_for_model_fetch($user, $rawId, $category);
     $apiBaseUrl = normalize_api_base_url((string) ($body['apiBaseUrl'] ?? ($body['api_base_url'] ?? $stored['apiBaseUrl'])));
     if ($apiBaseUrl === '') $apiBaseUrl = $stored['apiBaseUrl'];
     $apiKey = trim((string) ($body['apiKey'] ?? ($body['api_key'] ?? '')));
     if ($apiKey === '') $apiKey = $stored['apiKey'];
     if ($apiKey === '') json_response(['error' => '请先填写或保存 API Key 后再获取模型。'], 400);
 
-    $timeout = normalize_request_timeout($body['requestTimeout'] ?? ($body['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT));
+    $timeout = normalize_request_timeout($body['requestTimeout'] ?? ($body['request_timeout'] ?? $stored['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT));
     $data = fetch_url_json(build_api_models_url($apiBaseUrl), [
         'Accept: application/json',
         'Authorization: Bearer ' . $apiKey,

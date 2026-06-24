@@ -97,9 +97,13 @@ export const useSession = (deps) => {
       return;
     }
 
-    const pendingApiKeys = new Map((apiConfigForm.apiConfigs || [])
-      .filter((item) => String(item.apiKey || '').trim())
-      .map((item) => [String(item.id), String(item.apiKey || '').trim()]));
+    const pendingApiKeys = new Map();
+    (apiConfigForm.apiConfigs || []).forEach((item) => {
+      ['imageApi', 'promptApi', 'visionApi'].forEach((key) => {
+        const apiKey = String(item[key]?.apiKey || (key === 'imageApi' ? item.apiKey : '') || '').trim();
+        if (apiKey) pendingApiKeys.set(`${item.id}:${key}`, apiKey);
+      });
+    });
 
     const nextSettings = normalizeServerSettings({
       ...apiConfigForm,
@@ -121,18 +125,35 @@ export const useSession = (deps) => {
           },
           apiConfigs: (apiConfigForm.apiConfigs || []).filter((item) => !item.isShared).map((item) => ({
             id: item.id,
-            apiName: item.apiName,
-            apiBaseUrl: item.apiBaseUrl,
-            model: item.model,
-            promptModel: item.promptModel,
-            visionModel: item.visionModel,
-            apiKey: item.apiKey,
-            confirmApiKeySave: Boolean(item.apiKey),
+            configName: item.configName,
+            apiName: item.imageApi?.apiName || item.apiName,
+            apiBaseUrl: item.imageApi?.apiBaseUrl || item.apiBaseUrl,
+            model: item.imageApi?.model || item.model,
+            requestTimeout: item.imageApi?.requestTimeout || item.requestTimeout,
+            apiKey: item.imageApi?.apiKey || item.apiKey,
+            confirmApiKeySave: Boolean(item.imageApi?.apiKey || item.apiKey),
+            clearApiKey: Boolean(item.imageApi?.clearApiKey),
+            imageApi: {
+              ...(item.imageApi || {}),
+              apiKey: item.imageApi?.apiKey || item.apiKey || '',
+              confirmApiKeySave: Boolean(item.imageApi?.apiKey || item.apiKey),
+            },
+            promptApi: {
+              ...(item.promptApi || {}),
+              confirmApiKeySave: Boolean(item.promptApi?.apiKey),
+            },
+            visionApi: {
+              ...(item.visionApi || {}),
+              confirmApiKeySave: Boolean(item.visionApi?.apiKey),
+            },
           })),
         }),
       });
       applyServerSettings(data.settings, user);
-      pendingApiKeys.forEach((apiKey, configId) => apiKeyVaultRef.current.set(configId, apiKey));
+      pendingApiKeys.forEach((apiKey, storageKey) => {
+        const [configId, category] = String(storageKey).split(':');
+        if (category === 'imageApi') apiKeyVaultRef.current.set(configId, apiKey);
+      });
       if (data.settings?.hasApiKey) await syncDirectApiKey(data.settings);
       setForm((current) => ({ ...current, model: data.settings?.model || activeApiConfig?.model || current.model }));
       setError('');

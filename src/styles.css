@@ -1751,6 +1751,10 @@ input::placeholder {
   min-width: 160px;
 }
 
+.api-config-name-fields {
+  margin-bottom: 12px;
+}
+
 .api-config-card.is-intro {
   padding: 12px;
   box-shadow: none;
@@ -1891,6 +1895,50 @@ select option {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.api-category-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.api-category-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 2px dashed rgba(17, 17, 17, 0.42);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+}
+
+.api-category-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.api-category-head > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.api-category-head strong {
+  color: var(--black);
+  font-size: 0.88rem;
+  font-weight: 950;
+}
+
+.api-category-head span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 820;
+  line-height: 1.45;
+}
+
+.compact-toggle-row {
+  min-height: 54px;
+  padding: 10px 12px;
 }
 
 .settings-section-title,
@@ -2138,6 +2186,10 @@ select option {
   gap: 8px;
   align-items: start;
   min-width: 0;
+}
+
+.single-model-picker-row {
+  grid-template-columns: 1fr;
 }
 
 .model-select-field {

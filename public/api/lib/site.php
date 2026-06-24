@@ -20,10 +20,19 @@ function site_settings_row(): array
         'shared_api_name' => DEFAULT_API_NAME,
         'shared_api_base_url' => DEFAULT_API_BASE_URL,
         'shared_model' => DEFAULT_IMAGE_MODEL,
-        'prompt_tools_enabled' => 1,
-        'shared_prompt_model' => '',
-        'shared_vision_model' => '',
         'shared_request_timeout' => DEFAULT_REQUEST_TIMEOUT,
+        'shared_api_key_hint' => '',
+        'prompt_tools_enabled' => 1,
+        'shared_prompt_api_name' => DEFAULT_PROMPT_API_NAME,
+        'shared_prompt_api_base_url' => DEFAULT_API_BASE_URL,
+        'shared_prompt_model' => '',
+        'shared_prompt_request_timeout' => DEFAULT_REQUEST_TIMEOUT,
+        'shared_prompt_api_key_hint' => '',
+        'shared_vision_api_name' => DEFAULT_VISION_API_NAME,
+        'shared_vision_api_base_url' => DEFAULT_API_BASE_URL,
+        'shared_vision_model' => '',
+        'shared_vision_request_timeout' => DEFAULT_REQUEST_TIMEOUT,
+        'shared_vision_api_key_hint' => '',
     ];
 }
 
@@ -81,36 +90,81 @@ function public_site_flags(): array
     ];
 }
 
-function shared_api_config_client(?array $row = null): array
+function shared_api_category_client(array $row, string $category): array
 {
-    $row = $row ?? site_settings_row();
+    if ($category === 'prompt') {
+        return [
+            'apiName' => trim((string) ($row['shared_prompt_api_name'] ?? '')) ?: DEFAULT_PROMPT_API_NAME,
+            'apiBaseUrl' => trim((string) ($row['shared_prompt_api_base_url'] ?? '')) ?: (trim((string) ($row['shared_api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL),
+            'model' => trim((string) ($row['shared_prompt_model'] ?? '')),
+            'requestTimeout' => normalize_request_timeout($row['shared_prompt_request_timeout'] ?? ($row['shared_request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
+            'hasApiKey' => !empty($row['shared_prompt_api_key_ciphertext']),
+            'apiKeyHint' => (string) ($row['shared_prompt_api_key_hint'] ?? ''),
+        ];
+    }
+
+    if ($category === 'vision') {
+        return [
+            'apiName' => trim((string) ($row['shared_vision_api_name'] ?? '')) ?: DEFAULT_VISION_API_NAME,
+            'apiBaseUrl' => trim((string) ($row['shared_vision_api_base_url'] ?? '')) ?: (trim((string) ($row['shared_api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL),
+            'model' => trim((string) ($row['shared_vision_model'] ?? '')),
+            'requestTimeout' => normalize_request_timeout($row['shared_vision_request_timeout'] ?? ($row['shared_request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
+            'hasApiKey' => !empty($row['shared_vision_api_key_ciphertext']),
+            'apiKeyHint' => (string) ($row['shared_vision_api_key_hint'] ?? ''),
+        ];
+    }
+
     return [
-        'id' => SHARED_API_CONFIG_ID,
         'apiName' => trim((string) ($row['shared_api_name'] ?? '')) ?: DEFAULT_API_NAME,
         'apiBaseUrl' => trim((string) ($row['shared_api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
         'model' => trim((string) ($row['shared_model'] ?? '')) ?: DEFAULT_IMAGE_MODEL,
-        'promptModel' => trim((string) ($row['shared_prompt_model'] ?? '')),
-        'visionModel' => trim((string) ($row['shared_vision_model'] ?? '')),
+        'requestTimeout' => normalize_request_timeout($row['shared_request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
         'hasApiKey' => !empty($row['shared_api_key_ciphertext']),
         'apiKeyHint' => (string) ($row['shared_api_key_hint'] ?? ''),
+    ];
+}
+
+function shared_api_config_client(?array $row = null): array
+{
+    $row = $row ?? site_settings_row();
+    $imageApi = shared_api_category_client($row, 'image');
+    $promptApi = shared_api_category_client($row, 'prompt');
+    $visionApi = shared_api_category_client($row, 'vision');
+
+    return [
+        'id' => SHARED_API_CONFIG_ID,
+        'configName' => '共享 API 配置',
+        'apiName' => $imageApi['apiName'],
+        'apiBaseUrl' => $imageApi['apiBaseUrl'],
+        'model' => $imageApi['model'],
+        'requestTimeout' => $imageApi['requestTimeout'],
+        'hasApiKey' => $imageApi['hasApiKey'],
+        'apiKeyHint' => $imageApi['apiKeyHint'],
+        'promptModel' => $promptApi['model'],
+        'visionModel' => $visionApi['model'],
+        'imageApi' => $imageApi,
+        'promptApi' => $promptApi,
+        'visionApi' => $visionApi,
+        'hasAnyApiKey' => $imageApi['hasApiKey'] || $promptApi['hasApiKey'] || $visionApi['hasApiKey'],
         'sortOrder' => -1,
         'isShared' => true,
     ];
 }
 
-function shared_api_key_fields(?array $row = null): array
+function shared_api_key_fields(?array $row = null, string $category = 'image'): array
 {
     $row = $row ?? site_settings_row();
+    $prefix = $category === 'prompt' ? 'shared_prompt_' : ($category === 'vision' ? 'shared_vision_' : 'shared_');
     return [
-        'api_key_ciphertext' => $row['shared_api_key_ciphertext'] ?? null,
-        'api_key_iv' => $row['shared_api_key_iv'] ?? null,
-        'api_key_tag' => $row['shared_api_key_tag'] ?? null,
+        'api_key_ciphertext' => $row[$prefix . 'api_key_ciphertext'] ?? null,
+        'api_key_iv' => $row[$prefix . 'api_key_iv'] ?? null,
+        'api_key_tag' => $row[$prefix . 'api_key_tag'] ?? null,
     ];
 }
 
-function decrypt_shared_api_key(?array $row = null): string
+function decrypt_shared_api_key(?array $row = null, string $category = 'image'): string
 {
-    $fields = shared_api_key_fields($row);
+    $fields = shared_api_key_fields($row, $category);
     $plain = decrypt_api_key_with_secret($fields, api_key_secret());
     if ($plain !== '') return $plain;
 
@@ -134,10 +188,67 @@ function admin_site_settings_view(): array
     ];
 }
 
+function shared_api_category_input(array $shared, string $category, array $current): array
+{
+    $nested = is_array($shared[$category . 'Api'] ?? null) ? $shared[$category . 'Api'] : [];
+    if ($category === 'image') {
+        return [
+            'apiName' => trim((string) ($nested['apiName'] ?? ($nested['api_name'] ?? ($shared['apiName'] ?? ($shared['api_name'] ?? $current['apiName']))))) ?: DEFAULT_API_NAME,
+            'apiBaseUrl' => normalize_api_base_url((string) ($nested['apiBaseUrl'] ?? ($nested['api_base_url'] ?? ($shared['apiBaseUrl'] ?? ($shared['api_base_url'] ?? $current['apiBaseUrl']))))),
+            'model' => trim((string) ($nested['model'] ?? ($shared['model'] ?? $current['model']))) ?: DEFAULT_IMAGE_MODEL,
+            'requestTimeout' => normalize_request_timeout($nested['requestTimeout'] ?? ($nested['request_timeout'] ?? ($shared['requestTimeout'] ?? ($shared['request_timeout'] ?? $current['requestTimeout'])))),
+            'apiKey' => trim((string) ($nested['apiKey'] ?? ($nested['api_key'] ?? ($shared['apiKey'] ?? ($shared['api_key'] ?? ''))))),
+            'clearApiKey' => !empty($nested['clearApiKey']) || !empty($nested['clear_api_key']) || !empty($shared['clearApiKey']) || !empty($shared['clear_api_key']),
+        ];
+    }
+
+    $legacyModelKey = $category === 'prompt' ? 'promptModel' : 'visionModel';
+    $snakeModelKey = $category === 'prompt' ? 'prompt_model' : 'vision_model';
+    $camelApiNameKey = $category . 'ApiName';
+    $camelApiBaseUrlKey = $category . 'ApiBaseUrl';
+    $camelRequestTimeoutKey = $category . 'RequestTimeout';
+    $camelApiKeyKey = $category . 'ApiKey';
+    $camelClearKey = $category . 'ClearApiKey';
+    $snakeApiNameKey = $category . '_api_name';
+    $snakeApiBaseUrlKey = $category . '_api_base_url';
+    $snakeRequestTimeoutKey = $category . '_request_timeout';
+    $snakeApiKeyKey = $category . '_api_key';
+    $snakeClearKey = $category . '_clear_api_key';
+
+    $defaultApiName = $category === 'prompt' ? DEFAULT_PROMPT_API_NAME : DEFAULT_VISION_API_NAME;
+
+    return [
+        'apiName' => trim((string) ($nested['apiName'] ?? ($nested['api_name'] ?? ($shared[$camelApiNameKey] ?? ($shared[$snakeApiNameKey] ?? $defaultApiName))))) ?: $defaultApiName,
+        'apiBaseUrl' => normalize_api_base_url((string) ($nested['apiBaseUrl'] ?? ($nested['api_base_url'] ?? ($shared[$camelApiBaseUrlKey] ?? ($shared[$snakeApiBaseUrlKey] ?? $current['apiBaseUrl']))))),
+        'model' => trim((string) ($nested['model'] ?? ($shared[$legacyModelKey] ?? ($shared[$snakeModelKey] ?? $current['model'])))),
+        'requestTimeout' => normalize_request_timeout($nested['requestTimeout'] ?? ($nested['request_timeout'] ?? ($shared[$camelRequestTimeoutKey] ?? ($shared[$snakeRequestTimeoutKey] ?? $current['requestTimeout'])))),
+        'apiKey' => trim((string) ($nested['apiKey'] ?? ($nested['api_key'] ?? ($shared[$camelApiKeyKey] ?? ($shared[$snakeApiKeyKey] ?? ($shared['apiKey'] ?? ($shared['api_key'] ?? ''))))))),
+        'clearApiKey' => !empty($nested['clearApiKey']) || !empty($nested['clear_api_key']) || !empty($shared[$camelClearKey]) || !empty($shared[$snakeClearKey]),
+    ];
+}
+
+function shared_api_key_storage_fields(array $input, array $row, string $category): array
+{
+    $apiKey = trim((string) ($input['apiKey'] ?? ''));
+    if ($apiKey !== '' && api_key_secret() === '') json_response(['error' => '服务端未配置 USER_API_KEY_SECRET'], 500);
+    $prefix = $category === 'prompt' ? 'shared_prompt_' : ($category === 'vision' ? 'shared_vision_' : 'shared_');
+    if (!empty($input['clearApiKey'])) return [null, null, null, null];
+
+    $encrypted = $apiKey !== '' ? encrypt_api_key($apiKey) : [];
+    return [
+        $encrypted['api_key_ciphertext'] ?? ($row[$prefix . 'api_key_ciphertext'] ?? null),
+        $encrypted['api_key_iv'] ?? ($row[$prefix . 'api_key_iv'] ?? null),
+        $encrypted['api_key_tag'] ?? ($row[$prefix . 'api_key_tag'] ?? null),
+        $encrypted['api_key_hint'] ?? ($row[$prefix . 'api_key_hint'] ?? null),
+    ];
+}
+
 function save_site_settings(array $body): array
 {
     $db = pdo();
     site_settings_row();
+    $row = site_settings_row();
+    $current = shared_api_config_client($row);
 
     $wallRequireLogin = !empty($body['wallRequireLogin']) ? 1 : 0;
     $registrationEnabled = !empty($body['registrationEnabled']) ? 1 : 0;
@@ -145,38 +256,49 @@ function save_site_settings(array $body): array
     $promptToolsEnabled = array_key_exists('promptToolsEnabled', $body) ? (!empty($body['promptToolsEnabled']) ? 1 : 0) : 1;
 
     $shared = is_array($body['sharedApi'] ?? null) ? $body['sharedApi'] : [];
-    $apiName = trim((string) ($shared['apiName'] ?? '')) ?: DEFAULT_API_NAME;
-    $apiBaseUrl = normalize_api_base_url((string) ($shared['apiBaseUrl'] ?? ''));
-    if ($apiBaseUrl === '') $apiBaseUrl = DEFAULT_API_BASE_URL;
-    if (!valid_api_base_url($apiBaseUrl)) json_response(['error' => 'API 地址必须是 http 或 https 地址'], 400);
-    $model = trim((string) ($shared['model'] ?? '')) ?: DEFAULT_IMAGE_MODEL;
-    $promptModel = trim((string) ($shared['promptModel'] ?? ($shared['prompt_model'] ?? '')));
-    $visionModel = trim((string) ($shared['visionModel'] ?? ($shared['vision_model'] ?? '')));
+    $imageInput = shared_api_category_input($shared, 'image', $current['imageApi']);
+    $promptInput = shared_api_category_input($shared, 'prompt', $current['promptApi']);
+    $visionInput = shared_api_category_input($shared, 'vision', $current['visionApi']);
 
-    $apiKey = trim((string) ($shared['apiKey'] ?? ''));
-    $clearApiKey = !empty($shared['clearApiKey']);
-    if ($apiKey !== '' && api_key_secret() === '') json_response(['error' => '服务端未配置 USER_API_KEY_SECRET'], 500);
+    if (!valid_api_base_url($imageInput['apiBaseUrl'])) json_response(['error' => '生图 API 地址必须是 http 或 https 地址'], 400);
+    if (!valid_api_base_url($promptInput['apiBaseUrl'])) json_response(['error' => '提示词优化 API 地址必须是 http 或 https 地址'], 400);
+    if (!valid_api_base_url($visionInput['apiBaseUrl'])) json_response(['error' => '图片反推 API 地址必须是 http 或 https 地址'], 400);
 
-    if ($clearApiKey) {
-        $keyClause = ', shared_api_key_ciphertext = NULL, shared_api_key_iv = NULL, shared_api_key_tag = NULL, shared_api_key_hint = NULL';
-        $keyParams = [];
-    } elseif ($apiKey !== '') {
-        $encrypted = encrypt_api_key($apiKey);
-        $keyClause = ', shared_api_key_ciphertext = ?, shared_api_key_iv = ?, shared_api_key_tag = ?, shared_api_key_hint = ?';
-        $keyParams = [
-            $encrypted['api_key_ciphertext'],
-            $encrypted['api_key_iv'],
-            $encrypted['api_key_tag'],
-            $encrypted['api_key_hint'],
-        ];
-    } else {
-        $keyClause = '';
-        $keyParams = [];
-    }
+    $imageApiFields = shared_api_key_storage_fields($imageInput, $row, 'image');
+    $promptApiFields = shared_api_key_storage_fields($promptInput, $row, 'prompt');
+    $visionApiFields = shared_api_key_storage_fields($visionInput, $row, 'vision');
 
-    $sql = 'UPDATE site_settings SET wall_require_login = ?, registration_enabled = ?, shared_api_enabled = ?, prompt_tools_enabled = ?, shared_api_name = ?, shared_api_base_url = ?, shared_model = ?, shared_prompt_model = ?, shared_vision_model = ?' . $keyClause . ' WHERE id = 1';
-    $params = array_merge([$wallRequireLogin, $registrationEnabled, $sharedApiEnabled, $promptToolsEnabled, $apiName, $apiBaseUrl, $model, $promptModel, $visionModel], $keyParams);
-    $db->prepare($sql)->execute($params);
+    $stmt = $db->prepare('UPDATE site_settings SET wall_require_login = ?, registration_enabled = ?, shared_api_enabled = ?, prompt_tools_enabled = ?, shared_api_name = ?, shared_api_base_url = ?, shared_model = ?, shared_request_timeout = ?, shared_api_key_ciphertext = ?, shared_api_key_iv = ?, shared_api_key_tag = ?, shared_api_key_hint = ?, shared_prompt_api_name = ?, shared_prompt_api_base_url = ?, shared_prompt_model = ?, shared_prompt_request_timeout = ?, shared_prompt_api_key_ciphertext = ?, shared_prompt_api_key_iv = ?, shared_prompt_api_key_tag = ?, shared_prompt_api_key_hint = ?, shared_vision_api_name = ?, shared_vision_api_base_url = ?, shared_vision_model = ?, shared_vision_request_timeout = ?, shared_vision_api_key_ciphertext = ?, shared_vision_api_key_iv = ?, shared_vision_api_key_tag = ?, shared_vision_api_key_hint = ? WHERE id = 1');
+    $stmt->execute([
+        $wallRequireLogin,
+        $registrationEnabled,
+        $sharedApiEnabled,
+        $promptToolsEnabled,
+        $imageInput['apiName'],
+        $imageInput['apiBaseUrl'],
+        $imageInput['model'],
+        $imageInput['requestTimeout'],
+        $imageApiFields[0],
+        $imageApiFields[1],
+        $imageApiFields[2],
+        $imageApiFields[3],
+        $promptInput['apiName'],
+        $promptInput['apiBaseUrl'],
+        $promptInput['model'],
+        $promptInput['requestTimeout'],
+        $promptApiFields[0],
+        $promptApiFields[1],
+        $promptApiFields[2],
+        $promptApiFields[3],
+        $visionInput['apiName'],
+        $visionInput['apiBaseUrl'],
+        $visionInput['model'],
+        $visionInput['requestTimeout'],
+        $visionApiFields[0],
+        $visionApiFields[1],
+        $visionApiFields[2],
+        $visionApiFields[3],
+    ]);
 
     return admin_site_settings_view();
 }
