@@ -269,12 +269,18 @@ button {
 .toolbar-icon-button:hover,
 .secondary-action:hover:not(:disabled),
 .text-button:hover:not(:disabled),
-.close-button:hover,
 .option-row:hover,
 .result-card a:hover,
 .wall-icon:hover:not(:disabled) {
   background: var(--black);
   color: var(--white);
+  transform: translate(-3px, -3px);
+  box-shadow: var(--shadow-hard);
+}
+
+.close-button:hover {
+  background: var(--white);
+  color: var(--black);
   transform: translate(-3px, -3px);
   box-shadow: var(--shadow-hard);
 }
@@ -1405,6 +1411,11 @@ input::placeholder {
   top: 12px;
   right: 12px;
   background: var(--white);
+}
+
+.modal-frame > .modal-close-button:hover {
+  background: var(--white);
+  color: var(--black);
 }
 
 .modal-card > .modal-head {
