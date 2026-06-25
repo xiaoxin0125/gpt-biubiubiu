@@ -22,6 +22,14 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 html,
@@ -39,46 +47,6 @@ body {
     linear-gradient(90deg, rgba(0, 0, 0, 0.035) 1px, transparent 1px) 0 0 / 42px 42px,
     linear-gradient(rgba(0, 0, 0, 0.035) 1px, transparent 1px) 0 0 / 42px 42px,
     var(--paper);
-}
-
-html,
-body,
-.image-board,
-.custom-select-menu,
-.option-list,
-.history-list {
-  scrollbar-width: thin;
-  scrollbar-color: var(--black) rgba(255, 255, 255, 0.72);
-}
-
-html::-webkit-scrollbar,
-body::-webkit-scrollbar,
-.image-board::-webkit-scrollbar,
-.custom-select-menu::-webkit-scrollbar,
-.option-list::-webkit-scrollbar,
-.history-list::-webkit-scrollbar {
-  width: 10px;
-}
-
-html::-webkit-scrollbar-track,
-body::-webkit-scrollbar-track,
-.image-board::-webkit-scrollbar-track,
-.custom-select-menu::-webkit-scrollbar-track,
-.option-list::-webkit-scrollbar-track,
-.history-list::-webkit-scrollbar-track {
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-}
-
-html::-webkit-scrollbar-thumb,
-body::-webkit-scrollbar-thumb,
-.image-board::-webkit-scrollbar-thumb,
-.custom-select-menu::-webkit-scrollbar-thumb,
-.option-list::-webkit-scrollbar-thumb,
-.history-list::-webkit-scrollbar-thumb {
-  border: 2px solid rgba(255, 255, 255, 0.72);
-  border-radius: 999px;
-  background: var(--black);
 }
 
 button,
@@ -1846,10 +1814,6 @@ select option {
   background: var(--white);
 }
 
-.api-config-card.is-active {
-  box-shadow: 4px 4px 0 #d8d8d0;
-}
-
 .api-config-card-head {
   display: flex;
   align-items: flex-start;
@@ -2574,7 +2538,7 @@ select option {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border: 2px solid var(--line);
+  border: 2px dashed var(--line);
   border-radius: var(--radius);
   background: var(--paper-2);
   overflow: hidden;
@@ -2634,7 +2598,7 @@ select option {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 2px solid var(--line);
+  border: 2px dashed var(--line);
   border-radius: var(--radius);
   background: rgba(246, 246, 241, 0.72);
 }
@@ -2683,7 +2647,7 @@ select option {
 
 .shared-api-summary {
   padding: 10px;
-  border: 2px solid var(--line);
+  border: 2px dashed var(--line);
   border-radius: var(--radius);
   background: var(--paper-2);
 }
