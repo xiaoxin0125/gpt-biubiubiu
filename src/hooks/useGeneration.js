@@ -8,7 +8,7 @@ import {
   normalizeOutputFormat,
   normalizeQuality,
   normalizeResponseFormat,
-  normalizeRevisedPrompt,
+  normalizeVisibleRevisedPrompt,
 } from '../lib/form';
 import {
   normalizeDirectImageResponse,
@@ -194,7 +194,7 @@ export const useGeneration = (deps) => {
                 mode: normalizeImageSource(image.source),
                 image: imagePayload,
                 prompt,
-                revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
+                revised_prompt: normalizeVisibleRevisedPrompt(prompt, image.revised_prompt),
                 form: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
                 params: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
               }),

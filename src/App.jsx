@@ -39,7 +39,7 @@ import {
 import {
   normalizeForm,
   normalizeResponseFormat,
-  normalizeRevisedPrompt,
+  normalizeVisibleRevisedPrompt,
 } from './lib/form';
 import {
   flattenHistoryImages,
@@ -869,7 +869,7 @@ function App() {
   const detailIsFailed = selectedImage?.status === 'failed' && !detailSrc;
   const detailIsPending = selectedImage?.status === 'pending' && !detailSrc;
   const detailInputPrompt = selectedImage?.prompt || detailParams.prompt || '';
-  const detailRevisedPrompt = normalizeRevisedPrompt(selectedImage?.revised_prompt);
+  const detailRevisedPrompt = normalizeVisibleRevisedPrompt(detailInputPrompt, selectedImage?.revised_prompt);
   const detailElapsedSeconds = selectedImage ? getElapsedSeconds(selectedImage) : null;
   const detailElapsed = detailElapsedSeconds === null ? '' : formatDuration(detailElapsedSeconds);
   const selectedWallItem = detailSrc ? findWallItem(selectedImage) : null;

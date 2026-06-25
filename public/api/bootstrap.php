@@ -18,7 +18,7 @@ define('DEFAULT_API_BASE_URL', 'https://api.openai.com');
 define('DEFAULT_IMAGE_MODEL', 'gpt-image-2');
 define('MAX_IMAGE_UPLOAD_BYTES', 20 * 1024 * 1024);
 define('MIN_SECRET_LENGTH', 32);
-define('SCHEMA_VERSION', '2026-06-18d');
+define('SCHEMA_VERSION', '2026-06-25a');
 define('SHARED_API_CONFIG_ID', 'shared');
 
 define('WEAK_SECRET_VALUES', [

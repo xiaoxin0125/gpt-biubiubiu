@@ -2,7 +2,7 @@ import { boardFilterOptions, boardScopeOptions, wallFilterOptions } from '../con
 import { createImageSrc } from '../lib/images';
 import { clampNumber } from '../lib/math';
 import { estimateImageAspectRatio, getEmptyBoardText, getImageIdentity } from '../lib/board';
-import { normalizeRevisedPrompt } from '../lib/form';
+import { normalizeVisibleRevisedPrompt } from '../lib/form';
 import { defaultApiConfigItem } from '../constants/options';
 
 export default function ImageBoard({
@@ -44,7 +44,7 @@ export default function ImageBoard({
     const aspectRatio = estimateImageAspectRatio(image, imageMeta);
     const isPending = image.status === 'pending';
     const isFailed = image.status === 'failed';
-    const title = normalizeRevisedPrompt(image.revised_prompt) || image.prompt || image.form?.prompt || 'Generated image';
+    const title = normalizeVisibleRevisedPrompt(image.prompt || image.form?.prompt, image.revised_prompt) || image.prompt || image.form?.prompt || 'Generated image';
     const savedApiName = String(image.apiName || image.api_name || image.form?.apiName || image.form?.api_name || '').trim();
     const apiName = view === 'wall'
       ? savedApiName || '未知 API'

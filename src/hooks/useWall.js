@@ -1,7 +1,7 @@
 import { defaultApiConfigItem } from '../constants/options';
 import { requestJson } from '../lib/api';
 import { isSameImageIdentity } from '../lib/board';
-import { normalizeRevisedPrompt } from '../lib/form';
+import { normalizeVisibleRevisedPrompt } from '../lib/form';
 import { createImageSrc, getGeneratedImageJobId, normalizeImageSource } from '../lib/images';
 import { applyWallPatch } from '../lib/optimistic';
 
@@ -94,12 +94,13 @@ export const useWall = (deps) => {
       if (!sourceJobId) throw new Error('请等待作品保存到服务器后再上墙。');
 
       const wallForm = { ...(image.form || form), apiName: image.apiName || activeApiConfig?.apiName || status.apiName || defaultApiConfigItem.apiName, source: normalizeImageSource(image.source), sourceJobId };
+      const prompt = image.prompt || image.form?.prompt || form.prompt;
       const data = await requestJson('/api/wall', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: image.prompt || image.form?.prompt || form.prompt,
-          revised_prompt: normalizeRevisedPrompt(image.revised_prompt),
+          prompt,
+          revised_prompt: normalizeVisibleRevisedPrompt(prompt, image.revised_prompt),
           durationSeconds: getElapsedSeconds(image),
           sourceJobId,
           form: wallForm,

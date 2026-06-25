@@ -390,6 +390,9 @@ function ensure_schema(): void
       shared_vision_api_key_tag = COALESCE(shared_vision_api_key_tag, shared_api_key_tag),
       shared_vision_api_key_hint = COALESCE(shared_vision_api_key_hint, shared_api_key_hint)");
 
+    $db->exec("UPDATE image_jobs SET revised_prompt = NULL WHERE revised_prompt IS NOT NULL AND (TRIM(revised_prompt) = '' OR TRIM(revised_prompt) = TRIM(COALESCE(prompt, '')))");
+    $db->exec("UPDATE wall_items SET revised_prompt = NULL WHERE revised_prompt IS NOT NULL AND (TRIM(revised_prompt) = '' OR TRIM(revised_prompt) = TRIM(COALESCE(prompt, '')))");
+
     $stmt = $db->prepare('INSERT INTO schema_meta (meta_key, meta_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)');
     $stmt->execute(['schema_version', SCHEMA_VERSION]);
 

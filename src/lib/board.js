@@ -1,5 +1,5 @@
 import { MASONRY_CARD_GAP_RATIO, MASONRY_CARD_TEXT_HEIGHT_RATIO } from '../constants/options';
-import { normalizeForm } from './form';
+import { normalizeForm, normalizeVisibleRevisedPrompt } from './form';
 import { createImageSrc, normalizeImageSource } from './images';
 import { clampNumber } from './math';
 import { parseSize } from './size';
@@ -15,12 +15,16 @@ export const getEmptyBoardText = (scope, view = 'generate') => {
 
 export const normalizeBoardImage = (image, fallback = {}) => {
   const hasRenderableImage = Boolean(createImageSrc(image));
+  const form = normalizeForm(image?.form || fallback.form || {});
+  const prompt = image?.prompt || fallback.prompt || image?.form?.prompt || fallback.form?.prompt || '';
+
   return {
     ...image,
     id: image?.id || fallback.id || `image-${Date.now()}`,
     status: hasRenderableImage ? 'completed' : image?.status || 'completed',
-    form: normalizeForm(image?.form || fallback.form || {}),
-    prompt: image?.prompt || fallback.prompt || image?.form?.prompt || fallback.form?.prompt || '',
+    form,
+    prompt,
+    revised_prompt: normalizeVisibleRevisedPrompt(prompt, image?.revised_prompt, image?.revisedPrompt, image?.prompt_revised),
     createdAt: image?.createdAt || fallback.createdAt || new Date().toISOString(),
     source: normalizeImageSource(image?.source || fallback.source),
   };

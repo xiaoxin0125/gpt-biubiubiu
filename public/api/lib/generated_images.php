@@ -19,14 +19,24 @@ function extract_revised_prompt($value): string
     return '';
 }
 
+function normalize_visible_revised_prompt(string $inputPrompt, string $revisedPrompt): string
+{
+    $revisedPrompt = trim($revisedPrompt);
+    if ($revisedPrompt === '') return '';
+
+    $inputPrompt = trim($inputPrompt);
+    if ($inputPrompt !== '' && preg_replace('/\s+/u', ' ', $revisedPrompt) === preg_replace('/\s+/u', ' ', $inputPrompt)) return '';
+    return $revisedPrompt;
+}
+
 function normalize_job_mode(string $mode): string
 {
     return $mode === 'edit' ? 'edit' : 'generation';
 }
 
-function normalize_revised_prompt(array $body): string
+function normalize_revised_prompt(array $body, string $inputPrompt = ''): string
 {
-    return extract_revised_prompt($body);
+    return normalize_visible_revised_prompt($inputPrompt, extract_revised_prompt($body));
 }
 
 function sanitize_log_payload($value)
@@ -49,7 +59,7 @@ function sanitize_log_payload($value)
 function save_image_job(array $user, string $requestId, string $mode, string $prompt, array $params, array $result, ?string $error = null): int
 {
     $firstImage = $result['data'][0] ?? [];
-    $revisedPrompt = extract_revised_prompt($firstImage) ?: extract_revised_prompt($result);
+    $revisedPrompt = normalize_visible_revised_prompt($prompt, extract_revised_prompt($firstImage) ?: extract_revised_prompt($result));
     $displayUrl = (string) ($firstImage['url'] ?? ($firstImage['image_url'] ?? ''));
     $originalUrl = (string) ($firstImage['downloadUrl'] ?? ($firstImage['originalUrl'] ?? ($firstImage['original_url'] ?? $displayUrl)));
     $stmt = pdo()->prepare('INSERT INTO image_jobs (user_id, request_id, mode, status, prompt, revised_prompt, error_message, image_url, original_url, display_url, image_mime, original_bytes, display_bytes, image_b64, params_json, result_json, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
@@ -96,6 +106,8 @@ function client_generated_image(array $item): array
     $imageParams = is_array($params['form'] ?? null) ? $params['form'] : (is_array($params['payload'] ?? null) ? $params['payload'] : (is_array($params['fields'] ?? null) ? $params['fields'] : $params));
     $completedAt = (string) (($item['completed_at'] ?? '') ?: '');
     $createdAt = $completedAt ?: (string) (($item['created_at'] ?? '') ?: date(DATE_ATOM));
+    $prompt = (string) (($item['prompt'] ?? '') ?: ($imageParams['prompt'] ?? ''));
+    $revisedPrompt = normalize_visible_revised_prompt($prompt, (string) (($item['revised_prompt'] ?? '') ?: ($firstImage['revised_prompt'] ?? '')));
 
     return [
         'id' => 'job-' . $id,
@@ -112,8 +124,8 @@ function client_generated_image(array $item): array
         'imageMime' => (string) (($item['image_mime'] ?? '') ?: ($firstImage['imageMime'] ?? 'image/png')),
         'originalBytes' => isset($item['original_bytes']) ? (int) $item['original_bytes'] : ($firstImage['originalBytes'] ?? null),
         'displayBytes' => isset($item['display_bytes']) ? (int) $item['display_bytes'] : ($firstImage['displayBytes'] ?? null),
-        'prompt' => (string) (($item['prompt'] ?? '') ?: ($imageParams['prompt'] ?? '')),
-        'revised_prompt' => (string) (($item['revised_prompt'] ?? '') ?: ($firstImage['revised_prompt'] ?? '')),
+        'prompt' => $prompt,
+        'revised_prompt' => $revisedPrompt,
         'form' => $imageParams,
         'apiName' => (string) ($imageParams['apiName'] ?? ($imageParams['api_name'] ?? '')),
         'authorName' => '',
@@ -190,7 +202,7 @@ function handle_save_generated_image(array $user, array $body): array
     $requestId = preg_replace('/[^a-zA-Z0-9_.-]/', '-', (string) ($body['requestId'] ?? ($body['request_id'] ?? ('request-' . time()))));
     $mode = normalize_job_mode((string) ($body['mode'] ?? ($params['source'] ?? 'generation')));
     $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? ($params['prompt'] ?? ''))));
-    $revisedPrompt = normalize_revised_prompt($body);
+    $revisedPrompt = normalize_revised_prompt($body, $prompt);
     $resultImage = [
         'url' => $stored['displayUrl'],
         'image_url' => $stored['displayUrl'],

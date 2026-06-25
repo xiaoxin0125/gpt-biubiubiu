@@ -21,6 +21,16 @@ export const getResponseFormatLabel = (value) => responseFormatOptions.find((ite
 
 export const normalizeRevisedPrompt = (...values) => values.map((value) => String(value || '').trim()).find(Boolean) || '';
 
+const comparablePromptText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+
+export const normalizeVisibleRevisedPrompt = (inputPrompt, ...values) => {
+  const revisedPrompt = normalizeRevisedPrompt(...values);
+  if (!revisedPrompt) return '';
+
+  const inputText = comparablePromptText(inputPrompt);
+  return inputText && comparablePromptText(revisedPrompt) === inputText ? '' : revisedPrompt;
+};
+
 export const normalizeForm = (value = {}) => {
   const nextForm = { ...defaultForm, ...value };
 

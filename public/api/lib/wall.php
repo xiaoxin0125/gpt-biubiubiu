@@ -78,7 +78,7 @@ function handle_create_wall_item(array $user, array $body): array
     $params['source'] = normalize_job_mode((string) ($job['mode'] ?? ($params['source'] ?? 'generation')));
 
     $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? ($job['prompt'] ?? '未命名作品'))));
-    $revisedPrompt = extract_revised_prompt($body) ?: trim((string) ($job['revised_prompt'] ?? ''));
+    $revisedPrompt = normalize_visible_revised_prompt($prompt, extract_revised_prompt($body) ?: trim((string) ($job['revised_prompt'] ?? '')));
     $ownerId = (int) ($job['user_id'] ?? $user['id']);
     $authorName = image_job_author_name($job, $user);
 
@@ -158,6 +158,8 @@ function client_wall_item(array $item): array
     $originalUrl = (string) (($item['original_url'] ?? '') ?: (($item['image_url'] ?? '') ?: $displayUrl));
     $duration = $item['duration_seconds'] ?? ($params['durationSeconds'] ?? null);
     $createdAt = (string) (($item['created_at'] ?? '') ?: date(DATE_ATOM));
+    $prompt = (string) (($item['prompt'] ?? '') ?: '');
+    $revisedPrompt = normalize_visible_revised_prompt($prompt, (string) (($item['revised_prompt'] ?? '') ?: ''));
 
     return [
         'id' => (int) ($item['id'] ?? 0),
@@ -172,8 +174,8 @@ function client_wall_item(array $item): array
         'imageMime' => (string) (($item['image_mime'] ?? '') ?: 'image/png'),
         'originalBytes' => isset($item['original_bytes']) ? (int) $item['original_bytes'] : null,
         'displayBytes' => isset($item['display_bytes']) ? (int) $item['display_bytes'] : null,
-        'prompt' => (string) (($item['prompt'] ?? '') ?: ''),
-        'revised_prompt' => (string) (($item['revised_prompt'] ?? '') ?: ''),
+        'prompt' => $prompt,
+        'revised_prompt' => $revisedPrompt,
         'form' => $params,
         'apiName' => (string) ($params['apiName'] ?? ($params['api_name'] ?? '')),
         'authorName' => (string) (($item['author_name'] ?? '') ?: '未知艺术家'),
