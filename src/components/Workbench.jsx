@@ -33,12 +33,19 @@ export default function Workbench({
   return (
     <form className="bottom-workbench" onSubmit={generate}>
       <div className="prompt-console">
-        <textarea
-          value={form.prompt}
-          onChange={(event) => updateForm('prompt', event.target.value)}
-          placeholder="描述你想生成的图片..."
-          rows={2}
-        />
+        <div className="prompt-input-wrap">
+          <textarea
+            value={form.prompt}
+            onChange={(event) => updateForm('prompt', event.target.value)}
+            placeholder="描述你想生成的图片..."
+            rows={2}
+          />
+          {form.prompt ? (
+            <button type="button" className="prompt-clear-button" onClick={() => updateForm('prompt', '')} aria-label="清空描述内容">
+              ×
+            </button>
+          ) : null}
+        </div>
 
         <div className={workbenchExpanded ? 'workbench-actions is-expanded' : 'workbench-actions'}>
           <button type="button" className="workbench-toggle-button" onClick={() => setWorkbenchExpanded((current) => !current)} aria-expanded={workbenchExpanded} aria-label={workbenchExpanded ? '收起参数' : '展开参数'}>

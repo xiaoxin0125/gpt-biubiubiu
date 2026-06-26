@@ -731,6 +731,11 @@ button:disabled {
   border-radius: var(--radius-lg);
 }
 
+.prompt-input-wrap {
+  position: relative;
+  display: grid;
+}
+
 .prompt-console textarea {
   width: 100%;
   min-height: 48px;
@@ -741,10 +746,47 @@ button:disabled {
   outline: none;
   background: var(--white);
   color: var(--black);
-  padding: 12px 14px;
+  padding: 12px 42px 12px 14px;
   font-size: 0.98rem;
   font-weight: 680;
   line-height: 1.55;
+}
+
+.prompt-clear-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--black);
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 950;
+  line-height: 1;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.prompt-clear-button:hover,
+.prompt-clear-button:focus-visible {
+  background: var(--black);
+  color: var(--white);
+}
+
+.prompt-clear-button:active {
+  transform: scale(0.94);
+}
+
+.prompt-clear-button:focus-visible {
+  outline: 2px solid var(--black);
+  outline-offset: 2px;
 }
 
 .prompt-console textarea::placeholder,
