@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS wall_items (
   params_json JSON DEFAULT NULL,
   source_job_id BIGINT UNSIGNED DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_wall_items_created (created_at),
+  INDEX idx_wall_items_created_id (created_at, id),
   INDEX idx_wall_items_user (user_id),
   INDEX idx_wall_items_client (client_id),
   CONSTRAINT fk_wall_items_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,

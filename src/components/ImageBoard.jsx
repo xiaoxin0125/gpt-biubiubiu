@@ -193,6 +193,13 @@ export default function ImageBoard({
               <div className="board-loader is-complete">已展示全部作品</div>
             )}
           </>
+        ) : hasMoreBoardItems || boardLoadingMore ? (
+          <>
+            <div className="board-load-sentinel" ref={boardLoadSentinelRef} aria-hidden="true" />
+            <div className="board-loader" role="status">
+              {boardLoadingMore ? '加载更多作品...' : '继续加载作品...'}
+            </div>
+          </>
         ) : (
           <div className="empty-canvas">
             <span className="empty-mark" aria-hidden="true">

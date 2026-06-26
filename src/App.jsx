@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AccountModal from './components/AccountModal';
 import CustomSelect from './components/CustomSelect';
 import ImageBoard from './components/ImageBoard';
@@ -70,6 +70,8 @@ function App() {
   const [history, setHistory] = useState([]);
   const [images, setImages] = useState([]);
   const [wallItems, setWallItems] = useState([]);
+  const [wallNextCursor, setWallNextCursor] = useState('');
+  const [wallHasMore, setWallHasMore] = useState(false);
   const [referenceImages, setReferenceImages] = useState([]);
   const [maskImage, setMaskImage] = useState(null);
   const [user, setUser] = useState(null);
@@ -287,18 +289,41 @@ function App() {
 
   const wallLocked = siteFlags.wallRequireLogin && !user;
 
-  const loadWall = async () => {
+  const loadWall = useCallback(async ({ append = false, resetBoard = true } = {}) => {
     if (wallLocked) {
       setWallItems([]);
+      setWallNextCursor('');
+      setWallHasMore(false);
       return;
     }
+
+    const cursor = append ? wallNextCursor : '';
+    if (append && !cursor) return;
+    if (!append && resetBoard) {
+      setBoardVisibleCount(BOARD_PAGE_SIZE);
+      if (boardRef.current) boardRef.current.scrollTop = 0;
+    }
+
     try {
-      const data = await requestJson('/api/wall');
-      setWallItems(Array.isArray(data.items) ? data.items : []);
+      const query = new URLSearchParams({ limit: String(Math.max(BOARD_PAGE_SIZE * 2, 40)) });
+      if (cursor) query.set('cursor', cursor);
+      const data = await requestJson(`/api/wall?${query.toString()}`);
+      const nextItems = Array.isArray(data.items) ? data.items : [];
+
+      setWallItems((current) => {
+        if (!append) return nextItems;
+        const seenIds = new Set(current.map((item) => String(item.id || item.wallItemId || createImageSrc(item))));
+        return [
+          ...current,
+          ...nextItems.filter((item) => !seenIds.has(String(item.id || item.wallItemId || createImageSrc(item)))),
+        ];
+      });
+      setWallHasMore(Boolean(data.hasMore));
+      setWallNextCursor(data.nextCursor ? String(data.nextCursor) : '');
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '作品墙加载失败');
     }
-  };
+  }, [wallLocked, wallNextCursor, setBoardVisibleCount, boardRef]);
 
   const syncGeneratedImages = async () => {
     try {
@@ -362,7 +387,7 @@ function App() {
       return;
     }
 
-    await Promise.all([syncGeneratedImages(), loadWall()]);
+    await Promise.all([syncGeneratedImages(), loadWall({ resetBoard: view === 'wall' })]);
   };
 
   useEffect(() => {
@@ -488,29 +513,41 @@ function App() {
   });
   const renderableBoardItems = boardItems.filter(canRenderBoardItem);
   const visibleBoardItems = renderableBoardItems.slice(0, boardVisibleCount);
-  const hasMoreBoardItems = visibleBoardItems.length < renderableBoardItems.length;
+  const hasMoreLoadedBoardItems = visibleBoardItems.length < renderableBoardItems.length;
+  const hasMoreBoardItems = hasMoreLoadedBoardItems || (view === 'wall' && wallHasMore);
   const masonryColumns = useMemo(
     () => getMasonryColumns(visibleBoardItems, masonryColumnCount, imageLayoutMeta),
     [imageLayoutMeta, masonryColumnCount, visibleBoardItems],
   );
 
   const isSameImage = isSameImageIdentity;
+  const boardResetSourceLength = view === 'wall' ? 0 : sourceBoardItems.length;
 
   useEffect(() => {
     setBoardVisibleCount(BOARD_PAGE_SIZE);
     setBoardLoadingMore(false);
     if (boardRef.current) boardRef.current.scrollTop = 0;
-  }, [activeBoardFilter, boardScope, boardSearch, sourceBoardItems.length, view]);
+  }, [activeBoardFilter, boardScope, boardSearch, boardResetSourceLength, view]);
 
   useEffect(() => {
     if (!hasMoreBoardItems || boardLoadingMore) return undefined;
 
     const loadNextPage = () => {
       setBoardLoadingMore(true);
-      window.setTimeout(() => {
-        setBoardVisibleCount((count) => Math.min(count + BOARD_PAGE_SIZE, renderableBoardItems.length));
-        setBoardLoadingMore(false);
-      }, BOARD_LOAD_DELAY_MS);
+      if (hasMoreLoadedBoardItems) {
+        window.setTimeout(() => {
+          setBoardVisibleCount((count) => Math.min(count + BOARD_PAGE_SIZE, renderableBoardItems.length));
+          setBoardLoadingMore(false);
+        }, BOARD_LOAD_DELAY_MS);
+        return;
+      }
+
+      if (view === 'wall' && wallHasMore) {
+        loadWall({ append: true }).finally(() => setBoardLoadingMore(false));
+        return;
+      }
+
+      setBoardLoadingMore(false);
     };
 
     const sentinel = boardLoadSentinelRef.current;
@@ -544,7 +581,7 @@ function App() {
     };
     scrollTarget.addEventListener('scroll', onScroll, { passive: true });
     return () => scrollTarget.removeEventListener('scroll', onScroll);
-  }, [boardLoadingMore, hasMoreBoardItems, renderableBoardItems.length]);
+  }, [boardLoadingMore, hasMoreBoardItems, hasMoreLoadedBoardItems, loadWall, renderableBoardItems.length, view, wallHasMore]);
 
   const openSizeDialog = () => {
     if (!form.size) {

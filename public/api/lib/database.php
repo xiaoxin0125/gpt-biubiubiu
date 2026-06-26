@@ -213,7 +213,7 @@ function ensure_schema(): void
       params_json JSON DEFAULT NULL,
       source_job_id BIGINT UNSIGNED DEFAULT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_wall_items_created (created_at),
+      INDEX idx_wall_items_created_id (created_at, id),
       INDEX idx_wall_items_user (user_id),
       INDEX idx_wall_items_client (client_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
@@ -346,6 +346,7 @@ function ensure_schema(): void
     ensure_column($db, 'site_settings', 'shared_vision_api_key_hint', 'shared_vision_api_key_hint VARCHAR(24) DEFAULT NULL AFTER shared_vision_api_key_tag');
     ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
+    ensure_index($db, 'wall_items', 'idx_wall_items_created_id', 'INDEX idx_wall_items_created_id (created_at, id)');
 
     bootstrap_admin_user($db);
 
