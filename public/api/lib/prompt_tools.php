@@ -189,12 +189,17 @@ function handle_prompt_optimize(array $body): array
     $rule = trim((string) ($body['rule'] ?? 'general')) ?: 'general';
     $outputLanguage = trim((string) ($body['outputLanguage'] ?? ($body['output_language'] ?? 'auto'))) ?: 'auto';
     $customRule = trim((string) ($body['customRule'] ?? ($body['custom_rule'] ?? '')));
+    $extraPrompt = trim((string) ($body['extraPrompt'] ?? ($body['extra_prompt'] ?? '')));
     $ruleText = prompt_tools_rule_text('optimize', $rule, $customRule, $outputLanguage);
     $config = prompt_tools_active_config($user, 'prompt');
 
+    $text = "规则：{$ruleText}";
+    if ($extraPrompt !== '') $text .= "\n额外要求：{$extraPrompt}";
+    $text .= "\n\n原始提示词：{$prompt}";
+
     $messages = [
         ['role' => 'system', 'content' => '你是图像生成提示词优化助手。严格遵守用户给出的规则，只输出最终提示词文本，不输出解释、Markdown、标题、前缀或引号。'],
-        ['role' => 'user', 'content' => "规则：{$ruleText}\n\n原始提示词：{$prompt}"],
+        ['role' => 'user', 'content' => $text],
     ];
     $data = prompt_tools_post_chat($config, $messages);
 

@@ -2608,7 +2608,6 @@ select option {
 .profile-stack,
 .api-category-stack,
 .prompt-tools-grid,
-.prompt-tool-fields,
 .prompt-result-panel,
 .shared-api-summary,
 .profile-inline-fields,
@@ -2716,7 +2715,8 @@ select option {
 .api-category-head span,
 .model-picker-field > span,
 .prompt-result-panel > span,
-.prompt-tool-fields label > span {
+.prompt-tool-controls label > span,
+.prompt-tool-main-title {
   color: var(--muted);
   font-size: 0.74rem;
   font-weight: 900;
@@ -2746,32 +2746,82 @@ select option {
 
 .prompt-tools-page {
   display: grid;
-  width: min(100%, 1120px);
+  width: 100%;
+  height: 904px;
+  max-height: calc(100vh - 84px);
   min-height: 0;
-  margin: 0 auto;
-  padding: 12px 0;
+  margin: 0;
+  padding: 8px 15%;
   overflow-y: auto;
 }
 
 .prompt-tools-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 14px;
+  grid-template-rows: repeat(2, 1fr);
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  height: 100%;
+  min-height: 0;
+  gap: 10px;
 }
 
 .prompt-tool-card {
-  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  min-height: 0;
 }
 
-.prompt-tool-fields label {
+.prompt-tool-body {
   display: grid;
-  gap: 7px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 10px;
+  min-height: 0;
 }
 
-.prompt-tool-fields textarea,
+.prompt-tool-primary,
+.prompt-tool-controls,
+.prompt-result-panel,
+.prompt-tool-main,
+.prompt-tool-controls > label {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  gap: 8px;
+}
+
+.prompt-tool-primary {
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+}
+
+.prompt-tool-main,
+.prompt-tool-controls,
+.prompt-result-panel {
+  height: 100%;
+}
+
+.prompt-tool-main {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.prompt-tool-controls {
+  grid-template-rows: repeat(2, minmax(0, 1fr)) auto;
+}
+
+.prompt-tool-controls > label {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.prompt-result-panel {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.prompt-tool-main-textarea,
+.prompt-tool-controls textarea,
 .prompt-result-panel textarea {
   width: 100%;
-  min-height: 92px;
+  min-height: 0;
+  height: 100%;
   resize: vertical;
   padding: 10px 12px;
   border: 2px solid var(--line);
@@ -2785,7 +2835,8 @@ select option {
 
 .tool-upload-zone {
   display: grid;
-  min-height: 190px;
+  min-height: 150px;
+  height: 100%;
   place-items: center;
   overflow: hidden;
   border: 2px dashed var(--line);
@@ -2822,7 +2873,6 @@ select option {
   display: block;
   width: 100%;
   height: 100%;
-  max-height: 260px;
   object-fit: cover;
 }
 
@@ -2851,6 +2901,82 @@ select option {
 .prompt-tool-select .custom-select-trigger {
   min-width: 0;
   width: 100%;
+}
+
+@media (max-width: 1320px) {
+  .prompt-tools-page {
+    width: 100%;
+    height: auto;
+    max-height: calc(100vh - 84px);
+    overflow-y: auto;
+  }
+
+  .prompt-tools-grid {
+    grid-template-rows: none;
+    align-items: start;
+    height: auto;
+    min-height: 0;
+  }
+
+  .prompt-tool-card {
+    grid-template-rows: auto auto;
+    align-content: start;
+    min-height: auto;
+  }
+
+  .prompt-tool-body {
+    grid-template-columns: 1fr;
+    align-items: start;
+    min-height: auto;
+  }
+
+  .prompt-tool-primary,
+  .prompt-tool-controls,
+  .prompt-result-panel,
+  .prompt-tool-main,
+  .prompt-tool-controls > label {
+    min-height: auto;
+    height: auto;
+  }
+
+  .prompt-tool-main,
+  .prompt-tool-controls,
+  .prompt-result-panel,
+  .prompt-tool-controls > label {
+    grid-template-rows: none;
+  }
+
+  .prompt-tool-main-textarea,
+  .prompt-tool-controls textarea,
+  .prompt-result-panel textarea {
+    min-height: 150px;
+    height: auto;
+  }
+
+  .tool-upload-zone {
+    height: 180px;
+  }
+}
+
+@media (max-width: 720px) {
+  .prompt-tools-page {
+    padding: 8px 15%;
+  }
+
+  .prompt-tool-body {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-result-panel {
+    grid-column: auto;
+  }
+
+  .tool-upload-zone,
+  .prompt-tool-main-textarea,
+  .prompt-result-panel textarea {
+    min-height: 150px;
+    height: auto;
+  }
 }
 
 @media (max-width: 760px) {
@@ -3097,7 +3223,7 @@ select option {
   }
 
   .prompt-tools-page {
-    padding: 10px 0 180px;
+    padding: 8px 15%;
   }
 
   .prompt-tools-grid {
