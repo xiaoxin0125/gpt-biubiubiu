@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { imageCaptionRules, promptOptimizeRules, promptToolLanguageOptions } from '../constants/options';
 import { requestImageCaption, requestPromptOptimize } from '../lib/api';
+import ScrollTopButton from './ScrollTopButton';
 
 const copyText = async (text) => {
   if (!text) return;
@@ -138,6 +139,7 @@ export default function PromptTools({
   const [optimizeCustomRule, setOptimizeCustomRule] = useState('');
   const [optimizeResult, setOptimizeResult] = useState('');
   const [optimizeLoading, setOptimizeLoading] = useState(false);
+  const pageRef = useRef(null);
 
   const enabled = siteFlags?.promptToolsEnabled !== false;
 
@@ -255,7 +257,7 @@ export default function PromptTools({
 
   if (!enabled) {
     return (
-      <section className="prompt-tools-page is-disabled">
+      <section className="prompt-tools-page is-disabled" ref={pageRef}>
         <div className="prompt-tools-empty api-config-card">
           <strong>提示词助手已关闭</strong>
           <span>管理员关闭了图片反推和提示词优化入口。</span>
@@ -363,12 +365,13 @@ export default function PromptTools({
   ];
 
   return (
-    <section className="prompt-tools-page">
+    <section className="prompt-tools-page" ref={pageRef}>
       <div className="prompt-tools-grid">
         {promptTools.map(({ key, ...tool }) => (
           <ToolCard key={key} {...tool} />
         ))}
       </div>
+      <ScrollTopButton targetRef={pageRef} className="is-page" refreshKey={promptTools.length} />
     </section>
   );
 }

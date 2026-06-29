@@ -150,6 +150,7 @@ button {
 .primary-action,
 .text-button,
 .close-button,
+.scroll-top-button,
 .option-row,
 .select-card,
 .ratio-card,
@@ -269,6 +270,7 @@ button {
 .toolbar-icon-button:hover,
 .secondary-action:hover:not(:disabled),
 .text-button:hover:not(:disabled),
+.scroll-top-button:hover,
 .option-row:hover,
 .result-card a:hover,
 .wall-icon:hover:not(:disabled) {
@@ -296,6 +298,56 @@ button {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.46;
+}
+
+.scroll-top-button {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+  border-radius: var(--radius);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}
+
+.scroll-top-button.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.scroll-top-button.is-page {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 12;
+}
+
+.scroll-top-button.is-generate-board {
+  bottom: 188px;
+}
+
+.scroll-top-button.is-modal {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 15;
+}
+
+.scroll-top-button.is-visible:hover {
+  transform: translate(-3px, -3px);
+}
+
+.scroll-top-button svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
 }
 
 .canvas-stage {
@@ -2960,7 +3012,7 @@ select option {
 
 @media (max-width: 720px) {
   .prompt-tools-page {
-    padding: 8px 15%;
+    padding: 8px 0;
   }
 
   .prompt-tool-body {
@@ -3223,7 +3275,7 @@ select option {
   }
 
   .prompt-tools-page {
-    padding: 8px 15%;
+    padding: 8px 0;
   }
 
   .prompt-tools-grid {
@@ -3244,6 +3296,7 @@ select option {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;
     overflow: auto;
+    padding: 12px;
   }
 
   .image-detail-modal .detail-panel {

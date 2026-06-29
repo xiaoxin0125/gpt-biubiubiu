@@ -5,6 +5,7 @@ import ImageBoard from './components/ImageBoard';
 import ImageDetailModal from './components/ImageDetailModal';
 import InstallPanel from './components/InstallPanel';
 import PromptTools from './components/PromptTools';
+import ScrollTopButton from './components/ScrollTopButton';
 import SizeDialog from './components/SizeDialog';
 import Topbar from './components/Topbar';
 import Workbench from './components/Workbench';
@@ -115,6 +116,10 @@ function App() {
   } = useBoard();
   const deletedRequestIdsRef = useRef(new Set());
   const apiKeyVaultRef = useRef(new Map());
+  const accountModalScrollRef = useRef(null);
+  const detailModalScrollRef = useRef(null);
+  const detailPanelScrollRef = useRef(null);
+  const detailScrollRefs = useMemo(() => [detailPanelScrollRef, detailModalScrollRef], []);
 
   const hasReferenceImages = referenceImages.length > 0;
   const responseFormat = normalizeResponseFormat(form.response_format);
@@ -1032,6 +1037,14 @@ function App() {
         />
       ) : null}
 
+      {view === 'generate' || view === 'wall' ? (
+        <ScrollTopButton
+          targetRef={boardRef}
+          className={view === 'generate' ? 'is-page is-generate-board' : 'is-page'}
+          refreshKey={`${view}-${renderableBoardItems.length}`}
+        />
+      ) : null}
+
       {view === 'prompt-tools' ? (
         <PromptTools
           user={user}
@@ -1094,6 +1107,8 @@ function App() {
               checkWallState={checkWallState}
               deleteImage={deleteImage}
               toggleWall={toggleWall}
+              detailModalRef={detailModalScrollRef}
+              detailPanelRef={detailPanelScrollRef}
             />
           ) : null}
 
@@ -1130,6 +1145,7 @@ function App() {
               siteSettings={siteSettings}
               setSiteSettings={setSiteSettings}
               saveSiteSettings={saveSiteSettings}
+              scrollRef={accountModalScrollRef}
             />
           ) : null}
 
@@ -1141,6 +1157,18 @@ function App() {
               displaySize={displaySize}
               closeDialog={closeDialog}
               applySize={applySize}
+            />
+          ) : null}
+
+          {activeDialog === 'auth' ? (
+            <ScrollTopButton targetRef={accountModalScrollRef} className="is-modal" refreshKey={authTab} />
+          ) : null}
+
+          {activeDialog === 'detail' ? (
+            <ScrollTopButton
+              targetRefs={detailScrollRefs}
+              className="is-modal"
+              refreshKey={selectedImage?.id || detailSrc || ''}
             />
           ) : null}
           </div>

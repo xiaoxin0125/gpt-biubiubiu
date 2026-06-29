@@ -36,6 +36,7 @@ export default function AccountModal({
   siteSettings,
   setSiteSettings,
   saveSiteSettings,
+  scrollRef,
 }) {
   const isAdmin = Boolean(user?.isAdmin);
   const registrationEnabled = siteFlags?.registrationEnabled !== false;
@@ -77,7 +78,7 @@ export default function AccountModal({
     }));
   };
   return (
-    <section className="modal-card account-modal" role="dialog" aria-modal="true" aria-label="账号设置">
+    <section className="modal-card account-modal" ref={scrollRef} role="dialog" aria-modal="true" aria-label="账号设置">
       <div className="modal-head">
         <div>
           <h2>{user ? '账号设置' : (registrationEnabled && authMode === 'register') ? '注册' : '登录'}</h2>

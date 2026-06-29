@@ -21,6 +21,8 @@ export default function ImageDetailModal({
   checkWallState,
   deleteImage,
   toggleWall,
+  detailModalRef,
+  detailPanelRef,
 }) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
@@ -49,7 +51,7 @@ export default function ImageDetailModal({
 
   return (
     <>
-    <section className="modal-card image-detail-modal" role="dialog" aria-modal="true" aria-label="图片详情">
+    <section className="modal-card image-detail-modal" ref={detailModalRef} role="dialog" aria-modal="true" aria-label="图片详情">
       <div className="detail-preview">
         <div className="detail-badges">
           {detailElapsed ? <span>◷ {detailElapsed}</span> : null}
@@ -81,7 +83,7 @@ export default function ImageDetailModal({
         )}
       </div>
 
-      <div className="detail-panel">
+      <div className="detail-panel" ref={detailPanelRef}>
         <div className="modal-head">
           <div>
             <h2>{detailIsPending ? '请求详情' : detailIsFailed ? '失败详情' : '图片详情'}</h2>
