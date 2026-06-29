@@ -46,6 +46,63 @@ function clear_cookie_value(string $name): void
     unset($_COOKIE[$name]);
 }
 
+function auth_captcha_code(int $length = 5): string
+{
+    $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    $code = '';
+    for ($index = 0; $index < $length; $index++) {
+        $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+    }
+    return $code;
+}
+
+function auth_captcha_svg(string $code): string
+{
+    $chars = str_split($code);
+    $text = '';
+    foreach ($chars as $index => $char) {
+        $x = 18 + $index * 21 + random_int(-2, 2);
+        $y = 35 + random_int(-4, 4);
+        $rotate = random_int(-16, 16);
+        $text .= '<text x="' . $x . '" y="' . $y . '" transform="rotate(' . $rotate . ' ' . $x . ' ' . $y . ')">' . htmlspecialchars($char, ENT_QUOTES, 'UTF-8') . '</text>';
+    }
+
+    $noise = '';
+    for ($index = 0; $index < 6; $index++) {
+        $noise .= '<line x1="' . random_int(4, 118) . '" y1="' . random_int(8, 40) . '" x2="' . random_int(4, 118) . '" y2="' . random_int(8, 40) . '" />';
+    }
+
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="130" height="48" viewBox="0 0 130 48" role="img" aria-label="验证码">'
+        . '<rect width="130" height="48" rx="10" fill="#f6f6f1"/>'
+        . '<g stroke="#111" stroke-width="1.6" stroke-linecap="round" opacity="0.22">' . $noise . '</g>'
+        . '<g fill="#111" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="24" font-weight="900" letter-spacing="2">' . $text . '</g>'
+        . '</svg>';
+}
+
+function handle_auth_captcha(): array
+{
+    $code = auth_captcha_code();
+    set_signed_cookie('auth_captcha', strtolower($code) . '|' . (time() + 600) . '|' . bin2hex(random_bytes(6)), 600);
+    return [
+        'image' => 'data:image/svg+xml;base64,' . base64_encode(auth_captcha_svg($code)),
+        'ttl' => 600,
+    ];
+}
+
+function require_auth_captcha(array $body): void
+{
+    $input = strtolower(trim((string) ($body['captcha'] ?? ($body['authCaptcha'] ?? ($body['captchaCode'] ?? '')))));
+    if ($input === '') json_response(['error' => '请输入验证码'], 400);
+
+    $value = unsign_value($_COOKIE['auth_captcha'] ?? '');
+    clear_cookie_value('auth_captcha');
+    if ($value === '') json_response(['error' => '验证码已失效，请刷新后重试'], 400);
+
+    [$answer, $expires] = array_pad(explode('|', $value, 3), 2, '');
+    if ((int) $expires < time()) json_response(['error' => '验证码已过期，请刷新后重试'], 400);
+    if (!hash_equals((string) $answer, $input)) json_response(['error' => '验证码错误，请刷新后重试'], 400);
+}
+
 function session_token(): array
 {
     $value = unsign_value($_COOKIE['session_user'] ?? '');
@@ -147,6 +204,7 @@ function handle_auth_register(array $body): array
     $password = (string) ($body['password'] ?? '');
     if (!preg_match('/^[\w\x{4e00}-\x{9fa5}.-]{2,20}$/u', $username)) json_response(['error' => '用户名需为 2-20 位中文、字母、数字、下划线、点或短横线'], 400);
     if (strlen($password) < 6) json_response(['error' => '密码至少 6 位'], 400);
+    require_auth_captcha($body);
     enforce_rate_limit('register', $username, 5, 900);
     $displayName = normalize_display_name((string) ($body['displayName'] ?? ($body['display_name'] ?? '')), $username);
 
@@ -168,6 +226,7 @@ function handle_auth_login(array $body): array
 {
     require_database();
     $username = trim((string) ($body['username'] ?? ''));
+    require_auth_captcha($body);
     enforce_rate_limit('login', $username, 8, 900);
     $stmt = pdo()->prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
     $stmt->execute([$username]);

@@ -3,6 +3,7 @@ import AccountModal from './components/AccountModal';
 import CustomSelect from './components/CustomSelect';
 import ImageBoard from './components/ImageBoard';
 import ImageDetailModal from './components/ImageDetailModal';
+import InstallPanel from './components/InstallPanel';
 import PromptTools from './components/PromptTools';
 import SizeDialog from './components/SizeDialog';
 import Topbar from './components/Topbar';
@@ -102,6 +103,7 @@ function App() {
   const [imageLayoutMeta, setImageLayoutMeta] = useState({});
   const [siteFlags, setSiteFlags] = useState(defaultSiteFlags);
   const [siteSettings, setSiteSettings] = useState({ ...defaultSiteFlags, sharedApi: {} });
+  const [installStatus, setInstallStatus] = useState({ checking: true, needsInstall: false });
   const {
     boardVisibleCount,
     setBoardVisibleCount,
@@ -182,7 +184,7 @@ function App() {
 
   const syncDirectApiKey = async (settings) => {
     const normalized = normalizeServerSettings(settings || {});
-    if (!normalized.hasApiKey) return normalized;
+    if (!normalized.hasApiKey || normalized.isShared) return normalized;
 
     setApiKeySyncing(true);
     try {
@@ -371,56 +373,83 @@ function App() {
   };
 
   useEffect(() => {
-    setHistory(readHistory());
+    let cancelled = false;
 
-    requestJson('/api/health')
-      .then((data) => {
-        if (data.site) {
-          setSiteFlags({
-            wallRequireLogin: Boolean(data.site.wallRequireLogin),
-            registrationEnabled: Boolean(data.site.registrationEnabled),
-            sharedApiEnabled: Boolean(data.site.sharedApiEnabled),
-            promptToolsEnabled: Boolean(data.site.promptToolsEnabled),
-          });
-        }
-      })
-      .catch(() => {});
+    const resetSignedOutState = () => {
+      saveHistory([]);
+      apiKeyVaultRef.current.clear();
+      setImages([]);
+      setHistory([]);
+      setHistoryNextCursor('');
+      setHistoryHasMore(false);
+      setSelectedImage(null);
+      setBoardScope('generate');
+      setApiConfigForm(defaultApiConfigForm);
+      setStatus((current) => ({ ...current, loading: false, configured: false, message: '请先登录' }));
+    };
 
-    requestJson('/api/auth/me')
-      .then((data) => {
-        const nextUser = data.user || null;
-        setUser(nextUser);
-        if (nextUser) {
-          applyServerSettings(data.settings, nextUser);
-          const normalizedSettings = normalizeServerSettings(data.settings || {});
-          if (normalizedSettings.hasApiKey) syncDirectApiKey(normalizedSettings).catch(() => {
-            setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
-          });
-          syncGeneratedImages({ user: nextUser });
-        } else {
-          saveHistory([]);
-          apiKeyVaultRef.current.clear();
-          setImages([]);
-          setHistory([]);
-          setHistoryNextCursor('');
-          setHistoryHasMore(false);
-          setSelectedImage(null);
-          setBoardScope('generate');
-          setApiConfigForm(defaultApiConfigForm);
-          setStatus((current) => ({ ...current, loading: false, configured: false, message: '请先登录' }));
+    const initialize = async () => {
+      setHistory(readHistory());
+
+      try {
+        const install = await requestJson('/api/install/status');
+        if (cancelled) return;
+        setInstallStatus({ ...install, checking: false });
+        if (install.needsInstall) {
+          setStatus((current) => ({ ...current, loading: false, configured: false, message: '需要完成安装配置' }));
+          return;
         }
-      })
-      .catch(() => {
-        saveHistory([]);
-        apiKeyVaultRef.current.clear();
-        setImages([]);
-        setHistory([]);
-        setHistoryNextCursor('');
-        setHistoryHasMore(false);
-        setSelectedImage(null);
-        setBoardScope('generate');
-        setStatus((current) => ({ ...current, loading: false, configured: false, message: '请先登录' }));
-      });
+      } catch (installError) {
+        if (cancelled) return;
+        setInstallStatus({
+          checking: false,
+          needsInstall: true,
+          message: installError instanceof Error ? installError.message : '安装状态检查失败',
+        });
+        setStatus((current) => ({ ...current, loading: false, configured: false, message: '需要完成安装配置' }));
+        return;
+      }
+
+      requestJson('/api/health')
+        .then((data) => {
+          if (cancelled) return;
+          if (data.site) {
+            setSiteFlags({
+              wallRequireLogin: Boolean(data.site.wallRequireLogin),
+              registrationEnabled: Boolean(data.site.registrationEnabled),
+              sharedApiEnabled: Boolean(data.site.sharedApiEnabled),
+              promptToolsEnabled: Boolean(data.site.promptToolsEnabled),
+            });
+          }
+        })
+        .catch(() => {});
+
+      requestJson('/api/auth/me')
+        .then((data) => {
+          if (cancelled) return;
+          const nextUser = data.user || null;
+          setUser(nextUser);
+          if (nextUser) {
+            applyServerSettings(data.settings, nextUser);
+            const normalizedSettings = normalizeServerSettings(data.settings || {});
+            if (normalizedSettings.hasApiKey) syncDirectApiKey(normalizedSettings).catch(() => {
+              setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
+            });
+            syncGeneratedImages({ user: nextUser });
+          } else {
+            resetSignedOutState();
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          resetSignedOutState();
+        });
+    };
+
+    initialize();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -924,6 +953,29 @@ function App() {
     size: 'modal-frame size-modal-frame',
   };
   const modalFrameClass = modalFrameClassByDialog[activeDialog] || 'modal-frame';
+
+  if (installStatus.checking) {
+    return (
+      <main className="playground-shell install-shell">
+        <section className="modal-card install-card">
+          <div className="modal-head install-head">
+            <div>
+              <h2>检查站点配置</h2>
+              <p>正在确认 MySQL 与运行密钥是否可用。</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (installStatus.needsInstall) {
+    return (
+      <main className="playground-shell install-shell">
+        <InstallPanel installStatus={installStatus} onInstalled={() => window.setTimeout(() => window.location.reload(), 900)} />
+      </main>
+    );
+  }
 
   return (
     <main className="playground-shell">

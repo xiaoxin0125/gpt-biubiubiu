@@ -57,6 +57,22 @@ export const requestImageCaption = (formData) => requestJson('/api/prompt-tools/
   body: formData,
 });
 
+export const requestSharedImageJson = (payload) => requestJson('/api/images/generations', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ payload }),
+});
+
+export const requestSharedImageFormData = async (payload) => {
+  const response = await fetch(toApiUrl('/api/images/edits'), {
+    method: 'POST',
+    body: payload,
+  });
+  const data = await readApiResponse(response);
+  if (!response.ok) throw new Error(data.error || data.message || data.detail || '请求失败');
+  return data;
+};
+
 export const normalizeApiBaseUrl = (value) => String(value || DEFAULT_DIRECT_API_BASE_URL).replace(/\s+/g, '').replace(/\/+$/, '') || DEFAULT_DIRECT_API_BASE_URL;
 
 const normalizeApiCategory = (value = {}, fallback = {}) => ({

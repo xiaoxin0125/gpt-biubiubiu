@@ -26,19 +26,28 @@ function wall_image_from_job(array $job): array
     ];
 }
 
-function image_job_for_wall(array $user, int $sourceJobId): array
+function image_job_for_wall_row(array $user, int $sourceJobId, bool $forUpdate = false): ?array
 {
-    if ($sourceJobId <= 0) json_response(['error' => '请先生成并保存作品后再上墙'], 400);
+    if ($sourceJobId <= 0) return null;
 
+    $lock = $forUpdate ? ' FOR UPDATE' : '';
     if (!empty($user['isAdmin'])) {
-        $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? AND status = ? LIMIT 1');
+        $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? AND status = ? LIMIT 1' . $lock);
         $stmt->execute([$sourceJobId, 'completed']);
     } else {
-        $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? AND user_id = ? AND status = ? LIMIT 1');
+        $stmt = pdo()->prepare('SELECT * FROM image_jobs WHERE id = ? AND user_id = ? AND status = ? LIMIT 1' . $lock);
         $stmt->execute([$sourceJobId, (int) $user['id'], 'completed']);
     }
 
     $job = $stmt->fetch();
+    return $job ?: null;
+}
+
+function image_job_for_wall(array $user, int $sourceJobId): array
+{
+    if ($sourceJobId <= 0) json_response(['error' => '请先生成并保存作品后再上墙'], 400);
+
+    $job = image_job_for_wall_row($user, $sourceJobId);
     if (!$job) json_response(['error' => '只能上墙自己的已保存作品'], 403);
     return $job;
 }
@@ -60,14 +69,6 @@ function handle_create_wall_item(array $user, array $body): array
 {
     $sourceJobId = max(0, (int) ($body['sourceJobId'] ?? ($body['jobId'] ?? (($body['params']['sourceJobId'] ?? 0) ?: 0))));
     $job = image_job_for_wall($user, $sourceJobId);
-
-    if (!empty($job['wall_item_id'])) {
-        $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
-        $stmt->execute([(int) $job['wall_item_id']]);
-        $existing = $stmt->fetch();
-        if ($existing) return ['item' => client_wall_item($existing)];
-    }
-
     $storedImage = wall_image_from_job($job);
     $form = is_array($body['form'] ?? null) ? $body['form'] : [];
     $bodyParams = is_array($body['params'] ?? null) ? $body['params'] : $form;
@@ -82,32 +83,67 @@ function handle_create_wall_item(array $user, array $body): array
     $ownerId = (int) ($job['user_id'] ?? $user['id']);
     $authorName = image_job_author_name($job, $user);
 
-    $stmt = pdo()->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, original_url, display_url, original_path, display_path, original_bytes, display_bytes, duration_seconds, params_json, source_job_id) VALUES (?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-    $stmt->execute([
-        $ownerId ?: null,
-        $authorName,
-        $prompt ?: '未命名作品',
-        $revisedPrompt !== '' ? $revisedPrompt : null,
-        $storedImage['displayUrl'],
-        $storedImage['imageMime'],
-        $storedImage['originalUrl'],
-        $storedImage['displayUrl'],
-        $storedImage['originalPath'] ?: null,
-        $storedImage['displayPath'] ?: null,
-        $storedImage['originalBytes'],
-        $storedImage['displayBytes'],
-        $duration,
-        json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-        $sourceJobId,
-    ]);
+    $db = pdo();
+    $db->beginTransaction();
+    try {
+        $lockedJob = image_job_for_wall_row($user, $sourceJobId, true);
+        if (!$lockedJob) {
+            $db->rollBack();
+            json_response(['error' => '只能上墙自己的已保存作品'], 403);
+        }
 
-    $wallItemId = (int) pdo()->lastInsertId();
-    $stmt = pdo()->prepare('UPDATE image_jobs SET wall_item_id = ? WHERE id = ?');
-    $stmt->execute([$wallItemId, $sourceJobId]);
+        if (!empty($lockedJob['wall_item_id'])) {
+            $stmt = $db->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1 FOR UPDATE');
+            $stmt->execute([(int) $lockedJob['wall_item_id']]);
+            $existing = $stmt->fetch();
+            if ($existing) {
+                $db->commit();
+                return ['item' => client_wall_item($existing)];
+            }
+        }
 
-    $stmt = pdo()->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
-    $stmt->execute([$wallItemId]);
-    return ['item' => client_wall_item($stmt->fetch())];
+        $stmt = $db->prepare('SELECT * FROM wall_items WHERE source_job_id = ? ORDER BY id ASC LIMIT 1 FOR UPDATE');
+        $stmt->execute([$sourceJobId]);
+        $existing = $stmt->fetch();
+        if ($existing) {
+            $db->prepare('UPDATE image_jobs SET wall_item_id = ? WHERE id = ?')->execute([(int) $existing['id'], $sourceJobId]);
+            $db->commit();
+            return ['item' => client_wall_item($existing)];
+        }
+
+        $stmt = $db->prepare('INSERT INTO wall_items (user_id, client_id, author_name, prompt, revised_prompt, image_url, image_b64, image_mime, original_url, display_url, original_path, display_path, original_bytes, display_bytes, duration_seconds, params_json, source_job_id) VALUES (?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([
+            $ownerId ?: null,
+            $authorName,
+            $prompt ?: '未命名作品',
+            $revisedPrompt !== '' ? $revisedPrompt : null,
+            $storedImage['displayUrl'],
+            $storedImage['imageMime'],
+            $storedImage['originalUrl'],
+            $storedImage['displayUrl'],
+            $storedImage['originalPath'] ?: null,
+            $storedImage['displayPath'] ?: null,
+            $storedImage['originalBytes'],
+            $storedImage['displayBytes'],
+            $duration,
+            json_encode($params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $sourceJobId,
+        ]);
+
+        $wallItemId = (int) $db->lastInsertId();
+        $stmt = $db->prepare('UPDATE image_jobs SET wall_item_id = ? WHERE id = ?');
+        $stmt->execute([$wallItemId, $sourceJobId]);
+
+        $stmt = $db->prepare('SELECT * FROM wall_items WHERE id = ? LIMIT 1');
+        $stmt->execute([$wallItemId]);
+        $item = $stmt->fetch();
+        if (!$item) throw new RuntimeException('作品墙创建后读取失败');
+        $db->commit();
+        return ['item' => client_wall_item($item)];
+    } catch (Throwable $error) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $error;
+    }
 }
 
 function delete_wall_item_files(array $item): void

@@ -15,6 +15,8 @@ import {
   requestDirectImageFormData,
   requestDirectImageJson,
   requestJson,
+  requestSharedImageFormData,
+  requestSharedImageJson,
 } from '../lib/api';
 import { normalizeBoardImage } from '../lib/board';
 import {
@@ -136,18 +138,21 @@ export const useGeneration = (deps) => {
 
     try {
       if (!status.configured && !requestConfig.hasApiKey) throw new Error('请先在参数设置里保存 API Key。');
-      let requestApiKey = String(apiKeyVaultRef.current.get(String(requestConfig.id)) || '').trim();
-      if (!requestApiKey && requestConfig.hasApiKey) {
-        await syncDirectApiKey(apiConfigForm);
+      let requestApiKey = '';
+      if (!requestConfig.isShared) {
         requestApiKey = String(apiKeyVaultRef.current.get(String(requestConfig.id)) || '').trim();
+        if (!requestApiKey && requestConfig.hasApiKey) {
+          await syncDirectApiKey(apiConfigForm);
+          requestApiKey = String(apiKeyVaultRef.current.get(String(requestConfig.id)) || '').trim();
+        }
+        if (!requestApiKey) throw new Error('服务器未同步到 API Key，请重新登录或重新保存 Key。');
       }
-      if (!requestApiKey) throw new Error('服务器未同步到 API Key，请重新登录或重新保存 Key。');
       const payload = hasReferenceImages
         ? buildEditPayload(imageForm, requestConfig, referenceImages, maskImage)
         : buildGenerationPayload(imageForm, { ...requestConfig, stream: apiConfigForm.stream }, apiConfigForm);
-      const data = hasReferenceImages
-        ? await requestDirectImageFormData(requestConfig, requestApiKey, payload)
-        : await requestDirectImageJson(requestConfig, requestApiKey, payload);
+      const data = requestConfig.isShared
+        ? (hasReferenceImages ? await requestSharedImageFormData(payload) : await requestSharedImageJson(payload))
+        : (hasReferenceImages ? await requestDirectImageFormData(requestConfig, requestApiKey, payload) : await requestDirectImageJson(requestConfig, requestApiKey, payload));
       const outputFormat = hasReferenceImages
         ? (normalizeResponseFormat(imageForm.response_format) === 'url' ? normalizeOutputFormat(imageForm.output_format) : defaultForm.output_format)
         : payload.output_format || defaultForm.output_format;
@@ -211,8 +216,9 @@ export const useGeneration = (deps) => {
             }));
           }
           if (savedImages.length) storedImages = savedImages;
-        } catch {
-          setError('图片已生成，但服务器保存失败；刷新后可能无法恢复这次未上墙作品。');
+        } catch (saveError) {
+          const saveMessage = saveError instanceof Error ? saveError.message : '未知错误';
+          setError(`图片已生成，但服务器保存失败：${saveMessage}；刷新后可能无法恢复这次未上墙作品。`);
         }
       }
 
@@ -233,9 +239,10 @@ export const useGeneration = (deps) => {
       try {
         const nextHistory = prependHistoryRecord(record);
         setHistory((items) => (user ? mergeHistoryRecords(items, [record]) : nextHistory));
-      } catch {
+      } catch (historyError) {
+        const historyMessage = historyError instanceof Error ? historyError.message : '未知错误';
         setHistory((items) => (user ? mergeHistoryRecords(items, [record]) : [record, ...items.filter((item) => item.id !== record.id)].slice(0, 30)));
-        setError('图片已生成，但本地历史记录保存失败。');
+        setError(`图片已生成，但本地历史记录保存失败：${historyMessage}`);
       }
       setStatus((current) => ({ ...current, message: `Done · ${storedImages.length}` }));
     } catch (requestError) {

@@ -158,30 +158,15 @@ function prompt_tools_post_chat(array $config, array $messages): array
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($json === false) throw new RuntimeException('请求参数序列化失败');
 
-    $context = stream_context_create([
-        'http' => [
-            'method' => 'POST',
-            'header' => implode("\r\n", [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                'Authorization: Bearer ' . $apiKey,
-            ]) . "\r\n",
-            'content' => $json,
-            'timeout' => normalize_request_timeout($config['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT),
-            'ignore_errors' => true,
-        ],
-    ]);
+    $response = outbound_http_request('POST', prompt_tools_chat_url((string) $config['apiBaseUrl']), [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'Authorization: Bearer ' . $apiKey,
+    ], $json, normalize_request_timeout($config['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT), OUTBOUND_MAX_RESPONSE_BYTES);
+    $responseText = (string) ($response['body'] ?? '');
+    $status = (int) ($response['status'] ?? 0);
 
-    $responseText = @file_get_contents(prompt_tools_chat_url((string) $config['apiBaseUrl']), false, $context);
-    $status = 0;
-    foreach (($http_response_header ?? []) as $header) {
-        if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $matches)) {
-            $status = (int) $matches[1];
-            break;
-        }
-    }
-
-    if ($responseText === false || $responseText === '') throw new RuntimeException('上游接口请求失败，请检查 API 地址、密钥或模型。');
+    if ($responseText === '') throw new RuntimeException('上游接口请求失败，请检查 API 地址、密钥或模型。');
     $data = json_decode($responseText, true);
     if (!is_array($data)) throw new RuntimeException('上游接口返回了无法解析的数据。');
     if ($status >= 400) {
@@ -222,13 +207,28 @@ function handle_prompt_optimize(array $body): array
     ];
 }
 
+function prompt_tools_image_mime_from_header(string $bytes): string
+{
+    if (strncmp($bytes, "\x89PNG\r\n\x1a\n", 8) === 0) return 'image/png';
+    if (strncmp($bytes, "\xff\xd8\xff", 3) === 0) return 'image/jpeg';
+    if (strncmp($bytes, 'GIF87a', 6) === 0 || strncmp($bytes, 'GIF89a', 6) === 0) return 'image/gif';
+    if (strlen($bytes) >= 12 && substr($bytes, 0, 4) === 'RIFF' && substr($bytes, 8, 4) === 'WEBP') return 'image/webp';
+    return '';
+}
+
 function prompt_tools_image_mime(string $bytes, array $file): string
 {
     if (class_exists('finfo')) {
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $mime = $finfo->buffer($bytes);
-        if (is_string($mime) && $mime !== '') return $mime;
+        try {
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            $mime = $finfo->buffer($bytes);
+            if (is_string($mime) && $mime !== '') return $mime;
+        } catch (Throwable $error) {
+        }
     }
+
+    $headerMime = prompt_tools_image_mime_from_header($bytes);
+    if ($headerMime !== '') return $headerMime;
 
     if (function_exists('getimagesizefromstring')) {
         $info = @getimagesizefromstring($bytes);

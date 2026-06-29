@@ -39,6 +39,15 @@ function api_exact_routes(): array
         ['GET', '/health', function (): array {
             return handle_health();
         }],
+        ['GET', '/install/status', function (): array {
+            return handle_install_status();
+        }],
+        ['POST', '/install', function (array $body): array {
+            return handle_install_save($body);
+        }],
+        ['GET', '/auth/captcha', function (): array {
+            return handle_auth_captcha();
+        }],
         ['GET', '/auth/me', function (): array {
             return handle_auth_me();
         }],
@@ -65,7 +74,7 @@ function api_exact_routes(): array
             $user = require_user();
             return [
                 'settings' => settings_for_user((int) $user['id']),
-                'apiKey' => stored_user_api_key(),
+                'apiKey' => stored_user_own_api_key(),
             ];
         }],
         ['POST', '/settings', function (array $body): array {
@@ -79,6 +88,12 @@ function api_exact_routes(): array
         ['POST', '/settings/models', function (array $body): array {
             $user = require_user();
             return fetch_api_models_for_user($user, $body);
+        }],
+        ['POST', '/images/generations', function (array $body): array {
+            return handle_shared_image_generation(require_user(), $body);
+        }],
+        ['POST', '/images/edits', function (): array {
+            return handle_shared_image_edit(require_user());
         }],
         ['POST', '/prompt-tools/optimize', function (array $body): array {
             return handle_prompt_optimize($body);

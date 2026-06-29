@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS wall_items (
   INDEX idx_wall_items_created_id (created_at, id),
   INDEX idx_wall_items_user (user_id),
   INDEX idx_wall_items_client (client_id),
+  INDEX idx_wall_items_source_job (source_job_id),
   CONSTRAINT fk_wall_items_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_wall_items_job FOREIGN KEY (source_job_id) REFERENCES image_jobs(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

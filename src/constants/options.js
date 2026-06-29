@@ -163,6 +163,7 @@ export const emptyAuthForm = {
   username: '',
   displayName: '',
   password: '',
+  captcha: '',
 };
 
 export const emptyProfileForm = {

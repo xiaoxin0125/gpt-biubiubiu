@@ -1,32 +1,8 @@
+import { useEffect, useState } from 'react';
 import { MAX_REQUEST_TIMEOUT_SECONDS } from '../constants/options';
+import { requestJson } from '../lib/api';
+import ApiCategoryEditor, { applyApiCategoryUpdate, userApiCategorySections } from './ApiCategoryEditor';
 import SiteAdminPanel from './SiteAdminPanel';
-
-const apiCategorySections = [
-  {
-    key: 'imageApi',
-    title: '生图 API 参数',
-    description: '用于文生图、图生图和编辑生成。',
-    modelLabel: '生图模型 ID',
-    modelPlaceholder: 'gpt-image-2',
-    namePlaceholder: 'OpenAI gpt-image-2',
-  },
-  {
-    key: 'promptApi',
-    title: '提示词优化 API 参数',
-    description: '用于提示词润色、扩写和翻译。',
-    modelLabel: '提示词优化模型 ID',
-    modelPlaceholder: '例如 gpt-4o-mini',
-    namePlaceholder: '提示词优化 API',
-  },
-  {
-    key: 'visionApi',
-    title: '图片反推/视觉 API 参数',
-    description: '用于图片描述和反推提示词。',
-    modelLabel: '视觉模型 ID',
-    modelPlaceholder: '例如 gpt-4o',
-    namePlaceholder: '图片反推 API',
-  },
-];
 
 export default function AccountModal({
   user,
@@ -63,6 +39,28 @@ export default function AccountModal({
 }) {
   const isAdmin = Boolean(user?.isAdmin);
   const registrationEnabled = siteFlags?.registrationEnabled !== false;
+  const [captchaImage, setCaptchaImage] = useState('');
+  const [captchaLoading, setCaptchaLoading] = useState(false);
+  const refreshCaptcha = async () => {
+    setCaptchaLoading(true);
+    try {
+      const data = await requestJson('/api/auth/captcha');
+      setCaptchaImage(String(data.image || ''));
+      setAuthForm((current) => ({ ...current, captcha: '' }));
+    } finally {
+      setCaptchaLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!user) refreshCaptcha().catch(() => {});
+  }, [user, authMode]);
+
+  const submitAuthWithCaptcha = async (event) => {
+    await submitAuth(event);
+    if (!user) refreshCaptcha().catch(() => {});
+  };
+
   const apiConfigs = apiConfigForm.apiConfigs || [];
   const sharedApiConfig = apiConfigs.find((config) => config.isShared);
   const editableApiConfigs = apiConfigs.filter((config) => !config.isShared);
@@ -71,33 +69,13 @@ export default function AccountModal({
   const updateApiConfigCategory = (configId, categoryKey, field, value) => {
     setApiConfigForm((current) => ({
       ...current,
-      apiConfigs: (current.apiConfigs || []).map((item) => {
-        if (String(item.id) !== String(configId) || item.isShared) return item;
-        const nextCategory = { ...(item[categoryKey] || {}), [field]: value };
-        const nextItem = { ...item, [categoryKey]: nextCategory };
-        if (categoryKey === 'imageApi') {
-          nextItem.apiName = nextCategory.apiName;
-          nextItem.apiBaseUrl = nextCategory.apiBaseUrl;
-          nextItem.model = nextCategory.model;
-          nextItem.apiKey = nextCategory.apiKey;
-          nextItem.hasApiKey = nextCategory.hasApiKey;
-          nextItem.apiKeyHint = nextCategory.apiKeyHint;
-          nextItem.requestTimeout = nextCategory.requestTimeout;
-        } else if (categoryKey === 'promptApi') {
-          nextItem.promptModel = nextCategory.model;
-        } else if (categoryKey === 'visionApi') {
-          nextItem.visionModel = nextCategory.model;
-        }
-        return nextItem;
-      }),
+      apiConfigs: (current.apiConfigs || []).map((item) => (
+        String(item.id) === String(configId) && !item.isShared
+          ? applyApiCategoryUpdate(item, categoryKey, field, value)
+          : item
+      )),
     }));
   };
-  const modelOptionsFor = (configId, categoryKey, currentModel) => {
-    const key = `${configId}:${categoryKey}`;
-    const options = apiModelOptionsByConfigId[key] || [];
-    return options.length ? options : [{ label: currentModel || '暂无模型', value: currentModel || '' }];
-  };
-  const isModelLoading = (configId, categoryKey) => Boolean(apiModelLoadingByConfigId[`${configId}:${categoryKey}`]);
   return (
     <section className="modal-card account-modal" role="dialog" aria-modal="true" aria-label="账号设置">
       <div className="modal-head">
@@ -218,68 +196,16 @@ export default function AccountModal({
                         <input maxLength={128} value={config.configName || ''} onChange={(event) => updateApiConfig(config.id, 'configName', event.target.value)} placeholder={`API 配置 ${index + 1}`} />
                       </label>
                     </div>
-                    <div className="api-category-stack">
-                      {apiCategorySections.map((section) => {
-                        const category = config[section.key] || {};
-                        const optionsKey = `${config.id}:${section.key}`;
-                        const options = modelOptionsFor(config.id, section.key, category.model || '');
-                        const loading = isModelLoading(config.id, section.key);
-                        return (
-                          <section className="api-category-card" key={section.key}>
-                            <div className="api-category-head">
-                              <div>
-                                <strong>{section.title}</strong>
-                                <span>{section.description}</span>
-                              </div>
-                            </div>
-                            <div className="api-config-fields api-config-fields-ordered">
-                              <label>
-                                <span>API 名称</span>
-                                <input value={category.apiName || ''} onChange={(event) => updateApiConfigCategory(config.id, section.key, 'apiName', event.target.value)} placeholder={section.namePlaceholder} />
-                              </label>
-                              <label>
-                                <span>{section.modelLabel}</span>
-                                <input value={category.model || ''} onChange={(event) => updateApiConfigCategory(config.id, section.key, 'model', event.target.value)} placeholder={section.modelPlaceholder} />
-                              </label>
-                              <div className="model-picker-field full-field">
-                                <span>模型列表</span>
-                                <div className="model-picker-row single-model-picker-row">
-                                  {renderSelect({
-                                    id: `${optionsKey}-model-select`,
-                                    label: '',
-                                    value: category.model || '',
-                                    options,
-                                    onChange: (value) => updateApiConfigCategory(config.id, section.key, 'model', value),
-                                    disabled: !options.length || !options[0]?.value,
-                                    className: 'settings-select-field model-select-field',
-                                    menuDirection: 'down',
-                                  })}
-                                </div>
-                              </div>
-                              <label>
-                                <span>API 地址</span>
-                                <input value={category.apiBaseUrl || ''} onChange={(event) => updateApiConfigCategory(config.id, section.key, 'apiBaseUrl', event.target.value)} placeholder="https://api.openai.com" />
-                              </label>
-                              <div className="model-fetch-field">
-                                <button type="button" className="secondary-action model-fetch-button" onClick={() => fetchApiModels(config.id, section.key)} disabled={loading}>
-                                  {loading ? '获取中' : '获取模型'}
-                                </button>
-                              </div>
-                              <label className="full-field">
-                                <span>密钥设置</span>
-                                <input type="password" value={category.apiKey || ''} onChange={(event) => updateApiConfigCategory(config.id, section.key, 'apiKey', event.target.value)} placeholder={category.hasApiKey ? `已保存：${category.apiKeyHint || '********'}，留空则不修改` : 'sk-...'} autoComplete="off" />
-                              </label>
-                              {category.hasApiKey ? (
-                                <label className="toggle-row full-field compact-toggle-row">
-                                  <input type="checkbox" checked={Boolean(category.clearApiKey)} onChange={(event) => updateApiConfigCategory(config.id, section.key, 'clearApiKey', event.target.checked)} />
-                                  <span>清除已保存的 Key</span>
-                                </label>
-                              ) : null}
-                            </div>
-                          </section>
-                        );
-                      })}
-                    </div>
+                    <ApiCategoryEditor
+                      sections={userApiCategorySections}
+                      configId={config.id}
+                      source={config}
+                      onUpdateCategory={(categoryKey, field, value) => updateApiConfigCategory(config.id, categoryKey, field, value)}
+                      fetchApiModels={fetchApiModels}
+                      apiModelOptionsByConfigId={apiModelOptionsByConfigId}
+                      apiModelLoadingByConfigId={apiModelLoadingByConfigId}
+                      renderSelect={renderSelect}
+                    />
                   </section>
                 );
               })}
@@ -325,7 +251,7 @@ export default function AccountModal({
           ) : null}
         </div>
       ) : (
-        <form className="auth-form" onSubmit={submitAuth}>
+        <form className="auth-form" onSubmit={submitAuthWithCaptcha}>
           {registrationEnabled ? (
             <div className="segmented-control two-tabs">
               <button type="button" className={authMode === 'login' ? 'is-active' : ''} onClick={() => setAuthMode('login')}>登录</button>
@@ -346,6 +272,21 @@ export default function AccountModal({
             <span>密码</span>
             <input type="password" value={authForm.password} onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))} placeholder="至少 6 位" />
           </label>
+          <div className="captcha-field">
+            <label>
+              <span>验证码</span>
+              <input
+                value={authForm.captcha}
+                onChange={(event) => setAuthForm((current) => ({ ...current, captcha: event.target.value.replace(/[^a-z0-9]/gi, '').toUpperCase() }))}
+                placeholder="输入右侧字符"
+                autoComplete="off"
+                maxLength={8}
+              />
+            </label>
+            <button type="button" className="captcha-image-button" onClick={() => refreshCaptcha().catch(() => {})} disabled={captchaLoading} aria-label="刷新验证码">
+              {captchaImage ? <img src={captchaImage} alt="验证码，点击刷新" /> : <span>{captchaLoading ? '加载中' : '刷新'}</span>}
+            </button>
+          </div>
           <button type="submit" className="primary-action">{registrationEnabled && authMode === 'register' ? '注册' : '登录'}</button>
         </form>
       )}

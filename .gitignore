@@ -1,6 +1,7 @@
 node_modules
 dist
 .env
+.env.*
 .php-api-config.php
 .DS_Store
 *.log

@@ -190,41 +190,13 @@ function admin_site_settings_view(): array
 
 function shared_api_category_input(array $shared, string $category, array $current): array
 {
-    $nested = is_array($shared[$category . 'Api'] ?? null) ? $shared[$category . 'Api'] : [];
-    if ($category === 'image') {
-        return [
-            'apiName' => trim((string) ($nested['apiName'] ?? ($nested['api_name'] ?? ($shared['apiName'] ?? ($shared['api_name'] ?? $current['apiName']))))) ?: DEFAULT_API_NAME,
-            'apiBaseUrl' => normalize_api_base_url((string) ($nested['apiBaseUrl'] ?? ($nested['api_base_url'] ?? ($shared['apiBaseUrl'] ?? ($shared['api_base_url'] ?? $current['apiBaseUrl']))))),
-            'model' => trim((string) ($nested['model'] ?? ($shared['model'] ?? $current['model']))) ?: DEFAULT_IMAGE_MODEL,
-            'requestTimeout' => normalize_request_timeout($nested['requestTimeout'] ?? ($nested['request_timeout'] ?? ($shared['requestTimeout'] ?? ($shared['request_timeout'] ?? $current['requestTimeout'])))),
-            'apiKey' => trim((string) ($nested['apiKey'] ?? ($nested['api_key'] ?? ($shared['apiKey'] ?? ($shared['api_key'] ?? ''))))),
-            'clearApiKey' => !empty($nested['clearApiKey']) || !empty($nested['clear_api_key']) || !empty($shared['clearApiKey']) || !empty($shared['clear_api_key']),
-        ];
-    }
-
-    $legacyModelKey = $category === 'prompt' ? 'promptModel' : 'visionModel';
-    $snakeModelKey = $category === 'prompt' ? 'prompt_model' : 'vision_model';
-    $camelApiNameKey = $category . 'ApiName';
-    $camelApiBaseUrlKey = $category . 'ApiBaseUrl';
-    $camelRequestTimeoutKey = $category . 'RequestTimeout';
-    $camelApiKeyKey = $category . 'ApiKey';
-    $camelClearKey = $category . 'ClearApiKey';
-    $snakeApiNameKey = $category . '_api_name';
-    $snakeApiBaseUrlKey = $category . '_api_base_url';
-    $snakeRequestTimeoutKey = $category . '_request_timeout';
-    $snakeApiKeyKey = $category . '_api_key';
-    $snakeClearKey = $category . '_clear_api_key';
-
-    $defaultApiName = $category === 'prompt' ? DEFAULT_PROMPT_API_NAME : DEFAULT_VISION_API_NAME;
-
-    return [
-        'apiName' => trim((string) ($nested['apiName'] ?? ($nested['api_name'] ?? ($shared[$camelApiNameKey] ?? ($shared[$snakeApiNameKey] ?? $defaultApiName))))) ?: $defaultApiName,
-        'apiBaseUrl' => normalize_api_base_url((string) ($nested['apiBaseUrl'] ?? ($nested['api_base_url'] ?? ($shared[$camelApiBaseUrlKey] ?? ($shared[$snakeApiBaseUrlKey] ?? $current['apiBaseUrl']))))),
-        'model' => trim((string) ($nested['model'] ?? ($shared[$legacyModelKey] ?? ($shared[$snakeModelKey] ?? $current['model'])))),
-        'requestTimeout' => normalize_request_timeout($nested['requestTimeout'] ?? ($nested['request_timeout'] ?? ($shared[$camelRequestTimeoutKey] ?? ($shared[$snakeRequestTimeoutKey] ?? $current['requestTimeout'])))),
-        'apiKey' => trim((string) ($nested['apiKey'] ?? ($nested['api_key'] ?? ($shared[$camelApiKeyKey] ?? ($shared[$snakeApiKeyKey] ?? ($shared['apiKey'] ?? ($shared['api_key'] ?? ''))))))),
-        'clearApiKey' => !empty($nested['clearApiKey']) || !empty($nested['clear_api_key']) || !empty($shared[$camelClearKey]) || !empty($shared[$snakeClearKey]),
-    ];
+    return api_category_input_from_spec(
+        $shared,
+        $category,
+        $current,
+        normalize_request_timeout($current['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT),
+        false
+    );
 }
 
 function shared_api_key_storage_fields(array $input, array $row, string $category): array
@@ -246,7 +218,6 @@ function shared_api_key_storage_fields(array $input, array $row, string $categor
 function save_site_settings(array $body): array
 {
     $db = pdo();
-    site_settings_row();
     $row = site_settings_row();
     $current = shared_api_config_client($row);
 

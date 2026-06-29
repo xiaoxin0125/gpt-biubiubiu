@@ -215,7 +215,8 @@ function ensure_schema(): void
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_wall_items_created_id (created_at, id),
       INDEX idx_wall_items_user (user_id),
-      INDEX idx_wall_items_client (client_id)
+      INDEX idx_wall_items_client (client_id),
+      INDEX idx_wall_items_source_job (source_job_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $db->exec("CREATE TABLE IF NOT EXISTS site_settings (
@@ -348,6 +349,7 @@ function ensure_schema(): void
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_completed_id', 'INDEX idx_image_jobs_user_completed_id (user_id, status, completed_at, created_at, id)');
     ensure_index($db, 'wall_items', 'idx_wall_items_created_id', 'INDEX idx_wall_items_created_id (created_at, id)');
+    ensure_index($db, 'wall_items', 'idx_wall_items_source_job', 'INDEX idx_wall_items_source_job (source_job_id)');
 
     bootstrap_admin_user($db);
 
@@ -407,7 +409,14 @@ function require_database(): void
     try {
         ensure_schema();
     } catch (Throwable $error) {
-        error_log('[gpt_biubiubiu] schema: ' . $error->getMessage());
+        $message = $error->getMessage();
+        error_log('[gpt_biubiubiu] schema: ' . $message);
+        if (preg_match('/Missing required environment variable: ([A-Z0-9_]+)/', $message, $matches)) {
+            json_response(['error' => '服务端缺少环境变量：' . $matches[1]], 503);
+        }
+        if (preg_match('/Missing strong environment secret: ([A-Z0-9_]+)/', $message, $matches)) {
+            json_response(['error' => '服务端缺少强随机密钥：' . $matches[1]], 503);
+        }
         json_response(['error' => '服务端未配置 MySQL'], 503);
     }
 }

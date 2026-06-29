@@ -90,60 +90,14 @@ function local_public_file_from_url(string $url): string
     return is_file($candidate) ? $candidate : '';
 }
 
-function public_remote_host_ips(string $host): array
-{
-    $records = @dns_get_record($host, DNS_A + DNS_AAAA);
-    if (!$records) {
-        $ip = filter_var($host, FILTER_VALIDATE_IP) ? $host : '';
-        $records = $ip ? [['ip' => $ip]] : [];
-    }
-
-    $ips = [];
-    foreach ($records as $record) {
-        $ip = (string) ($record['ip'] ?? ($record['ipv6'] ?? ''));
-        if ($ip === '') continue;
-        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) return [];
-        $ips[] = $ip;
-    }
-
-    return array_values(array_unique($ips));
-}
-
 function fetch_remote_image_binary(string $url): string
 {
-    $parts = parse_url($url);
-    $scheme = strtolower((string) ($parts['scheme'] ?? ''));
-    $host = (string) ($parts['host'] ?? '');
-    $path = (string) ($parts['path'] ?? '/');
-    $query = isset($parts['query']) ? '?' . (string) $parts['query'] : '';
-    $port = (int) ($parts['port'] ?? ($scheme === 'https' ? 443 : 80));
-    $ips = $host === '' ? [] : public_remote_host_ips($host);
-    if (!in_array($scheme, ['http', 'https'], true) || $host === '' || !$ips) {
-        json_response(['error' => '远程图片地址不允许访问'], 400);
-    }
-
-    $targetIp = $ips[0];
-    $targetHost = filter_var($targetIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? '[' . $targetIp . ']' : $targetIp;
-    $targetUrl = $scheme . '://' . $targetHost . ':' . $port . ($path === '' ? '/' : $path) . $query;
-    $context = stream_context_create([
-        'http' => [
-            'method' => 'GET',
-            'timeout' => 15,
-            'follow_location' => 0,
-            'max_redirects' => 0,
-            'header' => "Host: {$host}\r\nAccept: image/png,image/jpeg,image/webp,image/gif\r\n",
-        ],
-        'ssl' => [
-            'verify_peer' => true,
-            'verify_peer_name' => true,
-            'peer_name' => $host,
-            'SNI_enabled' => true,
-            'SNI_server_name' => $host,
-        ],
-    ]);
-    $binary = @file_get_contents($targetUrl, false, $context, 0, MAX_IMAGE_UPLOAD_BYTES + 1);
-    if ($binary === false) json_response(['error' => '无法读取远程图片'], 400);
-    if (strlen($binary) > MAX_IMAGE_UPLOAD_BYTES) json_response(['error' => '图片不能超过 20MB'], 413);
+    $response = outbound_http_request('GET', $url, [
+        'Accept: image/png,image/jpeg,image/webp,image/gif',
+    ], '', 15, MAX_IMAGE_UPLOAD_BYTES);
+    $binary = (string) ($response['body'] ?? '');
+    $status = (int) ($response['status'] ?? 0);
+    if ($status >= 400 || $binary === '') json_response(['error' => '无法读取远程图片'], 400);
     return $binary;
 }
 

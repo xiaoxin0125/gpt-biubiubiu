@@ -1758,6 +1758,41 @@ input::placeholder {
   grid-template-columns: 1fr;
 }
 
+.captcha-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px;
+  gap: 10px;
+  align-items: end;
+}
+
+.captcha-field label {
+  min-width: 0;
+}
+
+.captcha-image-button {
+  display: grid;
+  width: 130px;
+  height: 48px;
+  overflow: hidden;
+  place-items: center;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+  cursor: pointer;
+}
+
+.captcha-image-button img {
+  display: block;
+  width: 130px;
+  height: 48px;
+}
+
+.captcha-image-button span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
 .account-section-grid {
   align-items: end;
 }
@@ -2033,6 +2068,10 @@ select option {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.install-actions {
+  grid-template-columns: 1fr;
 }
 
 .modal-actions.three-actions {
@@ -3196,6 +3235,98 @@ select option {
 
   .mode-tabs button {
     padding: 0 10px;
+  }
+}
+
+.install-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  overflow: auto;
+}
+
+.install-card {
+  width: min(760px, calc(100vw - 28px));
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  padding: 24px;
+  box-shadow: var(--shadow-hard);
+}
+
+.install-head p,
+.install-section small,
+.install-notice span {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 760;
+  line-height: 1.55;
+}
+
+.install-form,
+.install-section,
+.install-notice {
+  display: grid;
+  gap: 14px;
+}
+
+.install-section,
+.install-notice,
+.install-message,
+.install-error,
+.install-missing {
+  padding: 14px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+}
+
+.install-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.install-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.install-grid span {
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.install-grid input {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 11px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+}
+
+.install-message {
+  border-color: #0d6b2f;
+  background: #e9f7ee;
+  color: #0d4f26;
+  font-weight: 850;
+}
+
+.install-error,
+.install-missing {
+  border-color: #8b1d1d;
+  background: #fff0ef;
+  color: #7a1717;
+  font-weight: 850;
+}
+
+.install-actions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .install-grid {
+    grid-template-columns: 1fr;
   }
 }
 

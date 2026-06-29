@@ -76,21 +76,22 @@ server/
 ```text
 用户登录
   -> 选择管理员共享 API，或保存自己的 API 配置和 API Key
-  -> 浏览器直连 OpenAI 兼容图片接口
+  -> 用户自有 Key：浏览器直连 OpenAI 兼容图片接口
+  -> 管理员共享 Key：前端调用本站 PHP 代理，PHP 解密后访问上游接口
   -> 前端拿到图片结果
   -> 保存生成记录到本站 PHP API
   -> PHP 写入 MySQL，并把图片落盘到 public/wall-images
   -> 用户选择发布到作品墙
 ```
 
-这里的生图请求由浏览器直接访问当前启用的 API 地址，PHP 不做代理转发。PHP 只处理账号、配置、模型列表、记录、图片落盘、作品墙和站点管理。
+用户自有 API Key 的生图请求仍由浏览器直接访问当前启用的 API 地址。管理员共享 API Key 不会下发到浏览器，共享文生图和图生图统一通过 PHP 后端代理转发。
 
 共享 API 由管理员在「账号设置 -> 网站管理」中维护。开启后：
 
 - 没有私有 API Key 的用户会默认使用共享 API
 - 已保存私有 API Key 的用户仍可手动切换到共享 API
 - 共享配置不会写入用户自己的 `user_api_configs`
-- 共享 API Key 使用同一套 `user_api_key_secret` 加密保存
+- 共享 API Key 使用同一套 `user_api_key_secret` 加密保存，只在后端解密调用
 
 ## 环境要求
 
@@ -108,34 +109,26 @@ server/
 npm install
 ```
 
-复制 PHP 配置：
+复制 PHP 配置模板和本地环境文件：
 
 ```bash
 cp .php-api-config.example.php .php-api-config.php
+cp env.example .env
 ```
 
-编辑 `.php-api-config.php`：
+编辑 `.env`，填入运行时配置：
 
-```php
-<?php
-return [
-    'openai_base_url' => 'https://api.openai.com',
-    'openai_image_model' => 'gpt-image-2',
-
-    'mysql_host' => '127.0.0.1',
-    'mysql_port' => 3306,
-    'mysql_user' => 'your-db-user',
-    'mysql_password' => 'your-db-password',
-    'mysql_database' => 'your-db-name',
-
-    'session_secret' => 'generate-at-least-32-random-characters-before-deploy',
-    'user_api_key_secret' => 'generate-another-32-random-characters-before-deploy',
-
-    'bootstrap_admin_username' => '',
-    'bootstrap_admin_password' => '',
-    'bootstrap_admin_display_name' => '',
-];
+```bash
+MYSQL_USER=replace-with-db-user
+MYSQL_PASSWORD=replace-with-db-password
+MYSQL_DATABASE=replace-with-db-name
+SESSION_SECRET=replace-with-at-least-32-random-characters
+USER_API_KEY_SECRET=replace-with-another-32-random-characters
 ```
+
+`.php-api-config.php` 会优先读取 PHP 进程环境变量，其次读取项目根目录 `.env`。如果站点提示缺少 `MYSQL_USER`，可以打开安装页填写同一套数据库账号；安装页只测试连接并写入 `.env`，不会清空或覆盖已有数据库内容。
+
+生产环境不要把数据库密码、Cookie 签名密钥或 API Key 写进仓库文件。
 
 启动开发环境：
 
@@ -202,6 +195,7 @@ mysql -u your-db-user -p your-db-name < server/schema.sql
 | 配置 | 说明 |
 | --- | --- |
 | `legacy_user_api_key_secrets` | 旧版 API Key 加密密钥列表，用于更换 `user_api_key_secret` 后平滑迁移 |
+| `allowed_outbound_ports` | 后端代理、模型列表和远程图片读取允许访问的端口，默认只允许 `80`、`443` |
 
 如果需要轮换 `user_api_key_secret`，先把旧密钥放入 `legacy_user_api_key_secrets`，用户下次读取配置时会自动尝试用新密钥重写密文。
 
@@ -223,7 +217,7 @@ mysql -u your-db-user -p your-db-name < server/schema.sql
 
 - 开放注册：关闭后访客只能登录，注册入口和注册接口都会停用
 - 作品墙需登录：开启后未登录访客无法查看作品墙
-- 共享 API：开启后向登录用户注入一条只读的共享配置
+- 共享 API：开启后向登录用户注入一条只读的共享配置，生图请求由后端代理执行
 - 共享模型：可手动填写，也可通过上游 `/v1/models` 获取列表后选择
 
 共享 API 适合站点统一提供额度；用户保存自己的 API Key 后，默认优先使用自己的配置，也可以切回共享配置。
@@ -278,6 +272,9 @@ npm run start
 ```text
 GET    /api/health
 
+GET    /api/install/status
+POST   /api/install
+
 GET    /api/auth/me
 POST   /api/auth/register
 POST   /api/auth/login
@@ -290,6 +287,9 @@ GET    /api/settings/direct
 POST   /api/settings
 POST   /api/settings/active-api
 POST   /api/settings/models
+
+POST   /api/images/generations
+POST   /api/images/edits
 
 GET    /api/admin/site-settings
 POST   /api/admin/site-settings
