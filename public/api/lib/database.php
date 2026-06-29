@@ -189,7 +189,7 @@ function ensure_schema(): void
       result_json JSON DEFAULT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       completed_at TIMESTAMP NULL DEFAULT NULL,
-      INDEX idx_image_jobs_user_created (user_id, created_at),
+      INDEX idx_image_jobs_user_completed_id (user_id, status, completed_at, created_at, id),
       CONSTRAINT fk_image_jobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
@@ -346,6 +346,7 @@ function ensure_schema(): void
     ensure_column($db, 'site_settings', 'shared_vision_api_key_hint', 'shared_vision_api_key_hint VARCHAR(24) DEFAULT NULL AFTER shared_vision_api_key_tag');
     ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
+    ensure_index($db, 'image_jobs', 'idx_image_jobs_user_completed_id', 'INDEX idx_image_jobs_user_completed_id (user_id, status, completed_at, created_at, id)');
     ensure_index($db, 'wall_items', 'idx_wall_items_created_id', 'INDEX idx_wall_items_created_id (created_at, id)');
 
     bootstrap_admin_user($db);
@@ -391,6 +392,7 @@ function ensure_schema(): void
       shared_vision_api_key_tag = COALESCE(shared_vision_api_key_tag, shared_api_key_tag),
       shared_vision_api_key_hint = COALESCE(shared_vision_api_key_hint, shared_api_key_hint)");
 
+    $db->exec("UPDATE image_jobs SET completed_at = created_at WHERE status = 'completed' AND completed_at IS NULL");
     $db->exec("UPDATE image_jobs SET revised_prompt = NULL WHERE revised_prompt IS NOT NULL AND (TRIM(revised_prompt) = '' OR TRIM(revised_prompt) = TRIM(COALESCE(prompt, '')))");
     $db->exec("UPDATE wall_items SET revised_prompt = NULL WHERE revised_prompt IS NOT NULL AND (TRIM(revised_prompt) = '' OR TRIM(revised_prompt) = TRIM(COALESCE(prompt, '')))");
 

@@ -58,7 +58,7 @@ export const useSession = (deps) => {
         applyServerSettings(data.settings, data.user);
         const normalizedSettings = normalizeServerSettings(data.settings || {});
         if (normalizedSettings.hasApiKey) await syncDirectApiKey(normalizedSettings);
-        await syncGeneratedImages();
+        await syncGeneratedImages({ user: data.user });
       }
       setAuthForm(emptyAuthForm);
       setAuthTab('profile');

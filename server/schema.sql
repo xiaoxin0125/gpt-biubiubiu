@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS image_jobs (
   result_json JSON DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   completed_at TIMESTAMP NULL DEFAULT NULL,
-  INDEX idx_image_jobs_user_created (user_id, created_at),
+  INDEX idx_image_jobs_user_completed_id (user_id, status, completed_at, created_at, id),
   CONSTRAINT fk_image_jobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

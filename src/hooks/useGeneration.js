@@ -23,7 +23,7 @@ import {
   imageToSavePayload,
   normalizeImageSource,
 } from '../lib/images';
-import { prependHistoryRecord } from '../lib/history';
+import { mergeHistoryRecords, prependHistoryRecord } from '../lib/history';
 
 export const buildGenerationPayload = (formDraft, apiConfig, apiConfigForm) => {
   const normalized = normalizeForm({ ...formDraft, model: apiConfig?.model || formDraft.model });
@@ -232,9 +232,9 @@ export const useGeneration = (deps) => {
 
       try {
         const nextHistory = prependHistoryRecord(record);
-        setHistory(nextHistory);
+        setHistory((items) => (user ? mergeHistoryRecords(items, [record]) : nextHistory));
       } catch {
-        setHistory((items) => [record, ...items.filter((item) => item.id !== record.id)].slice(0, 30));
+        setHistory((items) => (user ? mergeHistoryRecords(items, [record]) : [record, ...items.filter((item) => item.id !== record.id)].slice(0, 30)));
         setError('图片已生成，但本地历史记录保存失败。');
       }
       setStatus((current) => ({ ...current, message: `Done · ${storedImages.length}` }));

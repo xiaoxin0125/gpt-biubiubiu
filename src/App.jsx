@@ -34,7 +34,6 @@ import {
   getImageIdentity,
   getMasonryColumns,
   isSameImageIdentity,
-  normalizeBoardImage,
 } from './lib/board';
 import {
   normalizeForm,
@@ -42,7 +41,9 @@ import {
   normalizeVisibleRevisedPrompt,
 } from './lib/form';
 import {
+  createHistoryRecordsFromGeneratedItems,
   flattenHistoryImages,
+  mergeHistoryRecords,
   readHistory,
   removeImageFromHistory,
   saveHistory,
@@ -55,7 +56,6 @@ import {
   revokeObjectImageUrls,
 } from './lib/images';
 import { getAvailableRatios, getDraftSize, parseSize } from './lib/size';
-import { applyWallPatch } from './lib/optimistic';
 import { useGeneration } from './hooks/useGeneration';
 import { useApiConfig } from './hooks/useApiConfig';
 import { useSession } from './hooks/useSession';
@@ -68,6 +68,8 @@ function App() {
   const [view, setView] = useState('generate');
   const [form, setForm] = useState(defaultForm);
   const [history, setHistory] = useState([]);
+  const [historyNextCursor, setHistoryNextCursor] = useState('');
+  const [historyHasMore, setHistoryHasMore] = useState(false);
   const [images, setImages] = useState([]);
   const [wallItems, setWallItems] = useState([]);
   const [wallNextCursor, setWallNextCursor] = useState('');
@@ -325,65 +327,43 @@ function App() {
     }
   }, [wallLocked, wallNextCursor, setBoardVisibleCount, boardRef]);
 
-  const syncGeneratedImages = async () => {
+  const syncGeneratedImages = useCallback(async ({ append = false, user: syncUser = user } = {}) => {
+    if (!syncUser) {
+      setHistory(readHistory());
+      setHistoryNextCursor('');
+      setHistoryHasMore(false);
+      return;
+    }
+
+    const cursor = append ? historyNextCursor : '';
+    if (append && !cursor) return;
+
     try {
-      const data = await requestJson('/api/generated-images');
+      const query = new URLSearchParams({ limit: String(Math.max(BOARD_PAGE_SIZE * 2, 40)) });
+      if (cursor) query.set('cursor', cursor);
+      const data = await requestJson(`/api/generated-images?${query.toString()}`);
       const generatedItems = Array.isArray(data.items) ? data.items : [];
-      const recordsByRequest = new Map();
-
-      generatedItems.forEach((item) => {
-        const requestId = item.requestId || item.request_id || `job-${item.jobId || item.id}`;
-        const formDraft = normalizeForm({ ...(item.form || {}), prompt: item.prompt || item.form?.prompt || '' });
-        const image = normalizeBoardImage({
-          ...item,
-          id: item.id || `job-${item.jobId}`,
-          requestId,
-          status: 'completed',
-          url: item.url || item.image_url || '',
-          image_url: item.image_url || item.url || '',
-          downloadUrl: item.downloadUrl || item.originalUrl || item.original_url || '',
-          originalUrl: item.originalUrl || item.downloadUrl || item.original_url || '',
-          b64_json: item.url || item.image_url ? '' : item.b64_json || '',
-          form: formDraft,
-          prompt: item.prompt || formDraft.prompt || '',
-          source: normalizeImageSource(item.source),
-          isOnWall: Boolean(item.wallItemId),
-          createdAt: item.createdAt || item.completedAt || item.finishedAt || new Date().toISOString(),
-        });
-
-        if (!recordsByRequest.has(requestId)) {
-          recordsByRequest.set(requestId, {
-            id: requestId,
-            form: formDraft,
-            images: [],
-            createdAt: image.createdAt,
-          });
-        }
-
-        recordsByRequest.get(requestId).images.push(image);
-      });
-
-      const syncedRecords = Array.from(recordsByRequest.values())
-        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+      const syncedRecords = createHistoryRecordsFromGeneratedItems(generatedItems);
 
       setHistory((current) => {
         const currentHistory = current.length ? current : readHistory();
-        const syncedIds = new Set(syncedRecords.map((record) => record.id));
-        const retainedHistory = currentHistory
-          .filter((record) => !syncedIds.has(record.id));
-        const nextHistory = [...syncedRecords, ...retainedHistory].slice(0, 30);
+        const nextHistory = mergeHistoryRecords(currentHistory, syncedRecords);
         saveHistory(nextHistory);
         return nextHistory;
       });
+      setHistoryHasMore(Boolean(data.hasMore));
+      setHistoryNextCursor(data.nextCursor ? String(data.nextCursor) : '');
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : '生成作品同步失败';
       if (message !== '请先登录') setError(message);
     }
-  };
+  }, [historyNextCursor, user]);
 
   const refreshBoard = async () => {
     if (!user) {
       setHistory(readHistory());
+      setHistoryNextCursor('');
+      setHistoryHasMore(false);
       return;
     }
 
@@ -416,12 +396,14 @@ function App() {
           if (normalizedSettings.hasApiKey) syncDirectApiKey(normalizedSettings).catch(() => {
             setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
           });
-          syncGeneratedImages();
+          syncGeneratedImages({ user: nextUser });
         } else {
           saveHistory([]);
           apiKeyVaultRef.current.clear();
           setImages([]);
           setHistory([]);
+          setHistoryNextCursor('');
+          setHistoryHasMore(false);
           setSelectedImage(null);
           setBoardScope('generate');
           setApiConfigForm(defaultApiConfigForm);
@@ -433,6 +415,8 @@ function App() {
         apiKeyVaultRef.current.clear();
         setImages([]);
         setHistory([]);
+        setHistoryNextCursor('');
+        setHistoryHasMore(false);
         setSelectedImage(null);
         setBoardScope('generate');
         setStatus((current) => ({ ...current, loading: false, configured: false, message: '请先登录' }));
@@ -446,6 +430,12 @@ function App() {
   useEffect(() => {
     if (view === 'prompt-tools' && siteFlags.promptToolsEnabled === false) setView('generate');
   }, [siteFlags.promptToolsEnabled, view]);
+
+  useEffect(() => {
+    if (user) return;
+    setHistoryNextCursor('');
+    setHistoryHasMore(false);
+  }, [user]);
 
   useEffect(() => {
     setProfileForm({ displayName: user?.displayName || user?.username || '' });
@@ -514,14 +504,16 @@ function App() {
   const renderableBoardItems = boardItems.filter(canRenderBoardItem);
   const visibleBoardItems = renderableBoardItems.slice(0, boardVisibleCount);
   const hasMoreLoadedBoardItems = visibleBoardItems.length < renderableBoardItems.length;
-  const hasMoreBoardItems = hasMoreLoadedBoardItems || (view === 'wall' && wallHasMore);
+  const hasMoreHistoryItems = Boolean(user && view === 'generate' && ['all', 'history'].includes(boardScope) && historyHasMore);
+  const hasMoreBoardItems = hasMoreLoadedBoardItems || (view === 'wall' && wallHasMore) || hasMoreHistoryItems;
   const masonryColumns = useMemo(
     () => getMasonryColumns(visibleBoardItems, masonryColumnCount, imageLayoutMeta),
     [imageLayoutMeta, masonryColumnCount, visibleBoardItems],
   );
 
   const isSameImage = isSameImageIdentity;
-  const boardResetSourceLength = view === 'wall' ? 0 : sourceBoardItems.length;
+  const serverPagedBoard = view === 'wall' || Boolean(user && view === 'generate' && ['all', 'history'].includes(boardScope));
+  const boardResetSourceLength = serverPagedBoard ? 0 : sourceBoardItems.length;
 
   useEffect(() => {
     setBoardVisibleCount(BOARD_PAGE_SIZE);
@@ -544,6 +536,11 @@ function App() {
 
       if (view === 'wall' && wallHasMore) {
         loadWall({ append: true }).finally(() => setBoardLoadingMore(false));
+        return;
+      }
+
+      if (hasMoreHistoryItems) {
+        syncGeneratedImages({ append: true }).finally(() => setBoardLoadingMore(false));
         return;
       }
 
@@ -581,7 +578,7 @@ function App() {
     };
     scrollTarget.addEventListener('scroll', onScroll, { passive: true });
     return () => scrollTarget.removeEventListener('scroll', onScroll);
-  }, [boardLoadingMore, hasMoreBoardItems, hasMoreLoadedBoardItems, loadWall, renderableBoardItems.length, view, wallHasMore]);
+  }, [boardLoadingMore, hasMoreBoardItems, hasMoreHistoryItems, hasMoreLoadedBoardItems, loadWall, renderableBoardItems.length, syncGeneratedImages, view, wallHasMore]);
 
   const openSizeDialog = () => {
     if (!form.size) {
@@ -608,7 +605,11 @@ function App() {
     if (!history.length || !window.confirm('确认清空历史记录？')) return;
 
     const previousHistory = history;
+    const previousHistoryNextCursor = historyNextCursor;
+    const previousHistoryHasMore = historyHasMore;
     setHistory([]);
+    setHistoryNextCursor('');
+    setHistoryHasMore(false);
     saveHistory([]);
     if (boardScope === 'history') setSelectedImage(null);
 
@@ -617,6 +618,8 @@ function App() {
       await requestJson('/api/generated-images', { method: 'DELETE' });
     } catch (deleteError) {
       setHistory(previousHistory);
+      setHistoryNextCursor(previousHistoryNextCursor);
+      setHistoryHasMore(previousHistoryHasMore);
       saveHistory(previousHistory);
       setError(deleteError instanceof Error ? deleteError.message : '服务端历史记录删除失败');
     }
@@ -678,7 +681,7 @@ function App() {
     return null;
   };
 
-  const { clearWallState, checkWallState, toggleWall } = useWall({
+  const { checkWallState, toggleWall } = useWall({
     wallItems,
     setWallItems,
     user,

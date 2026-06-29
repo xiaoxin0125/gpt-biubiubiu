@@ -136,11 +136,63 @@ function client_generated_image(array $item): array
     ];
 }
 
+function generated_images_page_limit(): int
+{
+    $limit = (int) ($_GET['limit'] ?? 40);
+    return max(1, min(60, $limit ?: 40));
+}
+
+function generated_images_cursor_from_item(array $item): string
+{
+    $createdAt = (string) (($item['created_at'] ?? '') ?: '');
+    $sortAt = (string) (($item['completed_at'] ?? '') ?: $createdAt);
+    $payload = json_encode([
+        'sortAt' => $sortAt,
+        'createdAt' => $createdAt,
+        'id' => (int) ($item['id'] ?? 0),
+    ], JSON_UNESCAPED_SLASHES);
+    return rtrim(strtr(base64_encode($payload ?: '{}'), '+/', '-_'), '=');
+}
+
+function generated_images_cursor_payload(string $cursor): array
+{
+    $cursor = trim($cursor);
+    if ($cursor === '') return [];
+
+    $base64 = strtr($cursor, '-_', '+/');
+    $base64 .= str_repeat('=', (4 - strlen($base64) % 4) % 4);
+    $decoded = json_decode(base64_decode($base64, true) ?: '', true);
+    $sortAt = is_array($decoded) ? trim((string) ($decoded['sortAt'] ?? '')) : '';
+    $createdAt = is_array($decoded) ? trim((string) ($decoded['createdAt'] ?? '')) : '';
+    $id = is_array($decoded) ? (int) ($decoded['id'] ?? 0) : 0;
+    if ($sortAt === '' || $createdAt === '' || $id <= 0) json_response(['error' => '历史记录分页参数无效'], 400);
+
+    return ['sortAt' => $sortAt, 'createdAt' => $createdAt, 'id' => $id];
+}
+
 function handle_generated_images(array $user): array
 {
-    $stmt = pdo()->prepare("SELECT id, user_id, request_id, mode, status, prompt, revised_prompt, image_url, original_url, display_url, image_mime, original_bytes, display_bytes, wall_item_id, params_json, created_at, completed_at FROM image_jobs WHERE user_id = ? AND status = ? AND CONCAT(COALESCE(display_url, ''), COALESCE(image_url, ''), COALESCE(original_url, '')) <> '' ORDER BY completed_at DESC, created_at DESC LIMIT 80");
-    $stmt->execute([(int) $user['id'], 'completed']);
-    return ['items' => array_map('client_generated_image', $stmt->fetchAll())];
+    $limit = generated_images_page_limit();
+    $cursor = generated_images_cursor_payload((string) ($_GET['cursor'] ?? ''));
+    $cursorWhere = '';
+    $params = [(int) $user['id'], 'completed'];
+    if ($cursor) {
+        $cursorWhere = " AND (completed_at < ? OR (completed_at = ? AND (created_at < ? OR (created_at = ? AND id < ?))))";
+        array_push($params, $cursor['sortAt'], $cursor['sortAt'], $cursor['createdAt'], $cursor['createdAt'], $cursor['id']);
+    }
+
+    $stmt = pdo()->prepare("SELECT id, user_id, request_id, mode, status, prompt, revised_prompt, image_url, original_url, display_url, image_mime, original_bytes, display_bytes, wall_item_id, params_json, created_at, completed_at FROM image_jobs WHERE user_id = ? AND status = ? AND CONCAT(COALESCE(display_url, ''), COALESCE(image_url, ''), COALESCE(original_url, '')) <> ''" . $cursorWhere . " ORDER BY completed_at DESC, created_at DESC, id DESC LIMIT " . ($limit + 1));
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll();
+    $hasMore = count($rows) > $limit;
+    $items = array_slice($rows, 0, $limit);
+    $lastItem = $items ? $items[count($items) - 1] : null;
+
+    return [
+        'items' => array_map('client_generated_image', $items),
+        'hasMore' => $hasMore,
+        'nextCursor' => $hasMore && $lastItem ? generated_images_cursor_from_item($lastItem) : null,
+    ];
 }
 
 function detach_or_purge_job_files(array $row): void
