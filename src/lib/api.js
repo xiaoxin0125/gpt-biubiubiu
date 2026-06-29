@@ -174,7 +174,7 @@ export const normalizeServerSettings = (value = {}) => {
 const normalizeDirectImageItem = (image, index, outputFormat) => {
   const rawSourceValue = typeof image === 'string'
     ? image
-    : image?.b64_json || image?.url || image?.data_url || image?.data || image?.image || image?.content || '';
+    : image?.b64_json || image?.image_b64 || image?.partial_image_b64 || image?.base64 || image?.url || image?.image_url || image?.data_url || image?.data || image?.image || image?.content || image?.result || '';
   const sourceValue = String(rawSourceValue || '');
   const dataImageMime = getDataImageMime(sourceValue);
   const imageMime = image?.imageMime || image?.mime || dataImageMime || imageMimeForOutputFormat(outputFormat);
@@ -203,9 +203,24 @@ const normalizeDirectImageItem = (image, index, outputFormat) => {
 };
 
 const directImageItems = (data) => {
-  if (Array.isArray(data?.data)) return data.data;
-  if (Array.isArray(data?.images)) return data.images;
-  const hasInlineImage = data?.b64_json || data?.url || data?.image || data?.data_url || (typeof data?.data === 'string' && data.data);
+  if (!data) return [];
+  if (typeof data === 'string') return data ? [data] : [];
+
+  if (Array.isArray(data)) return data.flatMap((item) => directImageItems(item));
+
+  for (const key of ['data', 'images', 'output']) {
+    if (Array.isArray(data?.[key])) return data[key].flatMap((item) => directImageItems(item));
+  }
+
+  for (const key of ['data', 'image', 'content', 'result', 'output']) {
+    const value = data?.[key];
+    if (value && typeof value === 'object') {
+      const items = directImageItems(value);
+      if (items.length) return items;
+    }
+  }
+
+  const hasInlineImage = data?.b64_json || data?.image_b64 || data?.partial_image_b64 || data?.base64 || data?.url || data?.image_url || data?.data_url || (typeof data?.data === 'string' && data.data) || (typeof data?.image === 'string' && data.image) || (typeof data?.content === 'string' && data.content) || (typeof data?.result === 'string' && data.result) || (typeof data?.output === 'string' && data.output);
   return hasInlineImage ? [data] : [];
 };
 
@@ -235,40 +250,68 @@ const buildDirectImageApiUrl = (config = {}, path) => {
   return base.toString();
 };
 
+const parseServerSentEventFrames = (text) => {
+  const frames = [];
+  let eventName = '';
+  let dataLines = [];
+
+  const pushFrame = () => {
+    const payload = dataLines.join('\n').trim();
+    if (payload && payload !== '[DONE]') frames.push({ eventName, payload });
+    eventName = '';
+    dataLines = [];
+  };
+
+  String(text || '').split(/\r?\n/).forEach((line) => {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) {
+      pushFrame();
+      return;
+    }
+    if (trimmedLine.startsWith('event:')) eventName = trimmedLine.slice(6).trim();
+    if (trimmedLine.startsWith('data:')) dataLines.push(trimmedLine.slice(5).trim());
+  });
+
+  pushFrame();
+  return frames;
+};
+
 const parseDirectImageResponseText = (text) => {
   const trimmed = String(text || '').trim();
   if (!trimmed) return {};
   if (/^data:(image\/[a-z0-9.+-]+);base64,/i.test(trimmed)) return { data: trimmed };
 
-  const payloads = trimmed
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trim())
-    .filter((payload) => payload && payload !== '[DONE]');
+  const sseFrames = parseServerSentEventFrames(trimmed);
 
-  if (payloads.length) {
+  if (sseFrames.length) {
     const events = [];
-    let imagePayload = '';
-    payloads.forEach((payload) => {
+    const imagePayloads = [];
+    sseFrames.forEach(({ eventName, payload }) => {
       if (/^data:(image\/[a-z0-9.+-]+);base64,/i.test(payload)) {
-        imagePayload = payload;
+        imagePayloads.push(payload);
         return;
       }
       try {
         const decoded = JSON.parse(payload);
-        if (decoded && typeof decoded === 'object') events.push(decoded);
+        if (decoded && typeof decoded === 'object') events.push({ event: eventName, ...decoded });
       } catch {
         // 忽略非 JSON 事件片段
       }
     });
 
-    if (imagePayload) return { data: imagePayload };
+    if (imagePayloads.length) return { data: imagePayloads };
 
-    let imageEvent = events.find((event) => normalizeDirectImageResponse(event, 'png').data.length) || events.at(-1) || {};
+    const imageEvents = events.filter((event) => directImageItems(event).length);
+    const completedImageEvents = imageEvents.filter((event) => !/partial/i.test(String(event?.type || event?.event || '')));
+    const fallbackImageEvents = Array.from(imageEvents.reduce((itemsByIndex, event, index) => {
+      const key = event?.index ?? event?.output_index ?? event?.image_index ?? event?.imageIndex ?? event?.partial_image_index ?? event?.partialImageIndex ?? index;
+      itemsByIndex.set(String(key), event);
+      return itemsByIndex;
+    }, new Map()).values());
+    const imageItems = (completedImageEvents.length ? completedImageEvents : fallbackImageEvents).flatMap((event) => directImageItems(event));
     const revisedPrompt = events.map((event) => normalizeRevisedPrompt(event?.revised_prompt, event?.revisedPrompt, event?.prompt_revised)).filter(Boolean).at(-1) || '';
-    if (revisedPrompt && imageEvent && typeof imageEvent === 'object') imageEvent = { ...imageEvent, revised_prompt: revisedPrompt };
-    return imageEvent;
+    const imageEvent = imageItems.length ? { data: imageItems } : events.at(-1) || {};
+    return revisedPrompt && imageEvent && typeof imageEvent === 'object' ? { ...imageEvent, revised_prompt: revisedPrompt } : imageEvent;
   }
 
   return JSON.parse(trimmed);
