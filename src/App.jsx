@@ -10,6 +10,8 @@ import SizeDialog from './components/SizeDialog';
 import Topbar from './components/Topbar';
 import Workbench from './components/Workbench';
 import {
+  API_CONFIG_SCOPE_IMAGE,
+  API_CONFIG_SCOPE_PROMPT,
   boardFilterOptions,
   BOARD_LOAD_DELAY_MS,
   BOARD_PAGE_SIZE,
@@ -26,6 +28,8 @@ import {
   wallFilterOptions,
 } from './constants/options';
 import {
+  apiConfigHasKeyForScope,
+  apiConfigLabelForScope,
   normalizeApiConfigItem,
   normalizeServerSettings,
   requestJson,
@@ -147,11 +151,18 @@ function App() {
   const activeBoardFilter = activeFilterOptions.some((option) => option.value === boardFilter) ? boardFilter : 'all';
   const activeApiConfig = useMemo(() => {
     const configs = Array.isArray(apiConfigForm.apiConfigs) && apiConfigForm.apiConfigs.length ? apiConfigForm.apiConfigs : [normalizeApiConfigItem(apiConfigForm)];
-    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId)) || configs[0];
+    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId)) || configs.find((item) => item.apiScope !== API_CONFIG_SCOPE_PROMPT) || configs[0];
     return { ...activeConfig, requestTimeout: apiConfigForm.requestTimeout };
   }, [apiConfigForm]);
-  const statusText = status.configured ? (activeApiConfig?.configName || status.apiName || activeApiConfig?.apiName || status.message || defaultApiConfigItem.configName) : status.message;
-  const canSubmitGeneration = Boolean(user) && !apiKeySyncing && (status.configured || Boolean(activeApiConfig?.hasApiKey));
+  const activePromptApiConfig = useMemo(() => {
+    const configs = Array.isArray(apiConfigForm.apiConfigs) && apiConfigForm.apiConfigs.length ? apiConfigForm.apiConfigs : [normalizeApiConfigItem(apiConfigForm)];
+    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activePromptApiConfigId)) || configs.find((item) => item.apiScope !== API_CONFIG_SCOPE_IMAGE) || activeApiConfig;
+    return { ...activeConfig, requestTimeout: apiConfigForm.requestTimeout };
+  }, [activeApiConfig, apiConfigForm]);
+  const currentApiScope = view === 'prompt-tools' ? API_CONFIG_SCOPE_PROMPT : API_CONFIG_SCOPE_IMAGE;
+  const currentActiveApiConfig = currentApiScope === API_CONFIG_SCOPE_PROMPT ? activePromptApiConfig : activeApiConfig;
+  const statusText = status.configured ? apiConfigLabelForScope(currentActiveApiConfig, currentApiScope, status.apiName || defaultApiConfigItem.apiName) : status.message;
+  const canSubmitGeneration = Boolean(user) && !apiKeySyncing && apiConfigHasKeyForScope(activeApiConfig, API_CONFIG_SCOPE_IMAGE);
 
   const { updateApiConfig, addApiConfig, removeApiConfig, resetDirectSettings } = useApiConfig({
     apiConfigForm,
@@ -215,7 +226,7 @@ function App() {
     }));
   };
 
-  const switchActiveApiConfig = async (configId) => {
+  const switchActiveApiConfig = async (configId, apiScope = API_CONFIG_SCOPE_IMAGE) => {
     if (!user) {
       setError('请先登录后再切换 API。');
       return;
@@ -225,19 +236,22 @@ function App() {
       const data = await requestJson('/api/settings/active-api', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ activeApiConfigId: configId }),
+        body: JSON.stringify({ activeApiConfigId: configId, category: apiScope }),
       });
       const normalized = normalizeServerSettings(data.settings || {});
+      const nextActiveConfig = apiScope === API_CONFIG_SCOPE_PROMPT
+        ? (normalized.apiConfigs || []).find((item) => String(item.id) === String(normalized.activePromptApiConfigId)) || normalized.activePromptConfig || normalized
+        : normalized;
       setApiConfigForm(normalized);
-      setForm((current) => ({ ...current, model: normalized.model || current.model }));
+      if (apiScope === API_CONFIG_SCOPE_IMAGE) setForm((current) => ({ ...current, model: normalized.model || current.model }));
       setStatus((current) => ({
         ...current,
         loading: false,
-        configured: Boolean(normalized.hasApiKey),
-        apiName: normalized.apiName,
-        message: normalized.hasApiKey ? normalized.apiName : '未配置 API Key',
+        configured: apiConfigHasKeyForScope(nextActiveConfig, apiScope),
+        apiName: apiConfigLabelForScope(nextActiveConfig, apiScope, normalized.apiName),
+        message: apiConfigHasKeyForScope(nextActiveConfig, apiScope) ? apiConfigLabelForScope(nextActiveConfig, apiScope, normalized.apiName) : '未配置 API Key',
       }));
-      if (normalized.hasApiKey) await syncDirectApiKey(normalized);
+      if (apiScope === API_CONFIG_SCOPE_IMAGE && normalized.hasApiKey) await syncDirectApiKey(normalized);
       setOpenSelect('');
       setError('');
     } catch (switchError) {
@@ -273,10 +287,6 @@ function App() {
             promptApi: {
               ...(siteSettings.sharedApi?.promptApi || {}),
               confirmApiKeySave: Boolean(siteSettings.sharedApi?.promptApi?.apiKey),
-            },
-            visionApi: {
-              ...(siteSettings.sharedApi?.visionApi || {}),
-              confirmApiKeySave: Boolean(siteSettings.sharedApi?.visionApi?.apiKey),
             },
           },
         }),
@@ -805,7 +815,7 @@ function App() {
       ? { ...(siteSettings.sharedApi || {}), id: 'shared' }
       : (apiConfigForm.apiConfigs || []).find((item) => String(item.id) === rawConfigId);
     const category = config?.[categoryKey] || (categoryKey === 'imageApi' ? config : {});
-    const apiCategory = categoryKey === 'promptApi' ? 'prompt' : categoryKey === 'visionApi' ? 'vision' : 'image';
+    const apiCategory = categoryKey === 'promptApi' ? 'prompt' : 'image';
     if (!config) {
       setError('API 配置不存在。');
       return;
@@ -858,7 +868,6 @@ function App() {
                     [categoryKey]: { ...(item[categoryKey] || {}), model: options[0].value },
                     ...(categoryKey === 'imageApi' ? { model: options[0].value } : {}),
                     ...(categoryKey === 'promptApi' ? { promptModel: options[0].value } : {}),
-                    ...(categoryKey === 'visionApi' ? { visionModel: options[0].value } : {}),
                   }
                 : item
             )),
@@ -994,6 +1003,7 @@ function App() {
         status={status}
         statusText={statusText}
         activeApiConfig={activeApiConfig}
+        activePromptApiConfig={activePromptApiConfig}
         apiConfigForm={apiConfigForm}
         siteFlags={siteFlags}
         switchActiveApiConfig={switchActiveApiConfig}

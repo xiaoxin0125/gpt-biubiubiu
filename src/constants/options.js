@@ -10,6 +10,9 @@ export const MASONRY_CARD_GAP_RATIO = 0.08;
 export const MAX_OUTPUT_IMAGES = 10;
 
 export const SHARED_API_CONFIG_ID = 'shared';
+export const API_CONFIG_SCOPE_ALL = 'all';
+export const API_CONFIG_SCOPE_IMAGE = 'image';
+export const API_CONFIG_SCOPE_PROMPT = 'prompt';
 
 export const defaultSiteFlags = {
   wallRequireLogin: false,
@@ -193,34 +196,27 @@ export const defaultImageApiCategory = {
 
 export const defaultPromptApiCategory = {
   ...defaultApiCategory,
-  apiName: '提示词优化 API',
-};
-
-export const defaultVisionApiCategory = {
-  ...defaultApiCategory,
-  apiName: '图片反推/视觉 API',
+  apiName: '提示词助手 API',
 };
 
 export const defaultApiConfigItem = {
   id: 'default-api-config',
-  configName: 'API 配置 1',
+  apiScope: API_CONFIG_SCOPE_ALL,
   apiName: defaultImageApiCategory.apiName,
   apiBaseUrl: defaultImageApiCategory.apiBaseUrl,
   model: defaultImageApiCategory.model,
-  promptModel: '',
-  visionModel: '',
   apiKey: '',
   hasApiKey: false,
   apiKeyHint: '',
   requestTimeout: MAX_REQUEST_TIMEOUT_SECONDS,
   imageApi: defaultImageApiCategory,
   promptApi: defaultPromptApiCategory,
-  visionApi: defaultVisionApiCategory,
 };
 
 export const defaultApiConfigForm = {
   ...defaultApiConfigItem,
   stream: false,
   activeApiConfigId: defaultApiConfigItem.id,
+  activePromptApiConfigId: defaultApiConfigItem.id,
   apiConfigs: [defaultApiConfigItem],
 };

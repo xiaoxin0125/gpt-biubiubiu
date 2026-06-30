@@ -12,8 +12,7 @@ define('MAX_REQUEST_TIMEOUT', 999);
 define('REQUEST_TIMEOUT_BUFFER', 60);
 define('WALL_DISPLAY_MAX_BYTES', 1048576);
 define('DEFAULT_API_NAME', 'OpenAI gpt-image-2');
-define('DEFAULT_PROMPT_API_NAME', '提示词优化 API');
-define('DEFAULT_VISION_API_NAME', '图片反推/视觉 API');
+define('DEFAULT_PROMPT_API_NAME', '提示词助手 API');
 define('DEFAULT_API_BASE_URL', 'https://api.openai.com');
 define('DEFAULT_IMAGE_MODEL', 'gpt-image-2');
 define('MAX_IMAGE_UPLOAD_BYTES', 20 * 1024 * 1024);
@@ -22,7 +21,7 @@ define('MAX_PROXY_RESPONSE_BYTES', 120 * 1024 * 1024);
 define('MAX_OUTPUT_IMAGES', 10);
 define('OUTBOUND_MAX_RESPONSE_BYTES', 25 * 1024 * 1024);
 define('MIN_SECRET_LENGTH', 32);
-define('SCHEMA_VERSION', '2026-06-29b');
+define('SCHEMA_VERSION', '2026-06-30c');
 define('SHARED_API_CONFIG_ID', 'shared');
 
 define('WEAK_SECRET_VALUES', [

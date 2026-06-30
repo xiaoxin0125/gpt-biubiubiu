@@ -54,7 +54,7 @@ export default function SiteAdminPanel({
         <div className="api-config-card-head">
           <div>
             <strong>共享 API 参数</strong>
-            <span>三类共享配置互相独立，按功能分别使用。</span>
+            <span>共享配置保留原后台结构；前台只维护生图 API 与提示词助手 API。</span>
           </div>
         </div>
         <ApiCategoryEditor

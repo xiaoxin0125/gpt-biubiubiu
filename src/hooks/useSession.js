@@ -99,7 +99,7 @@ export const useSession = (deps) => {
 
     const pendingApiKeys = new Map();
     (apiConfigForm.apiConfigs || []).forEach((item) => {
-      ['imageApi', 'promptApi', 'visionApi'].forEach((key) => {
+      ['imageApi', 'promptApi'].forEach((key) => {
         const apiKey = String(item[key]?.apiKey || (key === 'imageApi' ? item.apiKey : '') || '').trim();
         if (apiKey) pendingApiKeys.set(`${item.id}:${key}`, apiKey);
       });
@@ -113,6 +113,7 @@ export const useSession = (deps) => {
       requestTimeout: apiConfigForm.requestTimeout,
     });
     const activeApiConfigId = String(apiConfigForm.activeApiConfigId) === 'shared' ? 'shared' : nextSettings.activeApiConfigId;
+    const activePromptApiConfigId = String(apiConfigForm.activePromptApiConfigId) === 'shared' ? 'shared' : nextSettings.activePromptApiConfigId;
     try {
       const data = await requestJson('/api/settings', {
         method: 'POST',
@@ -120,33 +121,33 @@ export const useSession = (deps) => {
         body: JSON.stringify({
           settings: {
             activeApiConfigId,
+            activePromptApiConfigId,
             stream: nextSettings.stream,
             requestTimeout: nextSettings.requestTimeout,
           },
-          apiConfigs: (apiConfigForm.apiConfigs || []).filter((item) => !item.isShared).map((item) => ({
-            id: item.id,
-            configName: item.configName,
-            apiName: item.imageApi?.apiName || item.apiName,
-            apiBaseUrl: item.imageApi?.apiBaseUrl || item.apiBaseUrl,
-            model: item.imageApi?.model || item.model,
-            requestTimeout: item.imageApi?.requestTimeout || item.requestTimeout,
-            apiKey: item.imageApi?.apiKey || item.apiKey,
-            confirmApiKeySave: Boolean(item.imageApi?.apiKey || item.apiKey),
-            clearApiKey: Boolean(item.imageApi?.clearApiKey),
-            imageApi: {
-              ...(item.imageApi || {}),
-              apiKey: item.imageApi?.apiKey || item.apiKey || '',
+          apiConfigs: (apiConfigForm.apiConfigs || []).filter((item) => !item.isShared).map((item) => {
+            const promptApi = item.promptApi || {};
+            return {
+              id: item.id,
+              apiScope: item.apiScope,
+              apiName: item.imageApi?.apiName || item.apiName,
+              apiBaseUrl: item.imageApi?.apiBaseUrl || item.apiBaseUrl,
+              model: item.imageApi?.model || item.model,
+              requestTimeout: item.imageApi?.requestTimeout || item.requestTimeout,
+              apiKey: item.imageApi?.apiKey || item.apiKey,
               confirmApiKeySave: Boolean(item.imageApi?.apiKey || item.apiKey),
-            },
-            promptApi: {
-              ...(item.promptApi || {}),
-              confirmApiKeySave: Boolean(item.promptApi?.apiKey),
-            },
-            visionApi: {
-              ...(item.visionApi || {}),
-              confirmApiKeySave: Boolean(item.visionApi?.apiKey),
-            },
-          })),
+              clearApiKey: Boolean(item.imageApi?.clearApiKey),
+              imageApi: {
+                ...(item.imageApi || {}),
+                apiKey: item.imageApi?.apiKey || item.apiKey || '',
+                confirmApiKeySave: Boolean(item.imageApi?.apiKey || item.apiKey),
+              },
+              promptApi: {
+                ...promptApi,
+                confirmApiKeySave: Boolean(promptApi.apiKey),
+              },
+            };
+          }),
         }),
       });
       applyServerSettings(data.settings, user);

@@ -1,4 +1,9 @@
-import { defaultApiConfigItem } from '../constants/options';
+import {
+  API_CONFIG_SCOPE_IMAGE,
+  API_CONFIG_SCOPE_PROMPT,
+  defaultApiConfigItem,
+} from '../constants/options';
+import { apiConfigHasKeyForScope, apiConfigLabelForScope } from '../lib/api';
 
 export default function Topbar({
   view,
@@ -8,6 +13,7 @@ export default function Topbar({
   status,
   statusText,
   activeApiConfig,
+  activePromptApiConfig,
   apiConfigForm,
   siteFlags,
   switchActiveApiConfig,
@@ -56,17 +62,41 @@ export default function Topbar({
       </nav>
 
       <div className="topbar-actions">
-        {status.configured && user ? renderSelect({
-          id: 'topbar-api-switch',
-          label: '',
-          value: activeApiConfig?.id || apiConfigForm.activeApiConfigId,
-          options: (apiConfigForm.apiConfigs || []).filter((item) => item.hasApiKey || item.isShared).map((item) => ({ label: item.configName || item.apiName || defaultApiConfigItem.configName, value: item.id })),
-          onChange: switchActiveApiConfig,
-          className: 'status-api-select',
-          menuDirection: 'down',
-        }) : (
-          <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>
-        )}
+        {(() => {
+          if (view === 'wall') {
+            return renderSelect({
+              id: 'topbar-wall-display',
+              label: '',
+              value: 'wall-display',
+              options: [{ label: '作品展示', value: 'wall-display' }],
+              onChange: () => {},
+              disabled: true,
+              className: 'status-api-select',
+              menuDirection: 'down',
+            });
+          }
+
+          const apiScope = view === 'prompt-tools' ? API_CONFIG_SCOPE_PROMPT : view === 'generate' ? API_CONFIG_SCOPE_IMAGE : '';
+          if (!apiScope || !user) return <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>;
+
+          const activeConfig = apiScope === API_CONFIG_SCOPE_PROMPT ? activePromptApiConfig : activeApiConfig;
+          const activeId = apiScope === API_CONFIG_SCOPE_PROMPT ? apiConfigForm.activePromptApiConfigId : apiConfigForm.activeApiConfigId;
+          const options = (apiConfigForm.apiConfigs || [])
+            .filter((item) => apiConfigHasKeyForScope(item, apiScope))
+            .map((item) => ({ label: apiConfigLabelForScope(item, apiScope, defaultApiConfigItem.apiName), value: item.id }));
+
+          if (!options.length) return <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>;
+
+          return renderSelect({
+            id: 'topbar-api-switch',
+            label: '',
+            value: activeConfig?.id || activeId,
+            options,
+            onChange: (value) => switchActiveApiConfig(value, apiScope),
+            className: 'status-api-select',
+            menuDirection: 'down',
+          });
+        })()}
         <button type="button" className="round-tool account-tool" onClick={openAccount} aria-label="账号设置">
           {user ? userDisplayName : '登录'}
         </button>

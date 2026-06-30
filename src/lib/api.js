@@ -1,8 +1,10 @@
 import {
+  API_CONFIG_SCOPE_ALL,
+  API_CONFIG_SCOPE_IMAGE,
+  API_CONFIG_SCOPE_PROMPT,
   DEFAULT_DIRECT_API_BASE_URL,
   defaultApiConfigItem,
   defaultPromptApiCategory,
-  defaultVisionApiCategory,
   MAX_REQUEST_TIMEOUT_SECONDS,
 } from '../constants/options';
 import { normalizeRevisedPrompt } from './form';
@@ -107,9 +109,35 @@ const fetchWithTimeout = async (url, init = {}, config = {}) => {
 
 export const createLocalApiConfigId = () => `api-config-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-export const normalizeApiConfigItem = (value = {}, index = 0) => {
+export const normalizeApiConfigScope = (value = API_CONFIG_SCOPE_ALL) => {
+  const scope = String(value || API_CONFIG_SCOPE_ALL).trim();
+  return [API_CONFIG_SCOPE_ALL, API_CONFIG_SCOPE_IMAGE, API_CONFIG_SCOPE_PROMPT].includes(scope) ? scope : API_CONFIG_SCOPE_ALL;
+};
+
+export const apiConfigSupportsScope = (config = {}, scope = API_CONFIG_SCOPE_IMAGE) => {
+  const apiScope = normalizeApiConfigScope(config.apiScope || config.api_scope);
+  if (apiScope === API_CONFIG_SCOPE_ALL) return true;
+  return apiScope === scope;
+};
+
+export const apiConfigHasKeyForScope = (config = {}, scope = API_CONFIG_SCOPE_IMAGE) => {
+  if (config.isShared) {
+    const category = scope === API_CONFIG_SCOPE_PROMPT ? (config.promptApi || {}) : (config.imageApi || config);
+    return Boolean(category.hasApiKey);
+  }
+  if (!apiConfigSupportsScope(config, scope)) return false;
+  const category = scope === API_CONFIG_SCOPE_PROMPT ? (config.promptApi || {}) : (config.imageApi || config);
+  return Boolean(category.hasApiKey || (scope === API_CONFIG_SCOPE_IMAGE ? config.hasApiKey : false));
+};
+
+export const apiConfigLabelForScope = (config = {}, scope = API_CONFIG_SCOPE_IMAGE, fallback = defaultApiConfigItem.apiName) => {
+  const category = scope === API_CONFIG_SCOPE_PROMPT ? (config.promptApi || {}) : (config.imageApi || config);
+  return category.apiName || config.apiName || fallback;
+};
+
+export const normalizeApiConfigItem = (value = {}) => {
   const fallbackImageApi = {
-    apiName: index === 0 ? defaultApiConfigItem.apiName : `API 配置 ${index + 1}`,
+    apiName: defaultApiConfigItem.apiName,
     apiBaseUrl: defaultApiConfigItem.apiBaseUrl,
     model: defaultApiConfigItem.model,
     requestTimeout: defaultApiConfigItem.requestTimeout,
@@ -122,30 +150,22 @@ export const normalizeApiConfigItem = (value = {}, index = 0) => {
     requestTimeout: value.promptRequestTimeout || value.prompt_request_timeout || imageApi.requestTimeout,
     apiKeyHint: value.promptApiKeyHint || value.prompt_api_key_hint || '',
   });
-  const visionApi = normalizeApiCategory(value.visionApi || value.vision_api || {}, {
-    apiName: value.visionApiName || value.vision_api_name || defaultVisionApiCategory.apiName,
-    apiBaseUrl: value.visionApiBaseUrl || value.vision_api_base_url || imageApi.apiBaseUrl,
-    model: value.visionModel || value.vision_model || '',
-    requestTimeout: value.visionRequestTimeout || value.vision_request_timeout || imageApi.requestTimeout,
-    apiKeyHint: value.visionApiKeyHint || value.vision_api_key_hint || '',
-  });
+  const apiScope = normalizeApiConfigScope(value.apiScope || value.api_scope);
 
   return {
     id: value.id ?? value.configId ?? value.config_id ?? createLocalApiConfigId(),
-    configName: String(value.configName || value.config_name || fallbackImageApi.configName || `API 配置 ${index + 1}`).trim() || `API 配置 ${index + 1}`,
+    apiScope,
     apiName: imageApi.apiName,
     apiBaseUrl: imageApi.apiBaseUrl,
     model: imageApi.model || defaultApiConfigItem.model,
     promptModel: promptApi.model,
-    visionModel: visionApi.model,
     apiKey: imageApi.apiKey,
     hasApiKey: imageApi.hasApiKey,
     apiKeyHint: imageApi.apiKeyHint,
     requestTimeout: imageApi.requestTimeout,
     imageApi: { ...imageApi, model: imageApi.model || defaultApiConfigItem.model },
     promptApi,
-    visionApi,
-    hasAnyApiKey: Boolean(value.hasAnyApiKey || value.has_any_api_key || imageApi.hasApiKey || promptApi.hasApiKey || visionApi.hasApiKey),
+    hasAnyApiKey: Boolean(value.hasAnyApiKey || value.has_any_api_key || imageApi.hasApiKey || promptApi.hasApiKey),
     isShared: Boolean(value.isShared || value.is_shared),
   };
 };
@@ -157,7 +177,9 @@ export const normalizeServerSettings = (value = {}) => {
   const apiConfigs = rawConfigs.map(normalizeApiConfigItem).filter(Boolean);
   const safeConfigs = apiConfigs.length ? apiConfigs : [normalizeApiConfigItem(defaultApiConfigItem)];
   const activeApiConfigId = value.activeApiConfigId ?? value.active_api_config_id ?? value.activeConfig?.id ?? value.active_config?.id ?? safeConfigs[0].id;
-  const activeConfig = safeConfigs.find((item) => String(item.id) === String(activeApiConfigId)) || safeConfigs[0];
+  const activePromptApiConfigId = value.activePromptApiConfigId ?? value.active_prompt_api_config_id ?? value.activePromptConfig?.id ?? value.active_prompt_config?.id ?? activeApiConfigId;
+  const activeConfig = safeConfigs.find((item) => String(item.id) === String(activeApiConfigId)) || safeConfigs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_IMAGE)) || safeConfigs[0];
+  const activePromptConfig = safeConfigs.find((item) => String(item.id) === String(activePromptApiConfigId)) || safeConfigs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_PROMPT)) || activeConfig;
 
   const requestTimeout = clampNumber(Number(value.requestTimeout || value.request_timeout || activeConfig.requestTimeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS);
 
@@ -166,6 +188,8 @@ export const normalizeServerSettings = (value = {}) => {
     requestTimeout,
     stream: Boolean(value.stream),
     activeApiConfigId: activeConfig.id,
+    activePromptApiConfigId: activePromptConfig.id,
+    activePromptConfig,
     apiConfigs: safeConfigs,
     form: { model: activeConfig.model || defaultApiConfigItem.model },
   };

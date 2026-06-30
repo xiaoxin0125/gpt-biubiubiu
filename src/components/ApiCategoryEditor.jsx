@@ -1,4 +1,4 @@
-export const userApiCategorySections = [
+const apiCategorySections = [
   {
     key: 'imageApi',
     title: '生图 API 参数',
@@ -9,27 +9,21 @@ export const userApiCategorySections = [
   },
   {
     key: 'promptApi',
-    title: '提示词优化 API 参数',
-    description: '用于提示词润色、扩写和翻译。',
-    modelLabel: '提示词优化模型 ID',
+    title: '提示词助手 API 参数',
+    description: '用于提示词优化、图片反推和视觉理解。',
+    modelLabel: '提示词助手模型 ID',
     modelPlaceholder: '例如 gpt-4o-mini',
-    namePlaceholder: '提示词优化 API',
-  },
-  {
-    key: 'visionApi',
-    title: '图片反推/视觉 API 参数',
-    description: '用于图片描述和反推提示词。',
-    modelLabel: '视觉模型 ID',
-    modelPlaceholder: '例如 gpt-4o',
-    namePlaceholder: '图片反推 API',
+    namePlaceholder: '提示词助手 API',
   },
 ];
 
-export const sharedApiCategorySections = userApiCategorySections.map((section) => ({
+export const userApiCategorySections = apiCategorySections;
+
+export const sharedApiCategorySections = apiCategorySections.map((section) => ({
   ...section,
   title: section.title.replace(/^/, '共享'),
   description: section.description.replace('用于', '提供给'),
-  namePlaceholder: section.key === 'imageApi' ? '共享生图 API' : section.key === 'promptApi' ? '共享提示词 API' : '共享视觉 API',
+  namePlaceholder: section.key === 'imageApi' ? '共享生图 API' : '共享提示词助手 API',
 }));
 
 export const applyApiCategoryUpdate = (source, categoryKey, field, value) => {
@@ -50,7 +44,6 @@ export const applyApiCategoryUpdate = (source, categoryKey, field, value) => {
   }
 
   if (categoryKey === 'promptApi') return { ...nextSource, promptModel: nextCategory.model };
-  if (categoryKey === 'visionApi') return { ...nextSource, visionModel: nextCategory.model };
   return nextSource;
 };
 

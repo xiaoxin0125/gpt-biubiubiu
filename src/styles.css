@@ -2126,10 +2126,6 @@ select option {
   grid-template-columns: 1fr;
 }
 
-.modal-actions.three-actions {
-  grid-template-columns: repeat(3, 1fr);
-}
-
 .secondary-action,
 .primary-action,
 .text-button {
@@ -2561,8 +2557,7 @@ select option {
   .custom-size-row,
   .detail-meta-grid,
   .detail-actions,
-  .api-config-fields,
-  .modal-actions.three-actions {
+  .api-config-fields {
     grid-template-columns: 1fr;
   }
 
@@ -2661,7 +2656,7 @@ select option {
 .api-category-stack,
 .prompt-tools-grid,
 .prompt-result-panel,
-.shared-api-summary,
+.account-add-config-row,
 .profile-inline-fields,
 .profile-save-row,
 .card-actions.full-field,
@@ -2706,19 +2701,6 @@ select option {
   font-weight: 820;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.shared-api-summary strong {
-  color: var(--black);
-  font-size: 0.9rem;
-  font-weight: 950;
-}
-
-.shared-api-summary small {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 820;
-  overflow-wrap: anywhere;
 }
 
 .profile-save-row,
@@ -2789,11 +2771,15 @@ select option {
   width: 100%;
 }
 
-.shared-api-summary {
-  padding: 10px;
-  border: 2px dashed var(--line);
-  border-radius: var(--radius);
-  background: var(--paper-2);
+.account-add-config-row,
+.account-settings-actions {
+  grid-column: 1 / -1;
+}
+
+.account-add-config-row .secondary-action,
+.account-settings-actions .secondary-action,
+.account-settings-actions .primary-action {
+  width: 100%;
 }
 
 .prompt-tools-page {
@@ -3385,10 +3371,6 @@ select option {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
   }
-
-  .account-modal .modal-actions.three-actions.full-field {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 460px) {
@@ -3411,8 +3393,7 @@ select option {
 
   .mode-tabs button,
   .prompt-result-actions button,
-  .prompt-tool-actions button,
-  .account-modal .modal-actions.three-actions.full-field button {
+  .prompt-tool-actions button {
     font-size: 0.76rem;
   }
 

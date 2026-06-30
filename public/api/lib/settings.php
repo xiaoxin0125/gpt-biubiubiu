@@ -120,16 +120,40 @@ function has_prefixed_api_key(array $row, string $prefix = ''): bool
     return !empty($row[$prefix . 'api_key_ciphertext']);
 }
 
+function normalized_api_scope(array $row): string
+{
+    $scope = trim((string) ($row['api_scope'] ?? 'all'));
+    return in_array($scope, ['all', 'image', 'prompt'], true) ? $scope : 'all';
+}
+
+function config_scope_allows_category(array $row, string $category): bool
+{
+    $scope = normalized_api_scope($row);
+    if ($scope === 'all') return true;
+    if ($category === 'image') return $scope === 'image';
+    return $scope === 'prompt';
+}
+
+function category_storage_key(string $category): string
+{
+    return $category === 'prompt' ? 'prompt' : 'image';
+}
+
+function category_key_prefix(string $category): string
+{
+    $storageKey = category_storage_key($category);
+    return $storageKey === 'prompt' ? 'prompt_' : '';
+}
+
 function config_has_category_api_key(array $row, string $category): bool
 {
-    if ($category === 'prompt') return has_prefixed_api_key($row, 'prompt_');
-    if ($category === 'vision') return has_prefixed_api_key($row, 'vision_');
-    return has_prefixed_api_key($row);
+    if (!config_scope_allows_category($row, $category)) return false;
+    return $category === 'prompt' ? has_prefixed_api_key($row, 'prompt_') : has_prefixed_api_key($row);
 }
 
 function config_has_any_api_key(array $row): bool
 {
-    return has_prefixed_api_key($row) || has_prefixed_api_key($row, 'prompt_') || has_prefixed_api_key($row, 'vision_');
+    return config_has_category_api_key($row, 'image') || config_has_category_api_key($row, 'prompt');
 }
 
 function decrypt_prefixed_api_key(array $row, string $prefix = ''): string
@@ -159,17 +183,6 @@ function api_client_category(array $row, string $category): array
         ];
     }
 
-    if ($category === 'vision') {
-        return [
-            'apiName' => trim((string) ($row['vision_api_name'] ?? '')) ?: DEFAULT_VISION_API_NAME,
-            'apiBaseUrl' => trim((string) ($row['vision_api_base_url'] ?? '')) ?: (trim((string) ($row['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL),
-            'model' => trim((string) ($row['vision_model'] ?? '')),
-            'requestTimeout' => normalize_request_timeout($row['vision_request_timeout'] ?? ($row['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
-            'hasApiKey' => has_prefixed_api_key($row, 'vision_'),
-            'apiKeyHint' => prefixed_api_key_hint($row, 'vision_'),
-        ];
-    }
-
     return [
         'apiName' => trim((string) ($row['api_name'] ?? '')) ?: DEFAULT_API_NAME,
         'apiBaseUrl' => trim((string) ($row['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
@@ -180,11 +193,10 @@ function api_client_category(array $row, string $category): array
     ];
 }
 
-function api_client_with_legacy_model_fields(array $client): array
+function api_client_with_model_fields(array $client): array
 {
     return $client + [
         'promptModel' => $client['promptApi']['model'] ?? '',
-        'visionModel' => $client['visionApi']['model'] ?? '',
     ];
 }
 
@@ -221,9 +233,9 @@ function ensure_user_settings_row(int $userId): array
 function config_from_row(array $row): array
 {
     $imageApi = api_client_category($row, 'image');
-    return api_client_with_legacy_model_fields([
+    return api_client_with_model_fields([
         'id' => (int) $row['id'],
-        'configName' => trim((string) ($row['config_name'] ?? '')) ?: 'API 配置 ' . (((int) ($row['sort_order'] ?? 0)) + 1),
+        'apiScope' => normalized_api_scope($row),
         'apiName' => $imageApi['apiName'],
         'apiBaseUrl' => $imageApi['apiBaseUrl'],
         'model' => $imageApi['model'],
@@ -232,7 +244,6 @@ function config_from_row(array $row): array
         'apiKeyHint' => $imageApi['apiKeyHint'],
         'imageApi' => $imageApi,
         'promptApi' => api_client_category($row, 'prompt'),
-        'visionApi' => api_client_category($row, 'vision'),
         'hasAnyApiKey' => config_has_any_api_key($row),
         'sortOrder' => (int) ($row['sort_order'] ?? 0),
     ]);
@@ -244,8 +255,6 @@ function legacy_settings_config(array $settings): array
         'apiName' => trim((string) ($settings['api_name'] ?? '')) ?: DEFAULT_API_NAME,
         'apiBaseUrl' => trim((string) ($settings['api_base_url'] ?? '')) ?: DEFAULT_API_BASE_URL,
         'model' => trim((string) ($settings['model'] ?? '')) ?: DEFAULT_IMAGE_MODEL,
-        'promptModel' => trim((string) ($settings['prompt_model'] ?? '')),
-        'visionModel' => trim((string) ($settings['vision_model'] ?? '')),
         'requestTimeout' => normalize_request_timeout($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT),
         'api_key_ciphertext' => $settings['api_key_ciphertext'] ?? null,
         'api_key_iv' => $settings['api_key_iv'] ?? null,
@@ -264,10 +273,10 @@ function ensure_user_api_config(int $userId): ?array
 
     $settings = stored_user_settings_row($userId) ?: [];
     $legacy = legacy_settings_config($settings);
-    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, config_name, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, vision_api_name, vision_api_base_url, vision_model, vision_request_timeout, vision_api_key_ciphertext, vision_api_key_iv, vision_api_key_tag, vision_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
+    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_scope, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
     $stmt->execute([
         $userId,
-        'API 配置 1',
+        'all',
         $legacy['apiName'],
         $legacy['apiBaseUrl'],
         $legacy['model'],
@@ -278,15 +287,7 @@ function ensure_user_api_config(int $userId): ?array
         $legacy['api_key_hint'],
         DEFAULT_PROMPT_API_NAME,
         $legacy['apiBaseUrl'],
-        $legacy['promptModel'],
-        $legacy['requestTimeout'],
-        $legacy['api_key_ciphertext'],
-        $legacy['api_key_iv'],
-        $legacy['api_key_tag'],
-        $legacy['api_key_hint'],
-        DEFAULT_VISION_API_NAME,
-        $legacy['apiBaseUrl'],
-        $legacy['visionModel'],
+        '',
         $legacy['requestTimeout'],
         $legacy['api_key_ciphertext'],
         $legacy['api_key_iv'],
@@ -347,10 +348,10 @@ function active_api_config_row(int $userId): ?array
         $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
         $stmt->execute([$activeId, $userId]);
         $row = $stmt->fetch();
-        if ($row) return $row;
+        if ($row && config_scope_allows_category($row, 'image')) return $row;
     }
 
-    $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE user_id = ? ORDER BY sort_order ASC, id ASC LIMIT 1');
+    $stmt = pdo()->prepare("SELECT * FROM user_api_configs WHERE user_id = ? AND api_scope IN ('all', 'image') ORDER BY sort_order ASC, id ASC LIMIT 1");
     $stmt->execute([$userId]);
     $row = $stmt->fetch() ?: null;
     if ($row) {
@@ -360,39 +361,76 @@ function active_api_config_row(int $userId): ?array
     return $row;
 }
 
+function active_prompt_api_config_row(int $userId): ?array
+{
+    $settings = ensure_user_settings_row($userId);
+    $activeId = (int) ($settings['active_prompt_api_config_id'] ?? 0);
+    if ($activeId > 0) {
+        $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+        $stmt->execute([$activeId, $userId]);
+        $row = $stmt->fetch();
+        if ($row && config_scope_allows_category($row, 'prompt')) return $row;
+    }
+
+    $configs = user_api_config_rows($userId);
+    $row = first_keyed_user_api_config_row_for_category($configs, 'prompt');
+    if (!$row) {
+        foreach ($configs as $config) {
+            if (config_scope_allows_category($config, 'prompt')) {
+                $row = $config;
+                break;
+            }
+        }
+    }
+    if ($row) {
+        $stmt = pdo()->prepare('UPDATE user_settings SET active_prompt_api_config_id = ? WHERE user_id = ?');
+        $stmt->execute([(int) $row['id'], $userId]);
+    }
+    return $row ?: null;
+}
+
 function settings_for_user(int $userId): ?array
 {
     $settings = ensure_user_settings_row($userId);
     $configs = user_api_config_rows($userId);
     $active = active_api_config_row($userId);
+    $activePrompt = active_prompt_api_config_row($userId);
     $activeClient = $active ? config_from_row($active) : null;
+    $activePromptClient = $activePrompt ? config_from_row($activePrompt) : $activeClient;
 
     $apiConfigs = array_map('config_from_row', $configs);
     if (shared_api_enabled()) {
         $sharedClient = shared_api_config_client();
-        $keyedOwnConfig = first_keyed_user_api_config_row_for_category($configs, 'image');
-        $wantsShared = !empty($settings['active_shared']);
-        if ($keyedOwnConfig) {
+        $keyedOwnImageConfig = first_keyed_user_api_config_row_for_category($configs, 'image');
+        $keyedOwnPromptConfig = first_keyed_user_api_config_row_for_category($configs, 'prompt');
+        $wantsSharedImage = !empty($settings['active_shared']);
+        $wantsSharedPrompt = !empty($settings['active_prompt_shared']);
+
+        if ($keyedOwnImageConfig || $keyedOwnPromptConfig) {
             $apiConfigs[] = $sharedClient;
-            if ($wantsShared) $activeClient = $sharedClient;
-            elseif (!$activeClient || empty($activeClient['hasApiKey'])) $activeClient = config_from_row($keyedOwnConfig);
+            if ($wantsSharedImage || !$keyedOwnImageConfig) $activeClient = $sharedClient;
+            elseif (!$activeClient || empty($activeClient['hasApiKey'])) $activeClient = config_from_row($keyedOwnImageConfig);
+
+            if ($wantsSharedPrompt || !$keyedOwnPromptConfig) $activePromptClient = $sharedClient;
+            elseif (!$activePromptClient || empty($activePromptClient['promptApi']['hasApiKey'])) $activePromptClient = config_from_row($keyedOwnPromptConfig);
         } else {
             array_unshift($apiConfigs, $sharedClient);
             $activeClient = $sharedClient;
+            $activePromptClient = $sharedClient;
         }
     }
 
     return [
         'stream' => !empty($settings['stream']),
         'activeApiConfigId' => $activeClient['id'] ?? null,
+        'activePromptApiConfigId' => $activePromptClient['id'] ?? ($activeClient['id'] ?? null),
         'apiConfigs' => $apiConfigs,
         'activeConfig' => $activeClient,
+        'activePromptConfig' => $activePromptClient,
         'model' => $activeClient['model'] ?? DEFAULT_IMAGE_MODEL,
-        'promptModel' => $activeClient['promptApi']['model'] ?? ($activeClient['promptModel'] ?? ''),
-        'visionModel' => $activeClient['visionApi']['model'] ?? ($activeClient['visionModel'] ?? ''),
+        'promptModel' => $activePromptClient['promptApi']['model'] ?? ($activePromptClient['promptModel'] ?? ''),
         'imageApi' => $activeClient['imageApi'] ?? null,
-        'promptApi' => $activeClient['promptApi'] ?? null,
-        'visionApi' => $activeClient['visionApi'] ?? null,
+        'promptApi' => $activePromptClient['promptApi'] ?? null,
         'apiName' => $activeClient['apiName'] ?? DEFAULT_API_NAME,
         'apiBaseUrl' => $activeClient['apiBaseUrl'] ?? DEFAULT_API_BASE_URL,
         'requestTimeout' => normalize_request_timeout($settings['request_timeout'] ?? ($activeClient['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
@@ -452,9 +490,9 @@ function upsert_user_settings_from_config(int $userId, array $active, int $activ
 
 function api_category_input_spec(string $category): array
 {
-    $defaultApiName = $category === 'prompt' ? DEFAULT_PROMPT_API_NAME : ($category === 'vision' ? DEFAULT_VISION_API_NAME : DEFAULT_API_NAME);
+    $defaultApiName = $category === 'prompt' ? DEFAULT_PROMPT_API_NAME : DEFAULT_API_NAME;
     $defaultModel = $category === 'image' ? cfg('openai_image_model', DEFAULT_IMAGE_MODEL) : '';
-    $legacyModelKey = $category === 'prompt' ? 'promptModel' : ($category === 'vision' ? 'visionModel' : 'model');
+    $modelKey = $category === 'prompt' ? 'promptModel' : 'model';
 
     return [
         'category' => $category,
@@ -464,7 +502,7 @@ function api_category_input_spec(string $category): array
         'keys' => [
             'apiName' => $category === 'image' ? ['apiName', 'api_name'] : [$category . 'ApiName', $category . '_api_name'],
             'apiBaseUrl' => $category === 'image' ? ['apiBaseUrl', 'api_base_url'] : [$category . 'ApiBaseUrl', $category . '_api_base_url', 'apiBaseUrl', 'api_base_url'],
-            'model' => $category === 'image' ? ['model'] : [$legacyModelKey, $category . '_model'],
+            'model' => $category === 'image' ? ['model'] : [$modelKey, $category . '_model'],
             'requestTimeout' => $category === 'image' ? ['requestTimeout', 'request_timeout'] : [$category . 'RequestTimeout', $category . '_request_timeout'],
             'apiKey' => $category === 'image' ? ['apiKey', 'api_key'] : [$category . 'ApiKey', $category . '_api_key', 'apiKey', 'api_key'],
             'clearApiKey' => $category === 'image' ? ['clearApiKey', 'clear_api_key'] : [$category . 'ClearApiKey', $category . '_clear_api_key'],
@@ -572,21 +610,24 @@ function save_user_settings(array $user, array $body): array
     // activeRawId 可能是本地字符串 id（如 api-config-xxx）、共享虚拟 id 或数据库数字 id。
     // (int) 对字符串 id 取 0，循环里再按 raw id 精确匹配落库后的真实数字 id。
     $activeRawId = (string) ($settings['activeApiConfigId'] ?? ($settings['active_api_config_id'] ?? ''));
+    $activePromptRawId = (string) ($settings['activePromptApiConfigId'] ?? ($settings['active_prompt_api_config_id'] ?? $activeRawId));
     $wantShared = shared_api_enabled() && $activeRawId === SHARED_API_CONFIG_ID;
+    $wantSharedPrompt = shared_api_enabled() && $activePromptRawId === SHARED_API_CONFIG_ID;
     $activeId = $wantShared ? 0 : (int) $activeRawId;
+    $activePromptId = $wantSharedPrompt ? 0 : (int) $activePromptRawId;
     $stream = !empty($settings['stream']);
     $requestTimeout = normalize_request_timeout($settings['requestTimeout'] ?? ($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT));
     $normalizedConfigs = [];
     foreach ($configs as $index => $config) {
         $imageInput = api_config_category_input($config, 'image', $requestTimeout);
         $promptInput = api_config_category_input($config, 'prompt', $requestTimeout);
-        $visionInput = api_config_category_input($config, 'vision', $requestTimeout);
+        $apiScope = trim((string) ($config['apiScope'] ?? ($config['api_scope'] ?? 'all')));
+        if (!in_array($apiScope, ['all', 'image', 'prompt'], true)) $apiScope = 'all';
         $hasPendingApiKey = false;
 
         foreach ([
             ['label' => '生图', 'input' => $imageInput],
-            ['label' => '提示词优化', 'input' => $promptInput],
-            ['label' => '图片反推', 'input' => $visionInput],
+            ['label' => '提示词助手', 'input' => $promptInput],
         ] as $item) {
             if (!valid_api_base_url($item['input']['apiBaseUrl'])) json_response(['error' => $item['label'] . ' API 地址必须是 http 或 https 地址'], 400);
             if (trim((string) ($item['input']['apiKey'] ?? '')) !== '') {
@@ -597,18 +638,13 @@ function save_user_settings(array $user, array $body): array
 
         if ($hasPendingApiKey && api_key_secret() === '') json_response(['error' => '服务端未配置 USER_API_KEY_SECRET'], 500);
 
-        $configName = trim((string) ($config['configName'] ?? ($config['config_name'] ?? '')));
-        if (mb_strlen($configName) > 128) json_response(['error' => '设置名称不能超过 128 个字符'], 400);
-        if ($configName === '') $configName = 'API 配置 ' . ($index + 1);
-
         $normalizedConfigs[] = [
             'config' => $config,
             'index' => $index,
             'configId' => (int) ($config['id'] ?? 0),
-            'configName' => $configName,
+            'apiScope' => $apiScope,
             'imageInput' => $imageInput,
             'promptInput' => $promptInput,
-            'visionInput' => $visionInput,
         ];
     }
     $seenIds = [];
@@ -619,10 +655,9 @@ function save_user_settings(array $user, array $body): array
             $config = $normalizedConfig['config'];
             $index = $normalizedConfig['index'];
             $configId = $normalizedConfig['configId'];
-            $configName = $normalizedConfig['configName'];
+            $apiScope = $normalizedConfig['apiScope'];
             $imageInput = $normalizedConfig['imageInput'];
             $promptInput = $normalizedConfig['promptInput'];
-            $visionInput = $normalizedConfig['visionInput'];
 
             $existing = [];
             if ($configId > 0) {
@@ -634,12 +669,11 @@ function save_user_settings(array $user, array $body): array
 
             $imageApiFields = api_key_storage_fields_for_category($imageInput, $existing);
             $promptApiFields = api_key_storage_fields_for_category($promptInput, $existing, 'prompt_');
-            $visionApiFields = api_key_storage_fields_for_category($visionInput, $existing, 'vision_');
 
             if ($configId > 0) {
-                $stmt = $db->prepare('UPDATE user_api_configs SET config_name = ?, api_name = ?, api_base_url = ?, model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, prompt_api_name = ?, prompt_api_base_url = ?, prompt_model = ?, prompt_request_timeout = ?, prompt_api_key_ciphertext = ?, prompt_api_key_iv = ?, prompt_api_key_tag = ?, prompt_api_key_hint = ?, vision_api_name = ?, vision_api_base_url = ?, vision_model = ?, vision_request_timeout = ?, vision_api_key_ciphertext = ?, vision_api_key_iv = ?, vision_api_key_tag = ?, vision_api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
+                $stmt = $db->prepare('UPDATE user_api_configs SET api_scope = ?, api_name = ?, api_base_url = ?, model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, prompt_api_name = ?, prompt_api_base_url = ?, prompt_model = ?, prompt_request_timeout = ?, prompt_api_key_ciphertext = ?, prompt_api_key_iv = ?, prompt_api_key_tag = ?, prompt_api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
                 $stmt->execute([
-                    $configName,
+                    $apiScope,
                     $imageInput['apiName'],
                     $imageInput['apiBaseUrl'],
                     $imageInput['model'],
@@ -656,23 +690,15 @@ function save_user_settings(array $user, array $body): array
                     $promptApiFields[1],
                     $promptApiFields[2],
                     $promptApiFields[3],
-                    $visionInput['apiName'],
-                    $visionInput['apiBaseUrl'],
-                    $visionInput['model'],
-                    $visionInput['requestTimeout'],
-                    $visionApiFields[0],
-                    $visionApiFields[1],
-                    $visionApiFields[2],
-                    $visionApiFields[3],
                     $index,
                     $configId,
                     $user['id'],
                 ]);
             } else {
-                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, config_name, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, vision_api_name, vision_api_base_url, vision_model, vision_request_timeout, vision_api_key_ciphertext, vision_api_key_iv, vision_api_key_tag, vision_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_scope, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
                 $stmt->execute([
                     $user['id'],
-                    $configName,
+                    $apiScope,
                     $imageInput['apiName'],
                     $imageInput['apiBaseUrl'],
                     $imageInput['model'],
@@ -689,14 +715,6 @@ function save_user_settings(array $user, array $body): array
                     $promptApiFields[1],
                     $promptApiFields[2],
                     $promptApiFields[3],
-                    $visionInput['apiName'],
-                    $visionInput['apiBaseUrl'],
-                    $visionInput['model'],
-                    $visionInput['requestTimeout'],
-                    $visionApiFields[0],
-                    $visionApiFields[1],
-                    $visionApiFields[2],
-                    $visionApiFields[3],
                     $index,
                 ]);
                 $configId = (int) $db->lastInsertId();
@@ -704,13 +722,43 @@ function save_user_settings(array $user, array $body): array
 
             $seenIds[] = $configId;
             // 尚未选定 active，或本配置的 raw id 正是请求指定的 active，则锁定为当前真实数字 id。
-            if (!$activeId || (isset($config['id']) && (string) $config['id'] === $activeRawId)) $activeId = $configId;
+            if ((!$activeId || (isset($config['id']) && (string) $config['id'] === $activeRawId)) && config_scope_allows_category(['api_scope' => $apiScope], 'image')) $activeId = $configId;
+            if ((!$activePromptId || (isset($config['id']) && (string) $config['id'] === $activePromptRawId)) && config_scope_allows_category(['api_scope' => $apiScope], 'prompt')) $activePromptId = $configId;
         }
 
         $placeholders = implode(',', array_fill(0, count($seenIds), '?'));
         $params = array_merge([$user['id']], $seenIds);
         $db->prepare("DELETE FROM user_api_configs WHERE user_id = ? AND id NOT IN ({$placeholders})")->execute($params);
-        if (!in_array($activeId, $seenIds, true)) $activeId = $seenIds[0];
+        if (!in_array($activeId, $seenIds, true)) $activeId = 0;
+        if (!in_array($activePromptId, $seenIds, true)) $activePromptId = 0;
+
+        if ($activeId > 0) {
+            $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+            $stmt->execute([$activeId, $user['id']]);
+            $active = $stmt->fetch() ?: null;
+            if (!$active || !config_scope_allows_category($active, 'image')) $activeId = 0;
+        }
+        if ($activeId <= 0) {
+            $stmt = $db->prepare("SELECT * FROM user_api_configs WHERE user_id = ? AND api_scope IN ('all', 'image') ORDER BY sort_order ASC, id ASC LIMIT 1");
+            $stmt->execute([$user['id']]);
+            $active = $stmt->fetch() ?: null;
+            if ($active) $activeId = (int) $active['id'];
+        }
+
+        if ($activePromptId > 0) {
+            $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+            $stmt->execute([$activePromptId, $user['id']]);
+            $activePrompt = $stmt->fetch() ?: null;
+            if (!$activePrompt || !config_scope_allows_category($activePrompt, 'prompt')) $activePromptId = 0;
+        }
+        if ($activePromptId <= 0) {
+            $stmt = $db->prepare("SELECT * FROM user_api_configs WHERE user_id = ? AND api_scope IN ('all', 'prompt') ORDER BY sort_order ASC, id ASC LIMIT 1");
+            $stmt->execute([$user['id']]);
+            $activePrompt = $stmt->fetch() ?: null;
+            if ($activePrompt) $activePromptId = (int) $activePrompt['id'];
+        }
+        if ($activeId <= 0) $activeId = $seenIds[0];
+        if ($activePromptId <= 0) $activePromptId = $activeId;
 
         $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
         $stmt->execute([$activeId, $user['id']]);
@@ -718,7 +766,7 @@ function save_user_settings(array $user, array $body): array
         if (!$active) throw new RuntimeException('当前 API 配置不存在');
 
         upsert_user_settings_from_config((int) $user['id'], $active, $activeId, $stream ? 1 : 0, true, $requestTimeout);
-        $db->prepare('UPDATE user_settings SET active_shared = ? WHERE user_id = ?')->execute([$wantShared ? 1 : 0, $user['id']]);
+        $db->prepare('UPDATE user_settings SET active_shared = ?, active_prompt_api_config_id = ?, active_prompt_shared = ? WHERE user_id = ?')->execute([$wantShared ? 1 : 0, $activePromptId, $wantSharedPrompt ? 1 : 0, $user['id']]);
 
         $db->commit();
         return settings_for_user((int) $user['id']);
@@ -794,11 +842,12 @@ function api_config_for_model_fetch(array $user, string $rawId, string $category
     $stmt->execute([$configId, $user['id']]);
     $row = $stmt->fetch() ?: [];
     $client = api_client_category($row, $category);
-    $prefix = $category === 'prompt' ? 'prompt_' : ($category === 'vision' ? 'vision_' : '');
+    $prefix = $category === 'prompt' ? 'prompt_' : '';
+    $apiKey = decrypt_prefixed_api_key($row, $prefix);
 
     return [
         'apiBaseUrl' => $client['apiBaseUrl'],
-        'apiKey' => decrypt_prefixed_api_key($row, $prefix),
+        'apiKey' => $apiKey,
         'requestTimeout' => $client['requestTimeout'],
     ];
 }
@@ -807,7 +856,7 @@ function fetch_api_models_for_user(array $user, array $body): array
 {
     $rawId = (string) ($body['configId'] ?? ($body['config_id'] ?? ''));
     $category = (string) ($body['category'] ?? ($body['apiCategory'] ?? ($body['api_category'] ?? 'image')));
-    if (!in_array($category, ['image', 'prompt', 'vision'], true)) $category = 'image';
+    if (!in_array($category, ['image', 'prompt'], true)) $category = 'image';
     $stored = api_config_for_model_fetch($user, $rawId, $category);
     $apiBaseUrl = normalize_api_base_url((string) ($body['apiBaseUrl'] ?? ($body['api_base_url'] ?? $stored['apiBaseUrl'])));
     if ($apiBaseUrl === '') $apiBaseUrl = $stored['apiBaseUrl'];
@@ -827,9 +876,16 @@ function fetch_api_models_for_user(array $user, array $body): array
 function switch_active_api_config(array $user, array $body): array
 {
     $rawId = (string) ($body['activeApiConfigId'] ?? ($body['active_api_config_id'] ?? ''));
+    $category = (string) ($body['category'] ?? ($body['apiCategory'] ?? ($body['api_category'] ?? 'image')));
+    if (!in_array($category, ['image', 'prompt'], true)) $category = 'image';
+
     if (shared_api_enabled() && $rawId === SHARED_API_CONFIG_ID) {
         ensure_user_settings_row((int) $user['id']);
-        pdo()->prepare('UPDATE user_settings SET active_shared = 1 WHERE user_id = ?')->execute([$user['id']]);
+        if ($category === 'prompt') {
+            pdo()->prepare('UPDATE user_settings SET active_prompt_shared = 1 WHERE user_id = ?')->execute([$user['id']]);
+        } else {
+            pdo()->prepare('UPDATE user_settings SET active_shared = 1 WHERE user_id = ?')->execute([$user['id']]);
+        }
         return settings_for_user((int) $user['id']);
     }
 
@@ -840,6 +896,13 @@ function switch_active_api_config(array $user, array $body): array
     $stmt->execute([$configId, $user['id']]);
     $active = $stmt->fetch();
     if (!$active) json_response(['error' => 'API 配置不存在'], 404);
+    if (!config_scope_allows_category($active, $category)) json_response(['error' => '当前页面不能使用该 API 配置'], 400);
+
+    if ($category === 'prompt') {
+        ensure_user_settings_row((int) $user['id']);
+        pdo()->prepare('UPDATE user_settings SET active_prompt_api_config_id = ?, active_prompt_shared = 0 WHERE user_id = ?')->execute([$configId, $user['id']]);
+        return settings_for_user((int) $user['id']);
+    }
 
     $settings = stored_user_settings_row((int) $user['id']);
     $stream = !empty($settings['stream']) ? 1 : 0;

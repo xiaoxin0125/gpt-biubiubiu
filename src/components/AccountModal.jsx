@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
-import { MAX_REQUEST_TIMEOUT_SECONDS } from '../constants/options';
+import {
+  API_CONFIG_SCOPE_IMAGE,
+  API_CONFIG_SCOPE_PROMPT,
+  MAX_REQUEST_TIMEOUT_SECONDS,
+} from '../constants/options';
 import { requestJson } from '../lib/api';
 import ApiCategoryEditor, { applyApiCategoryUpdate, userApiCategorySections } from './ApiCategoryEditor';
 import SiteAdminPanel from './SiteAdminPanel';
@@ -23,7 +27,6 @@ export default function AccountModal({
   saveProfile,
   changePassword,
   logout,
-  updateApiConfig,
   removeApiConfig,
   addApiConfig,
   resetDirectSettings,
@@ -42,6 +45,7 @@ export default function AccountModal({
   const registrationEnabled = siteFlags?.registrationEnabled !== false;
   const [captchaImage, setCaptchaImage] = useState('');
   const [captchaLoading, setCaptchaLoading] = useState(false);
+  const [apiSettingsTab, setApiSettingsTab] = useState(API_CONFIG_SCOPE_IMAGE);
   const refreshCaptcha = async () => {
     setCaptchaLoading(true);
     try {
@@ -65,8 +69,13 @@ export default function AccountModal({
   const apiConfigs = apiConfigForm.apiConfigs || [];
   const sharedApiConfig = apiConfigs.find((config) => config.isShared);
   const editableApiConfigs = apiConfigs.filter((config) => !config.isShared);
+  const imageApiConfigs = editableApiConfigs.filter((config) => config.apiScope === API_CONFIG_SCOPE_IMAGE || config.apiScope === 'all');
+  const promptApiConfigs = editableApiConfigs.filter((config) => config.apiScope === API_CONFIG_SCOPE_PROMPT || config.apiScope === 'all');
+  const visibleApiConfigs = apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? promptApiConfigs : imageApiConfigs;
+  const activeConfigId = apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? apiConfigForm.activePromptApiConfigId : apiConfigForm.activeApiConfigId;
+  const activeCategoryKey = apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? 'promptApi' : 'imageApi';
   const hasSharedApiConfig = Boolean(sharedApiConfig);
-  const isSharedActive = hasSharedApiConfig && String(sharedApiConfig.id) === String(apiConfigForm.activeApiConfigId);
+  const isSharedActive = hasSharedApiConfig && String(sharedApiConfig.id) === String(activeConfigId);
   const updateApiConfigCategory = (configId, categoryKey, field, value) => {
     setApiConfigForm((current) => ({
       ...current,
@@ -161,10 +170,6 @@ export default function AccountModal({
                       <span>管理员提供的默认配置，未保存自己的 API 时可直接使用。</span>
                     </div>
                   </div>
-                  <div className="shared-api-summary">
-                    <strong>{sharedApiConfig.configName || sharedApiConfig.apiName || '管理员共享配置'}</strong>
-                    <small>管理员共享配置。你保存自己的 API 后，将优先使用自己的配置。</small>
-                  </div>
                 </section>
               ) : null}
 
@@ -172,33 +177,32 @@ export default function AccountModal({
                 <div className="api-config-card-head">
                   <div>
                     <strong>API 配置</strong>
-                    <span>可以保存多套 API。生成时使用当前启用的配置；API Key 加密存储，不会回显明文。</span>
+                    <span>生图和提示词助手分开维护；提示词优化与图片反推共用同一套提示词助手 API。</span>
                   </div>
+                </div>
+                <div className="segmented-control two-tabs account-tabs api-scope-tabs">
+                  <button type="button" className={apiSettingsTab === API_CONFIG_SCOPE_IMAGE ? 'is-active' : ''} onClick={() => setApiSettingsTab(API_CONFIG_SCOPE_IMAGE)}>生图 API</button>
+                  <button type="button" className={apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? 'is-active' : ''} onClick={() => setApiSettingsTab(API_CONFIG_SCOPE_PROMPT)}>提示词助手 API</button>
                 </div>
               </section>
 
-              {editableApiConfigs.map((config, index) => {
-                const isActiveConfig = String(config.id) === String(apiConfigForm.activeApiConfigId);
+              {visibleApiConfigs.length ? visibleApiConfigs.map((config, index) => {
+                const isActiveConfig = String(config.id) === String(activeConfigId);
+                const category = config[activeCategoryKey] || {};
                 return (
-                  <section className={isActiveConfig ? 'api-config-card full-field is-active' : 'api-config-card full-field'} key={config.id}>
+                  <section className={isActiveConfig ? 'api-config-card full-field is-active' : 'api-config-card full-field'} key={`${apiSettingsTab}-${config.id}`}>
                     <div className="api-config-card-head">
                       <div>
-                        <strong>{config.configName || `API 配置 ${index + 1}`}</strong>
+                        <strong>{category.apiName || `${apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? '提示词助手 API' : '生图 API'} ${index + 1}`}</strong>
                         <span>{isActiveConfig ? '当前启用' : '备用配置'}</span>
                       </div>
                       <div className="api-config-actions">
-                        <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, activeApiConfigId: config.id }))}>启用</button>
+                        <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, ...(apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? { activePromptApiConfigId: config.id } : { activeApiConfigId: config.id }) }))}>启用</button>
                         <button type="button" className="secondary-action danger-action" onClick={() => removeApiConfig(config.id)} disabled={editableApiConfigs.length <= 1}>删除</button>
                       </div>
                     </div>
-                    <div className="api-config-fields api-config-name-fields">
-                      <label className="full-field">
-                        <span>设置名称</span>
-                        <input maxLength={128} value={config.configName || ''} onChange={(event) => updateApiConfig(config.id, 'configName', event.target.value)} placeholder={`API 配置 ${index + 1}`} />
-                      </label>
-                    </div>
                     <ApiCategoryEditor
-                      sections={userApiCategorySections}
+                      sections={userApiCategorySections.filter((section) => section.key === activeCategoryKey)}
                       configId={config.id}
                       source={config}
                       onUpdateCategory={(categoryKey, field, value) => updateApiConfigCategory(config.id, categoryKey, field, value)}
@@ -209,7 +213,20 @@ export default function AccountModal({
                     />
                   </section>
                 );
-              })}
+              }) : (
+                <section className="api-config-card full-field">
+                  <div className="api-config-card-head">
+                    <div>
+                      <strong>{apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? '暂无提示词助手 API' : '暂无生图 API'}</strong>
+                      <span>点击下方新增当前类型的 API 参数。</span>
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              <div className="account-add-config-row full-field">
+                <button type="button" className="secondary-action" onClick={() => addApiConfig(apiSettingsTab)}>新增{apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? '提示词助手 API' : '生图 API'}</button>
+              </div>
 
               <section className="api-config-card full-field">
                 <div className="api-config-card-head">
@@ -231,8 +248,7 @@ export default function AccountModal({
                 </div>
               </section>
 
-              <div className="modal-actions three-actions full-field">
-                <button type="button" className="secondary-action" onClick={addApiConfig}>新增配置</button>
+              <div className="modal-actions account-settings-actions full-field">
                 <button type="button" className="secondary-action" onClick={resetDirectSettings}>重置</button>
                 <button type="button" className="primary-action" onClick={saveAccountSettings}>保存配置</button>
               </div>

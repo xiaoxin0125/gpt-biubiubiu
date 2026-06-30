@@ -118,6 +118,8 @@ function ensure_schema(): void
       stream TINYINT(1) NOT NULL DEFAULT 0,
       active_api_config_id BIGINT UNSIGNED DEFAULT NULL,
       active_shared TINYINT(1) NOT NULL DEFAULT 0,
+      active_prompt_api_config_id BIGINT UNSIGNED DEFAULT NULL,
+      active_prompt_shared TINYINT(1) NOT NULL DEFAULT 0,
       api_key_ciphertext TEXT DEFAULT NULL,
       api_key_iv VARCHAR(64) DEFAULT NULL,
       api_key_tag VARCHAR(64) DEFAULT NULL,
@@ -129,7 +131,7 @@ function ensure_schema(): void
     $db->exec("CREATE TABLE IF NOT EXISTS user_api_configs (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       user_id BIGINT UNSIGNED NOT NULL,
-      config_name VARCHAR(128) DEFAULT NULL,
+      api_scope VARCHAR(32) NOT NULL DEFAULT 'all',
       api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
       api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
       model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
@@ -138,7 +140,7 @@ function ensure_schema(): void
       api_key_iv VARCHAR(64) DEFAULT NULL,
       api_key_tag VARCHAR(64) DEFAULT NULL,
       api_key_hint VARCHAR(24) DEFAULT NULL,
-      prompt_api_name VARCHAR(128) NOT NULL DEFAULT '提示词优化 API',
+      prompt_api_name VARCHAR(128) NOT NULL DEFAULT '提示词助手 API',
       prompt_api_base_url VARCHAR(255) DEFAULT NULL,
       prompt_model VARCHAR(128) DEFAULT NULL,
       prompt_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
@@ -146,14 +148,6 @@ function ensure_schema(): void
       prompt_api_key_iv VARCHAR(64) DEFAULT NULL,
       prompt_api_key_tag VARCHAR(64) DEFAULT NULL,
       prompt_api_key_hint VARCHAR(24) DEFAULT NULL,
-      vision_api_name VARCHAR(128) NOT NULL DEFAULT '图片反推/视觉 API',
-      vision_api_base_url VARCHAR(255) DEFAULT NULL,
-      vision_model VARCHAR(128) DEFAULT NULL,
-      vision_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
-      vision_api_key_ciphertext TEXT DEFAULT NULL,
-      vision_api_key_iv VARCHAR(64) DEFAULT NULL,
-      vision_api_key_tag VARCHAR(64) DEFAULT NULL,
-      vision_api_key_hint VARCHAR(24) DEFAULT NULL,
       sort_order INT UNSIGNED NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -233,7 +227,7 @@ function ensure_schema(): void
       shared_api_key_tag VARCHAR(64) DEFAULT NULL,
       shared_api_key_hint VARCHAR(24) DEFAULT NULL,
       prompt_tools_enabled TINYINT(1) NOT NULL DEFAULT 1,
-      shared_prompt_api_name VARCHAR(128) NOT NULL DEFAULT '提示词优化 API',
+      shared_prompt_api_name VARCHAR(128) NOT NULL DEFAULT '提示词助手 API',
       shared_prompt_api_base_url VARCHAR(255) DEFAULT NULL,
       shared_prompt_model VARCHAR(128) DEFAULT NULL,
       shared_prompt_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
@@ -241,14 +235,6 @@ function ensure_schema(): void
       shared_prompt_api_key_iv VARCHAR(64) DEFAULT NULL,
       shared_prompt_api_key_tag VARCHAR(64) DEFAULT NULL,
       shared_prompt_api_key_hint VARCHAR(24) DEFAULT NULL,
-      shared_vision_api_name VARCHAR(128) NOT NULL DEFAULT '图片反推/视觉 API',
-      shared_vision_api_base_url VARCHAR(255) DEFAULT NULL,
-      shared_vision_model VARCHAR(128) DEFAULT NULL,
-      shared_vision_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
-      shared_vision_api_key_ciphertext TEXT DEFAULT NULL,
-      shared_vision_api_key_iv VARCHAR(64) DEFAULT NULL,
-      shared_vision_api_key_tag VARCHAR(64) DEFAULT NULL,
-      shared_vision_api_key_hint VARCHAR(24) DEFAULT NULL,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
@@ -261,11 +247,13 @@ function ensure_schema(): void
     ensure_column($db, 'user_settings', 'stream', 'stream TINYINT(1) NOT NULL DEFAULT 0 AFTER request_timeout');
     ensure_column($db, 'user_settings', 'active_api_config_id', 'active_api_config_id BIGINT UNSIGNED DEFAULT NULL AFTER stream');
     ensure_column($db, 'user_settings', 'active_shared', 'active_shared TINYINT(1) NOT NULL DEFAULT 0 AFTER active_api_config_id');
-    ensure_column($db, 'user_settings', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER active_api_config_id');
+    ensure_column($db, 'user_settings', 'active_prompt_api_config_id', 'active_prompt_api_config_id BIGINT UNSIGNED DEFAULT NULL AFTER active_shared');
+    ensure_column($db, 'user_settings', 'active_prompt_shared', 'active_prompt_shared TINYINT(1) NOT NULL DEFAULT 0 AFTER active_prompt_api_config_id');
+    ensure_column($db, 'user_settings', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER active_prompt_shared');
     ensure_column($db, 'user_settings', 'api_key_iv', 'api_key_iv VARCHAR(64) DEFAULT NULL AFTER api_key_ciphertext');
     ensure_column($db, 'user_settings', 'api_key_tag', 'api_key_tag VARCHAR(64) DEFAULT NULL AFTER api_key_iv');
     ensure_column($db, 'user_settings', 'api_key_hint', 'api_key_hint VARCHAR(24) DEFAULT NULL AFTER api_key_tag');
-    ensure_column($db, 'user_api_configs', 'config_name', 'config_name VARCHAR(128) DEFAULT NULL AFTER user_id');
+    ensure_column($db, 'user_api_configs', 'api_scope', "api_scope VARCHAR(32) NOT NULL DEFAULT 'all' AFTER user_id");
     ensure_column($db, 'user_api_configs', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER request_timeout');
     ensure_column($db, 'user_api_configs', 'api_key_iv', 'api_key_iv VARCHAR(64) DEFAULT NULL AFTER api_key_ciphertext');
     ensure_column($db, 'user_api_configs', 'api_key_tag', 'api_key_tag VARCHAR(64) DEFAULT NULL AFTER api_key_iv');
@@ -278,14 +266,6 @@ function ensure_schema(): void
     ensure_column($db, 'user_api_configs', 'prompt_api_key_iv', 'prompt_api_key_iv VARCHAR(64) DEFAULT NULL AFTER prompt_api_key_ciphertext');
     ensure_column($db, 'user_api_configs', 'prompt_api_key_tag', 'prompt_api_key_tag VARCHAR(64) DEFAULT NULL AFTER prompt_api_key_iv');
     ensure_column($db, 'user_api_configs', 'prompt_api_key_hint', 'prompt_api_key_hint VARCHAR(24) DEFAULT NULL AFTER prompt_api_key_tag');
-    ensure_column($db, 'user_api_configs', 'vision_api_name', 'vision_api_name VARCHAR(128) NOT NULL DEFAULT ' . $db->quote(DEFAULT_VISION_API_NAME) . ' AFTER prompt_api_key_hint');
-    ensure_column($db, 'user_api_configs', 'vision_api_base_url', 'vision_api_base_url VARCHAR(255) DEFAULT NULL AFTER vision_api_name');
-    ensure_column($db, 'user_api_configs', 'vision_model', 'vision_model VARCHAR(128) DEFAULT NULL AFTER vision_api_base_url');
-    ensure_column($db, 'user_api_configs', 'vision_request_timeout', 'vision_request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER vision_model');
-    ensure_column($db, 'user_api_configs', 'vision_api_key_ciphertext', 'vision_api_key_ciphertext TEXT DEFAULT NULL AFTER vision_request_timeout');
-    ensure_column($db, 'user_api_configs', 'vision_api_key_iv', 'vision_api_key_iv VARCHAR(64) DEFAULT NULL AFTER vision_api_key_ciphertext');
-    ensure_column($db, 'user_api_configs', 'vision_api_key_tag', 'vision_api_key_tag VARCHAR(64) DEFAULT NULL AFTER vision_api_key_iv');
-    ensure_column($db, 'user_api_configs', 'vision_api_key_hint', 'vision_api_key_hint VARCHAR(24) DEFAULT NULL AFTER vision_api_key_tag');
     ensure_column($db, 'wall_items', 'user_id', 'user_id BIGINT UNSIGNED DEFAULT NULL AFTER id');
     ensure_column($db, 'wall_items', 'client_id', 'client_id VARCHAR(80) DEFAULT NULL AFTER user_id');
     ensure_column($db, 'wall_items', 'author_name', 'author_name VARCHAR(96) NOT NULL DEFAULT ' . $db->quote('未知艺术家') . ' AFTER client_id');
@@ -337,14 +317,7 @@ function ensure_schema(): void
     ensure_column($db, 'site_settings', 'shared_prompt_api_key_iv', 'shared_prompt_api_key_iv VARCHAR(64) DEFAULT NULL AFTER shared_prompt_api_key_ciphertext');
     ensure_column($db, 'site_settings', 'shared_prompt_api_key_tag', 'shared_prompt_api_key_tag VARCHAR(64) DEFAULT NULL AFTER shared_prompt_api_key_iv');
     ensure_column($db, 'site_settings', 'shared_prompt_api_key_hint', 'shared_prompt_api_key_hint VARCHAR(24) DEFAULT NULL AFTER shared_prompt_api_key_tag');
-    ensure_column($db, 'site_settings', 'shared_vision_api_name', 'shared_vision_api_name VARCHAR(128) NOT NULL DEFAULT ' . $db->quote(DEFAULT_VISION_API_NAME) . ' AFTER shared_prompt_api_key_hint');
-    ensure_column($db, 'site_settings', 'shared_vision_api_base_url', 'shared_vision_api_base_url VARCHAR(255) DEFAULT NULL AFTER shared_vision_api_name');
-    ensure_column($db, 'site_settings', 'shared_vision_model', 'shared_vision_model VARCHAR(128) DEFAULT NULL AFTER shared_vision_api_base_url');
-    ensure_column($db, 'site_settings', 'shared_vision_request_timeout', 'shared_vision_request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER shared_vision_model');
-    ensure_column($db, 'site_settings', 'shared_vision_api_key_ciphertext', 'shared_vision_api_key_ciphertext TEXT DEFAULT NULL AFTER shared_vision_request_timeout');
-    ensure_column($db, 'site_settings', 'shared_vision_api_key_iv', 'shared_vision_api_key_iv VARCHAR(64) DEFAULT NULL AFTER shared_vision_api_key_ciphertext');
-    ensure_column($db, 'site_settings', 'shared_vision_api_key_tag', 'shared_vision_api_key_tag VARCHAR(64) DEFAULT NULL AFTER shared_vision_api_key_iv');
-    ensure_column($db, 'site_settings', 'shared_vision_api_key_hint', 'shared_vision_api_key_hint VARCHAR(24) DEFAULT NULL AFTER shared_vision_api_key_tag');
+
     ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_completed_id', 'INDEX idx_image_jobs_user_completed_id (user_id, status, completed_at, created_at, id)');
@@ -357,42 +330,24 @@ function ensure_schema(): void
 
     $db->exec('UPDATE user_settings SET request_timeout = 999 WHERE request_timeout IN (180, 600)');
     $db->exec("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");
-    $db->exec("UPDATE user_api_configs SET config_name = CONCAT('API 配置 ', sort_order + 1) WHERE config_name IS NULL OR TRIM(config_name) = ''");
-    $shouldRepairCopiedApiNames = $currentSchemaVersion === '' || strcmp($currentSchemaVersion, '2026-06-18c') < 0;
-    $copiedPromptApiNameFallback = $shouldRepairCopiedApiNames ? ' OR (api_name IS NOT NULL AND prompt_api_name = api_name)' : '';
-    $copiedVisionApiNameFallback = $shouldRepairCopiedApiNames ? ' OR (api_name IS NOT NULL AND vision_api_name = api_name)' : '';
-    $copiedSharedPromptApiNameFallback = $shouldRepairCopiedApiNames ? ' OR (shared_api_name IS NOT NULL AND shared_prompt_api_name = shared_api_name)' : '';
-    $copiedSharedVisionApiNameFallback = $shouldRepairCopiedApiNames ? ' OR (shared_api_name IS NOT NULL AND shared_vision_api_name = shared_api_name)' : '';
+    $db->exec("UPDATE user_api_configs SET api_scope = 'all' WHERE api_scope IS NULL OR TRIM(api_scope) = ''");
+    $db->exec('UPDATE user_settings SET active_prompt_api_config_id = active_api_config_id WHERE active_prompt_api_config_id IS NULL');
     $db->exec("UPDATE user_api_configs SET
-      prompt_api_name = CASE WHEN prompt_api_name IS NULL OR TRIM(prompt_api_name) = ''" . $copiedPromptApiNameFallback . " THEN " . $db->quote(DEFAULT_PROMPT_API_NAME) . " ELSE prompt_api_name END,
+      prompt_api_name = CASE WHEN prompt_api_name IS NULL OR TRIM(prompt_api_name) = '' THEN " . $db->quote(DEFAULT_PROMPT_API_NAME) . " ELSE prompt_api_name END,
       prompt_api_base_url = COALESCE(NULLIF(prompt_api_base_url, ''), api_base_url),
       prompt_request_timeout = IFNULL(NULLIF(prompt_request_timeout, 0), request_timeout),
       prompt_api_key_ciphertext = COALESCE(prompt_api_key_ciphertext, api_key_ciphertext),
       prompt_api_key_iv = COALESCE(prompt_api_key_iv, api_key_iv),
       prompt_api_key_tag = COALESCE(prompt_api_key_tag, api_key_tag),
-      prompt_api_key_hint = COALESCE(prompt_api_key_hint, api_key_hint),
-      vision_api_name = CASE WHEN vision_api_name IS NULL OR TRIM(vision_api_name) = ''" . $copiedVisionApiNameFallback . " THEN " . $db->quote(DEFAULT_VISION_API_NAME) . " ELSE vision_api_name END,
-      vision_api_base_url = COALESCE(NULLIF(vision_api_base_url, ''), api_base_url),
-      vision_request_timeout = IFNULL(NULLIF(vision_request_timeout, 0), request_timeout),
-      vision_api_key_ciphertext = COALESCE(vision_api_key_ciphertext, api_key_ciphertext),
-      vision_api_key_iv = COALESCE(vision_api_key_iv, api_key_iv),
-      vision_api_key_tag = COALESCE(vision_api_key_tag, api_key_tag),
-      vision_api_key_hint = COALESCE(vision_api_key_hint, api_key_hint)");
+      prompt_api_key_hint = COALESCE(prompt_api_key_hint, api_key_hint)");
     $db->exec("UPDATE site_settings SET
-      shared_prompt_api_name = CASE WHEN shared_prompt_api_name IS NULL OR TRIM(shared_prompt_api_name) = ''" . $copiedSharedPromptApiNameFallback . " THEN " . $db->quote(DEFAULT_PROMPT_API_NAME) . " ELSE shared_prompt_api_name END,
+      shared_prompt_api_name = CASE WHEN shared_prompt_api_name IS NULL OR TRIM(shared_prompt_api_name) = '' THEN " . $db->quote(DEFAULT_PROMPT_API_NAME) . " ELSE shared_prompt_api_name END,
       shared_prompt_api_base_url = COALESCE(NULLIF(shared_prompt_api_base_url, ''), shared_api_base_url),
       shared_prompt_request_timeout = IFNULL(NULLIF(shared_prompt_request_timeout, 0), shared_request_timeout),
       shared_prompt_api_key_ciphertext = COALESCE(shared_prompt_api_key_ciphertext, shared_api_key_ciphertext),
       shared_prompt_api_key_iv = COALESCE(shared_prompt_api_key_iv, shared_api_key_iv),
       shared_prompt_api_key_tag = COALESCE(shared_prompt_api_key_tag, shared_api_key_tag),
-      shared_prompt_api_key_hint = COALESCE(shared_prompt_api_key_hint, shared_api_key_hint),
-      shared_vision_api_name = CASE WHEN shared_vision_api_name IS NULL OR TRIM(shared_vision_api_name) = ''" . $copiedSharedVisionApiNameFallback . " THEN " . $db->quote(DEFAULT_VISION_API_NAME) . " ELSE shared_vision_api_name END,
-      shared_vision_api_base_url = COALESCE(NULLIF(shared_vision_api_base_url, ''), shared_api_base_url),
-      shared_vision_request_timeout = IFNULL(NULLIF(shared_vision_request_timeout, 0), shared_request_timeout),
-      shared_vision_api_key_ciphertext = COALESCE(shared_vision_api_key_ciphertext, shared_api_key_ciphertext),
-      shared_vision_api_key_iv = COALESCE(shared_vision_api_key_iv, shared_api_key_iv),
-      shared_vision_api_key_tag = COALESCE(shared_vision_api_key_tag, shared_api_key_tag),
-      shared_vision_api_key_hint = COALESCE(shared_vision_api_key_hint, shared_api_key_hint)");
+      shared_prompt_api_key_hint = COALESCE(shared_prompt_api_key_hint, shared_api_key_hint)");
 
     $db->exec("UPDATE image_jobs SET completed_at = created_at WHERE status = 'completed' AND completed_at IS NULL");
     $db->exec("UPDATE image_jobs SET revised_prompt = NULL WHERE revised_prompt IS NOT NULL AND (TRIM(revised_prompt) = '' OR TRIM(revised_prompt) = TRIM(COALESCE(prompt, '')))");

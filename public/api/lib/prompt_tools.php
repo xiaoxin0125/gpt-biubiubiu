@@ -61,31 +61,31 @@ function prompt_tools_active_config(array $user, string $category): array
     $userId = (int) $user['id'];
     $settings = ensure_user_settings_row($userId);
     $configs = user_api_config_rows($userId);
-    $keyedOwnConfig = first_keyed_user_api_config_row_for_category($configs, $category);
-    $categoryLabel = $category === 'vision' ? '图片反推/视觉' : '提示词优化';
+    $storageCategory = 'prompt';
+    $keyedOwnConfig = first_keyed_user_api_config_row_for_category($configs, $storageCategory);
+    $categoryLabel = '提示词助手';
 
-    if (shared_api_enabled() && (!$keyedOwnConfig || !empty($settings['active_shared']))) {
+    if (shared_api_enabled() && (!$keyedOwnConfig || !empty($settings['active_prompt_shared']))) {
         $row = site_settings_row();
-        $client = shared_api_category_client($row, $category);
+        $client = shared_api_category_client($row, 'prompt');
         return [
             'apiName' => $client['apiName'],
             'apiBaseUrl' => $client['apiBaseUrl'],
             'model' => $client['model'],
             'requestTimeout' => $client['requestTimeout'],
-            'apiKey' => decrypt_shared_api_key($row, $category),
+            'apiKey' => decrypt_shared_api_key($row, 'prompt'),
             'isShared' => true,
             'categoryLabel' => $categoryLabel,
         ];
     }
 
-    $active = active_api_config_row($userId) ?: [];
-    $prefix = $category === 'vision' ? 'vision_' : 'prompt_';
-    $client = api_client_category($active, $category);
-    $apiKey = decrypt_prefixed_api_key($active, $prefix);
+    $active = active_prompt_api_config_row($userId) ?: active_api_config_row($userId) ?: [];
+    $client = api_client_category($active, $storageCategory);
+    $apiKey = decrypt_prefixed_api_key($active, category_key_prefix($storageCategory));
     if ($apiKey === '' && $keyedOwnConfig) {
         $active = $keyedOwnConfig;
-        $client = api_client_category($active, $category);
-        $apiKey = decrypt_prefixed_api_key($active, $prefix);
+        $client = api_client_category($active, $storageCategory);
+        $apiKey = decrypt_prefixed_api_key($active, category_key_prefix($storageCategory));
     }
 
     return [
@@ -276,7 +276,7 @@ function handle_prompt_caption(array $body): array
     $customRule = trim((string) ($_POST['customRule'] ?? ($_POST['custom_rule'] ?? ($body['customRule'] ?? ($body['custom_rule'] ?? '')))));
     $extraPrompt = trim((string) ($_POST['extraPrompt'] ?? ($_POST['extra_prompt'] ?? ($body['extraPrompt'] ?? ($body['extra_prompt'] ?? '')))));
     $ruleText = prompt_tools_rule_text('caption', $rule, $customRule, $outputLanguage);
-    $config = prompt_tools_active_config($user, 'vision');
+    $config = prompt_tools_active_config($user, 'prompt');
 
     $text = "规则：{$ruleText}";
     if ($extraPrompt !== '') $text .= "\n额外要求：{$extraPrompt}";
