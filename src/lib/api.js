@@ -1,8 +1,10 @@
 import {
+  API_CONFIG_SCOPE_AGNES,
   API_CONFIG_SCOPE_ALL,
   API_CONFIG_SCOPE_IMAGE,
   API_CONFIG_SCOPE_PROMPT,
   DEFAULT_DIRECT_API_BASE_URL,
+  defaultAgnesApiCategory,
   defaultApiConfigItem,
   defaultPromptApiCategory,
   MAX_REQUEST_TIMEOUT_SECONDS,
@@ -111,7 +113,7 @@ export const createLocalApiConfigId = () => `api-config-${Date.now()}-${Math.ran
 
 export const normalizeApiConfigScope = (value = API_CONFIG_SCOPE_ALL) => {
   const scope = String(value || API_CONFIG_SCOPE_ALL).trim();
-  return [API_CONFIG_SCOPE_ALL, API_CONFIG_SCOPE_IMAGE, API_CONFIG_SCOPE_PROMPT].includes(scope) ? scope : API_CONFIG_SCOPE_ALL;
+  return [API_CONFIG_SCOPE_ALL, API_CONFIG_SCOPE_IMAGE, API_CONFIG_SCOPE_PROMPT, API_CONFIG_SCOPE_AGNES].includes(scope) ? scope : API_CONFIG_SCOPE_ALL;
 };
 
 export const apiConfigSupportsScope = (config = {}, scope = API_CONFIG_SCOPE_IMAGE) => {
@@ -120,18 +122,21 @@ export const apiConfigSupportsScope = (config = {}, scope = API_CONFIG_SCOPE_IMA
   return apiScope === scope;
 };
 
+export const apiCategoryForScope = (config = {}, scope = API_CONFIG_SCOPE_IMAGE) => {
+  if (scope === API_CONFIG_SCOPE_PROMPT) return config.promptApi || {};
+  if (scope === API_CONFIG_SCOPE_AGNES) return config.agnesApi || {};
+  return config.imageApi || config;
+};
+
 export const apiConfigHasKeyForScope = (config = {}, scope = API_CONFIG_SCOPE_IMAGE) => {
-  if (config.isShared) {
-    const category = scope === API_CONFIG_SCOPE_PROMPT ? (config.promptApi || {}) : (config.imageApi || config);
-    return Boolean(category.hasApiKey);
-  }
+  const category = apiCategoryForScope(config, scope);
+  if (config.isShared) return Boolean(category.hasApiKey);
   if (!apiConfigSupportsScope(config, scope)) return false;
-  const category = scope === API_CONFIG_SCOPE_PROMPT ? (config.promptApi || {}) : (config.imageApi || config);
   return Boolean(category.hasApiKey || (scope === API_CONFIG_SCOPE_IMAGE ? config.hasApiKey : false));
 };
 
 export const apiConfigLabelForScope = (config = {}, scope = API_CONFIG_SCOPE_IMAGE, fallback = defaultApiConfigItem.apiName) => {
-  const category = scope === API_CONFIG_SCOPE_PROMPT ? (config.promptApi || {}) : (config.imageApi || config);
+  const category = apiCategoryForScope(config, scope);
   return category.apiName || config.apiName || fallback;
 };
 
@@ -150,6 +155,13 @@ export const normalizeApiConfigItem = (value = {}) => {
     requestTimeout: value.promptRequestTimeout || value.prompt_request_timeout || imageApi.requestTimeout,
     apiKeyHint: value.promptApiKeyHint || value.prompt_api_key_hint || '',
   });
+  const agnesApi = normalizeApiCategory(value.agnesApi || value.agnes_api || {}, {
+    apiName: value.agnesApiName || value.agnes_api_name || defaultAgnesApiCategory.apiName,
+    apiBaseUrl: value.agnesApiBaseUrl || value.agnes_api_base_url || defaultAgnesApiCategory.apiBaseUrl,
+    model: value.agnesModel || value.agnes_model || defaultAgnesApiCategory.model,
+    requestTimeout: value.agnesRequestTimeout || value.agnes_request_timeout || imageApi.requestTimeout,
+    apiKeyHint: value.agnesApiKeyHint || value.agnes_api_key_hint || '',
+  });
   const apiScope = normalizeApiConfigScope(value.apiScope || value.api_scope);
 
   return {
@@ -159,13 +171,15 @@ export const normalizeApiConfigItem = (value = {}) => {
     apiBaseUrl: imageApi.apiBaseUrl,
     model: imageApi.model || defaultApiConfigItem.model,
     promptModel: promptApi.model,
+    agnesModel: agnesApi.model,
     apiKey: imageApi.apiKey,
     hasApiKey: imageApi.hasApiKey,
     apiKeyHint: imageApi.apiKeyHint,
     requestTimeout: imageApi.requestTimeout,
     imageApi: { ...imageApi, model: imageApi.model || defaultApiConfigItem.model },
     promptApi,
-    hasAnyApiKey: Boolean(value.hasAnyApiKey || value.has_any_api_key || imageApi.hasApiKey || promptApi.hasApiKey),
+    agnesApi,
+    hasAnyApiKey: Boolean(value.hasAnyApiKey || value.has_any_api_key || imageApi.hasApiKey || promptApi.hasApiKey || agnesApi.hasApiKey),
     isShared: Boolean(value.isShared || value.is_shared),
   };
 };
@@ -178,8 +192,10 @@ export const normalizeServerSettings = (value = {}) => {
   const safeConfigs = apiConfigs.length ? apiConfigs : [normalizeApiConfigItem(defaultApiConfigItem)];
   const activeApiConfigId = value.activeApiConfigId ?? value.active_api_config_id ?? value.activeConfig?.id ?? value.active_config?.id ?? safeConfigs[0].id;
   const activePromptApiConfigId = value.activePromptApiConfigId ?? value.active_prompt_api_config_id ?? value.activePromptConfig?.id ?? value.active_prompt_config?.id ?? activeApiConfigId;
-  const activeConfig = safeConfigs.find((item) => String(item.id) === String(activeApiConfigId)) || safeConfigs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_IMAGE)) || safeConfigs[0];
-  const activePromptConfig = safeConfigs.find((item) => String(item.id) === String(activePromptApiConfigId)) || safeConfigs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_PROMPT)) || activeConfig;
+  const activeAgnesApiConfigId = value.activeAgnesApiConfigId ?? value.active_agnes_api_config_id ?? value.activeAgnesConfig?.id ?? value.active_agnes_config?.id ?? activeApiConfigId;
+  const activeConfig = safeConfigs.find((item) => String(item.id) === String(activeApiConfigId) && apiConfigSupportsScope(item, API_CONFIG_SCOPE_IMAGE)) || safeConfigs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_IMAGE)) || safeConfigs[0];
+  const activePromptConfig = safeConfigs.find((item) => String(item.id) === String(activePromptApiConfigId) && apiConfigSupportsScope(item, API_CONFIG_SCOPE_PROMPT)) || safeConfigs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_PROMPT)) || activeConfig;
+  const activeAgnesConfig = safeConfigs.find((item) => String(item.id) === String(activeAgnesApiConfigId) && apiConfigSupportsScope(item, API_CONFIG_SCOPE_AGNES)) || safeConfigs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_AGNES)) || activeConfig;
 
   const requestTimeout = clampNumber(Number(value.requestTimeout || value.request_timeout || activeConfig.requestTimeout || defaultApiConfigItem.requestTimeout), 10, MAX_REQUEST_TIMEOUT_SECONDS);
 
@@ -189,7 +205,9 @@ export const normalizeServerSettings = (value = {}) => {
     stream: Boolean(value.stream),
     activeApiConfigId: activeConfig.id,
     activePromptApiConfigId: activePromptConfig.id,
+    activeAgnesApiConfigId: activeAgnesConfig.id,
     activePromptConfig,
+    activeAgnesConfig,
     apiConfigs: safeConfigs,
     form: { model: activeConfig.model || defaultApiConfigItem.model },
   };
@@ -266,10 +284,17 @@ export const normalizeDirectImageResponse = (data, outputFormat) => {
 const buildDirectImageApiUrl = (config = {}, path) => {
   const baseUrl = normalizeApiBaseUrl(config.apiBaseUrl || config.api_base_url || defaultApiConfigItem.apiBaseUrl);
   const base = new URL(baseUrl);
-  const normalizedPath = `/${String(path || '').replace(/^\/+/, '')}`;
+  const pathUrl = new URL(String(path || '/'), base);
+  const normalizedPath = `/${pathUrl.pathname.replace(/^\/+/, '')}`;
   const basePath = base.pathname.replace(/\/+$/, '');
-  base.pathname = basePath && normalizedPath.startsWith(`${basePath}/`) ? normalizedPath : `${basePath}${normalizedPath}`;
-  base.search = '';
+  if (basePath.endsWith('/v1') && normalizedPath.startsWith('/v1/')) {
+    base.pathname = `${basePath}${normalizedPath.slice(3)}`;
+  } else if (basePath.endsWith('/v1') && !normalizedPath.startsWith('/v1/')) {
+    base.pathname = `${basePath.slice(0, -3)}${normalizedPath}`;
+  } else {
+    base.pathname = basePath && normalizedPath.startsWith(`${basePath}/`) ? normalizedPath : `${basePath}${normalizedPath}`;
+  }
+  base.search = pathUrl.search;
   base.hash = '';
   return base.toString();
 };
@@ -389,3 +414,34 @@ export const requestDirectImageFormData = async (config, apiKey, payload) => {
   }, config);
   return readDirectImageResponse(response);
 };
+
+export const requestAgnesJson = async (config, apiKey, path, payload, method = 'POST') => {
+  const response = await fetchWithTimeout(buildDirectImageApiUrl(config, path), {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: method === 'GET' ? undefined : JSON.stringify(payload || {}),
+  }, config);
+  return readDirectImageResponse(response);
+};
+
+export const requestAgnesResult = async (config, apiKey, videoId) => {
+  const query = new URLSearchParams({ video_id: videoId, model_name: 'agnes-video-v2.0' });
+  const response = await fetchWithTimeout(buildDirectImageApiUrl(config, `/agnesapi?${query.toString()}`), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  }, config);
+  return readDirectImageResponse(response);
+};
+
+export const requestSharedAgnesJson = (path, payload) => requestJson('/api/agnes/proxy', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ path, payload }),
+});
+
+export const requestSharedAgnesResult = (videoId) => requestJson(`/api/agnes/result?video_id=${encodeURIComponent(videoId)}&model_name=agnes-video-v2.0`);

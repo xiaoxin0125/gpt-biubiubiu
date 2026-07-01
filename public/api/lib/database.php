@@ -120,6 +120,8 @@ function ensure_schema(): void
       active_shared TINYINT(1) NOT NULL DEFAULT 0,
       active_prompt_api_config_id BIGINT UNSIGNED DEFAULT NULL,
       active_prompt_shared TINYINT(1) NOT NULL DEFAULT 0,
+      active_agnes_api_config_id BIGINT UNSIGNED DEFAULT NULL,
+      active_agnes_shared TINYINT(1) NOT NULL DEFAULT 0,
       api_key_ciphertext TEXT DEFAULT NULL,
       api_key_iv VARCHAR(64) DEFAULT NULL,
       api_key_tag VARCHAR(64) DEFAULT NULL,
@@ -148,6 +150,14 @@ function ensure_schema(): void
       prompt_api_key_iv VARCHAR(64) DEFAULT NULL,
       prompt_api_key_tag VARCHAR(64) DEFAULT NULL,
       prompt_api_key_hint VARCHAR(24) DEFAULT NULL,
+      agnes_api_name VARCHAR(128) NOT NULL DEFAULT 'Agnes API',
+      agnes_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://apihub.agnes-ai.com',
+      agnes_model VARCHAR(128) NOT NULL DEFAULT 'agnes-image-2.1-flash',
+      agnes_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
+      agnes_api_key_ciphertext TEXT DEFAULT NULL,
+      agnes_api_key_iv VARCHAR(64) DEFAULT NULL,
+      agnes_api_key_tag VARCHAR(64) DEFAULT NULL,
+      agnes_api_key_hint VARCHAR(24) DEFAULT NULL,
       sort_order INT UNSIGNED NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -218,6 +228,7 @@ function ensure_schema(): void
       wall_require_login TINYINT(1) NOT NULL DEFAULT 0,
       registration_enabled TINYINT(1) NOT NULL DEFAULT 1,
       shared_api_enabled TINYINT(1) NOT NULL DEFAULT 1,
+      shared_agnes_api_enabled TINYINT(1) NOT NULL DEFAULT 1,
       shared_api_name VARCHAR(128) NOT NULL DEFAULT 'OpenAI gpt-image-2',
       shared_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.openai.com',
       shared_model VARCHAR(128) NOT NULL DEFAULT 'gpt-image-2',
@@ -235,6 +246,14 @@ function ensure_schema(): void
       shared_prompt_api_key_iv VARCHAR(64) DEFAULT NULL,
       shared_prompt_api_key_tag VARCHAR(64) DEFAULT NULL,
       shared_prompt_api_key_hint VARCHAR(24) DEFAULT NULL,
+      shared_agnes_api_name VARCHAR(128) NOT NULL DEFAULT 'Agnes API',
+      shared_agnes_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://apihub.agnes-ai.com',
+      shared_agnes_model VARCHAR(128) NOT NULL DEFAULT 'agnes-image-2.1-flash',
+      shared_agnes_request_timeout INT UNSIGNED NOT NULL DEFAULT 999,
+      shared_agnes_api_key_ciphertext TEXT DEFAULT NULL,
+      shared_agnes_api_key_iv VARCHAR(64) DEFAULT NULL,
+      shared_agnes_api_key_tag VARCHAR(64) DEFAULT NULL,
+      shared_agnes_api_key_hint VARCHAR(24) DEFAULT NULL,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
@@ -249,7 +268,9 @@ function ensure_schema(): void
     ensure_column($db, 'user_settings', 'active_shared', 'active_shared TINYINT(1) NOT NULL DEFAULT 0 AFTER active_api_config_id');
     ensure_column($db, 'user_settings', 'active_prompt_api_config_id', 'active_prompt_api_config_id BIGINT UNSIGNED DEFAULT NULL AFTER active_shared');
     ensure_column($db, 'user_settings', 'active_prompt_shared', 'active_prompt_shared TINYINT(1) NOT NULL DEFAULT 0 AFTER active_prompt_api_config_id');
-    ensure_column($db, 'user_settings', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER active_prompt_shared');
+    ensure_column($db, 'user_settings', 'active_agnes_api_config_id', 'active_agnes_api_config_id BIGINT UNSIGNED DEFAULT NULL AFTER active_prompt_shared');
+    ensure_column($db, 'user_settings', 'active_agnes_shared', 'active_agnes_shared TINYINT(1) NOT NULL DEFAULT 0 AFTER active_agnes_api_config_id');
+    ensure_column($db, 'user_settings', 'api_key_ciphertext', 'api_key_ciphertext TEXT DEFAULT NULL AFTER active_agnes_shared');
     ensure_column($db, 'user_settings', 'api_key_iv', 'api_key_iv VARCHAR(64) DEFAULT NULL AFTER api_key_ciphertext');
     ensure_column($db, 'user_settings', 'api_key_tag', 'api_key_tag VARCHAR(64) DEFAULT NULL AFTER api_key_iv');
     ensure_column($db, 'user_settings', 'api_key_hint', 'api_key_hint VARCHAR(24) DEFAULT NULL AFTER api_key_tag');
@@ -266,6 +287,14 @@ function ensure_schema(): void
     ensure_column($db, 'user_api_configs', 'prompt_api_key_iv', 'prompt_api_key_iv VARCHAR(64) DEFAULT NULL AFTER prompt_api_key_ciphertext');
     ensure_column($db, 'user_api_configs', 'prompt_api_key_tag', 'prompt_api_key_tag VARCHAR(64) DEFAULT NULL AFTER prompt_api_key_iv');
     ensure_column($db, 'user_api_configs', 'prompt_api_key_hint', 'prompt_api_key_hint VARCHAR(24) DEFAULT NULL AFTER prompt_api_key_tag');
+    ensure_column($db, 'user_api_configs', 'agnes_api_name', 'agnes_api_name VARCHAR(128) NOT NULL DEFAULT ' . $db->quote(DEFAULT_AGNES_API_NAME) . ' AFTER prompt_api_key_hint');
+    ensure_column($db, 'user_api_configs', 'agnes_api_base_url', 'agnes_api_base_url VARCHAR(255) NOT NULL DEFAULT ' . $db->quote(DEFAULT_AGNES_API_BASE_URL) . ' AFTER agnes_api_name');
+    ensure_column($db, 'user_api_configs', 'agnes_model', 'agnes_model VARCHAR(128) NOT NULL DEFAULT ' . $db->quote(DEFAULT_AGNES_IMAGE_MODEL) . ' AFTER agnes_api_base_url');
+    ensure_column($db, 'user_api_configs', 'agnes_request_timeout', 'agnes_request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER agnes_model');
+    ensure_column($db, 'user_api_configs', 'agnes_api_key_ciphertext', 'agnes_api_key_ciphertext TEXT DEFAULT NULL AFTER agnes_request_timeout');
+    ensure_column($db, 'user_api_configs', 'agnes_api_key_iv', 'agnes_api_key_iv VARCHAR(64) DEFAULT NULL AFTER agnes_api_key_ciphertext');
+    ensure_column($db, 'user_api_configs', 'agnes_api_key_tag', 'agnes_api_key_tag VARCHAR(64) DEFAULT NULL AFTER agnes_api_key_iv');
+    ensure_column($db, 'user_api_configs', 'agnes_api_key_hint', 'agnes_api_key_hint VARCHAR(24) DEFAULT NULL AFTER agnes_api_key_tag');
     ensure_column($db, 'wall_items', 'user_id', 'user_id BIGINT UNSIGNED DEFAULT NULL AFTER id');
     ensure_column($db, 'wall_items', 'client_id', 'client_id VARCHAR(80) DEFAULT NULL AFTER user_id');
     ensure_column($db, 'wall_items', 'author_name', 'author_name VARCHAR(96) NOT NULL DEFAULT ' . $db->quote('未知艺术家') . ' AFTER client_id');
@@ -303,6 +332,7 @@ function ensure_schema(): void
     ensure_column($db, 'image_jobs', 'result_json', 'result_json JSON DEFAULT NULL AFTER params_json');
     ensure_column($db, 'image_jobs', 'created_at', 'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER result_json');
     ensure_column($db, 'image_jobs', 'completed_at', 'completed_at TIMESTAMP NULL DEFAULT NULL AFTER created_at');
+    ensure_column($db, 'site_settings', 'shared_agnes_api_enabled', 'shared_agnes_api_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER shared_api_enabled');
     ensure_column($db, 'site_settings', 'shared_request_timeout', 'shared_request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER shared_model');
     ensure_column($db, 'site_settings', 'shared_api_key_ciphertext', 'shared_api_key_ciphertext TEXT DEFAULT NULL AFTER shared_request_timeout');
     ensure_column($db, 'site_settings', 'shared_api_key_iv', 'shared_api_key_iv VARCHAR(64) DEFAULT NULL AFTER shared_api_key_ciphertext');
@@ -317,6 +347,14 @@ function ensure_schema(): void
     ensure_column($db, 'site_settings', 'shared_prompt_api_key_iv', 'shared_prompt_api_key_iv VARCHAR(64) DEFAULT NULL AFTER shared_prompt_api_key_ciphertext');
     ensure_column($db, 'site_settings', 'shared_prompt_api_key_tag', 'shared_prompt_api_key_tag VARCHAR(64) DEFAULT NULL AFTER shared_prompt_api_key_iv');
     ensure_column($db, 'site_settings', 'shared_prompt_api_key_hint', 'shared_prompt_api_key_hint VARCHAR(24) DEFAULT NULL AFTER shared_prompt_api_key_tag');
+    ensure_column($db, 'site_settings', 'shared_agnes_api_name', 'shared_agnes_api_name VARCHAR(128) NOT NULL DEFAULT ' . $db->quote(DEFAULT_AGNES_API_NAME) . ' AFTER shared_prompt_api_key_hint');
+    ensure_column($db, 'site_settings', 'shared_agnes_api_base_url', 'shared_agnes_api_base_url VARCHAR(255) NOT NULL DEFAULT ' . $db->quote(DEFAULT_AGNES_API_BASE_URL) . ' AFTER shared_agnes_api_name');
+    ensure_column($db, 'site_settings', 'shared_agnes_model', 'shared_agnes_model VARCHAR(128) NOT NULL DEFAULT ' . $db->quote(DEFAULT_AGNES_IMAGE_MODEL) . ' AFTER shared_agnes_api_base_url');
+    ensure_column($db, 'site_settings', 'shared_agnes_request_timeout', 'shared_agnes_request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER shared_agnes_model');
+    ensure_column($db, 'site_settings', 'shared_agnes_api_key_ciphertext', 'shared_agnes_api_key_ciphertext TEXT DEFAULT NULL AFTER shared_agnes_request_timeout');
+    ensure_column($db, 'site_settings', 'shared_agnes_api_key_iv', 'shared_agnes_api_key_iv VARCHAR(64) DEFAULT NULL AFTER shared_agnes_api_key_ciphertext');
+    ensure_column($db, 'site_settings', 'shared_agnes_api_key_tag', 'shared_agnes_api_key_tag VARCHAR(64) DEFAULT NULL AFTER shared_agnes_api_key_iv');
+    ensure_column($db, 'site_settings', 'shared_agnes_api_key_hint', 'shared_agnes_api_key_hint VARCHAR(24) DEFAULT NULL AFTER shared_agnes_api_key_tag');
 
     ensure_index($db, 'user_api_configs', 'idx_user_api_configs_user_sort', 'INDEX idx_user_api_configs_user_sort (user_id, sort_order, id)');
     ensure_index($db, 'image_jobs', 'idx_image_jobs_user_created', 'INDEX idx_image_jobs_user_created (user_id, created_at)');
@@ -332,6 +370,7 @@ function ensure_schema(): void
     $db->exec("UPDATE user_settings SET model = 'gpt-image-2' WHERE model = 'gpt-image-1'");
     $db->exec("UPDATE user_api_configs SET api_scope = 'all' WHERE api_scope IS NULL OR TRIM(api_scope) = ''");
     $db->exec('UPDATE user_settings SET active_prompt_api_config_id = active_api_config_id WHERE active_prompt_api_config_id IS NULL');
+    $db->exec('UPDATE user_settings SET active_agnes_api_config_id = active_api_config_id WHERE active_agnes_api_config_id IS NULL');
     $db->exec("UPDATE user_api_configs SET
       prompt_api_name = CASE WHEN prompt_api_name IS NULL OR TRIM(prompt_api_name) = '' THEN " . $db->quote(DEFAULT_PROMPT_API_NAME) . " ELSE prompt_api_name END,
       prompt_api_base_url = COALESCE(NULLIF(prompt_api_base_url, ''), api_base_url),
@@ -339,7 +378,11 @@ function ensure_schema(): void
       prompt_api_key_ciphertext = COALESCE(prompt_api_key_ciphertext, api_key_ciphertext),
       prompt_api_key_iv = COALESCE(prompt_api_key_iv, api_key_iv),
       prompt_api_key_tag = COALESCE(prompt_api_key_tag, api_key_tag),
-      prompt_api_key_hint = COALESCE(prompt_api_key_hint, api_key_hint)");
+      prompt_api_key_hint = COALESCE(prompt_api_key_hint, api_key_hint),
+      agnes_api_name = CASE WHEN agnes_api_name IS NULL OR TRIM(agnes_api_name) = '' THEN " . $db->quote(DEFAULT_AGNES_API_NAME) . " ELSE agnes_api_name END,
+      agnes_api_base_url = CASE WHEN agnes_api_base_url IS NULL OR TRIM(agnes_api_base_url) = '' THEN " . $db->quote(DEFAULT_AGNES_API_BASE_URL) . " ELSE agnes_api_base_url END,
+      agnes_model = CASE WHEN agnes_model IS NULL OR TRIM(agnes_model) = '' THEN " . $db->quote(DEFAULT_AGNES_IMAGE_MODEL) . " ELSE agnes_model END,
+      agnes_request_timeout = IFNULL(NULLIF(agnes_request_timeout, 0), request_timeout)");
     $db->exec("UPDATE site_settings SET
       shared_prompt_api_name = CASE WHEN shared_prompt_api_name IS NULL OR TRIM(shared_prompt_api_name) = '' THEN " . $db->quote(DEFAULT_PROMPT_API_NAME) . " ELSE shared_prompt_api_name END,
       shared_prompt_api_base_url = COALESCE(NULLIF(shared_prompt_api_base_url, ''), shared_api_base_url),
@@ -347,7 +390,11 @@ function ensure_schema(): void
       shared_prompt_api_key_ciphertext = COALESCE(shared_prompt_api_key_ciphertext, shared_api_key_ciphertext),
       shared_prompt_api_key_iv = COALESCE(shared_prompt_api_key_iv, shared_api_key_iv),
       shared_prompt_api_key_tag = COALESCE(shared_prompt_api_key_tag, shared_api_key_tag),
-      shared_prompt_api_key_hint = COALESCE(shared_prompt_api_key_hint, shared_api_key_hint)");
+      shared_prompt_api_key_hint = COALESCE(shared_prompt_api_key_hint, shared_api_key_hint),
+      shared_agnes_api_name = CASE WHEN shared_agnes_api_name IS NULL OR TRIM(shared_agnes_api_name) = '' THEN " . $db->quote(DEFAULT_AGNES_API_NAME) . " ELSE shared_agnes_api_name END,
+      shared_agnes_api_base_url = CASE WHEN shared_agnes_api_base_url IS NULL OR TRIM(shared_agnes_api_base_url) = '' THEN " . $db->quote(DEFAULT_AGNES_API_BASE_URL) . " ELSE shared_agnes_api_base_url END,
+      shared_agnes_model = CASE WHEN shared_agnes_model IS NULL OR TRIM(shared_agnes_model) = '' THEN " . $db->quote(DEFAULT_AGNES_IMAGE_MODEL) . " ELSE shared_agnes_model END,
+      shared_agnes_request_timeout = IFNULL(NULLIF(shared_agnes_request_timeout, 0), shared_request_timeout)");
 
     $db->exec("UPDATE image_jobs SET completed_at = created_at WHERE status = 'completed' AND completed_at IS NULL");
     $db->exec("UPDATE image_jobs SET revised_prompt = NULL WHERE revised_prompt IS NOT NULL AND (TRIM(revised_prompt) = '' OR TRIM(revised_prompt) = TRIM(COALESCE(prompt, '')))");

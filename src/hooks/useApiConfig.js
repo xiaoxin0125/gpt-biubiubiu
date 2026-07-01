@@ -1,4 +1,5 @@
 import {
+  API_CONFIG_SCOPE_AGNES,
   API_CONFIG_SCOPE_IMAGE,
   API_CONFIG_SCOPE_PROMPT,
   defaultApiConfigForm,
@@ -20,27 +21,45 @@ export const useApiConfig = (deps) => {
   const addApiConfig = (apiScope = API_CONFIG_SCOPE_IMAGE) => {
     const imageApi = activeApiConfig?.imageApi || activeApiConfig || defaultApiConfigItem.imageApi;
     const promptApi = apiConfigForm.activePromptConfig?.promptApi || activeApiConfig?.promptApi || defaultApiConfigItem.promptApi;
-    const scopedDefaults = apiScope === API_CONFIG_SCOPE_PROMPT
-      ? {
-          imageApi: { ...defaultApiConfigItem.imageApi, apiKey: '', hasApiKey: false, apiKeyHint: '' },
-          promptApi: {
-            ...promptApi,
-            apiName: promptApi.apiName || defaultApiConfigItem.promptApi.apiName,
-            apiKey: '',
-            hasApiKey: false,
-            apiKeyHint: '',
-          },
-        }
-      : {
-          imageApi: {
-            ...imageApi,
-            apiName: imageApi.apiName || defaultApiConfigItem.imageApi.apiName,
-            apiKey: '',
-            hasApiKey: false,
-            apiKeyHint: '',
-          },
-          promptApi: { ...defaultApiConfigItem.promptApi, apiKey: '', hasApiKey: false, apiKeyHint: '' },
-        };
+    const agnesApi = apiConfigForm.activeAgnesConfig?.agnesApi || activeApiConfig?.agnesApi || defaultApiConfigItem.agnesApi;
+    const scopedDefaultsByScope = {
+      [API_CONFIG_SCOPE_IMAGE]: {
+        imageApi: {
+          ...imageApi,
+          apiName: imageApi.apiName || defaultApiConfigItem.imageApi.apiName,
+          apiKey: '',
+          hasApiKey: false,
+          apiKeyHint: '',
+        },
+        promptApi: { ...defaultApiConfigItem.promptApi, apiKey: '', hasApiKey: false, apiKeyHint: '' },
+        agnesApi: { ...defaultApiConfigItem.agnesApi, apiKey: '', hasApiKey: false, apiKeyHint: '' },
+      },
+      [API_CONFIG_SCOPE_PROMPT]: {
+        imageApi: { ...defaultApiConfigItem.imageApi, apiKey: '', hasApiKey: false, apiKeyHint: '' },
+        promptApi: {
+          ...promptApi,
+          apiName: promptApi.apiName || defaultApiConfigItem.promptApi.apiName,
+          apiKey: '',
+          hasApiKey: false,
+          apiKeyHint: '',
+        },
+        agnesApi: { ...defaultApiConfigItem.agnesApi, apiKey: '', hasApiKey: false, apiKeyHint: '' },
+      },
+      [API_CONFIG_SCOPE_AGNES]: {
+        imageApi: { ...defaultApiConfigItem.imageApi, apiKey: '', hasApiKey: false, apiKeyHint: '' },
+        promptApi: { ...defaultApiConfigItem.promptApi, apiKey: '', hasApiKey: false, apiKeyHint: '' },
+        agnesApi: {
+          ...agnesApi,
+          apiName: agnesApi.apiName || defaultApiConfigItem.agnesApi.apiName,
+          apiBaseUrl: agnesApi.apiBaseUrl || defaultApiConfigItem.agnesApi.apiBaseUrl,
+          model: agnesApi.model || defaultApiConfigItem.agnesApi.model,
+          apiKey: '',
+          hasApiKey: false,
+          apiKeyHint: '',
+        },
+      },
+    };
+    const scopedDefaults = scopedDefaultsByScope[apiScope] || scopedDefaultsByScope[API_CONFIG_SCOPE_IMAGE];
     const nextConfig = normalizeApiConfigItem({
       id: createLocalApiConfigId(),
       apiScope,
@@ -49,10 +68,15 @@ export const useApiConfig = (deps) => {
       model: scopedDefaults.imageApi.model || defaultForm.model,
       imageApi: scopedDefaults.imageApi,
       promptApi: scopedDefaults.promptApi,
+      agnesApi: scopedDefaults.agnesApi,
     }, (apiConfigForm.apiConfigs || []).length);
     setApiConfigForm((current) => ({
       ...current,
-      ...(apiScope === API_CONFIG_SCOPE_PROMPT ? { activePromptApiConfigId: nextConfig.id } : { activeApiConfigId: nextConfig.id }),
+      ...(apiScope === API_CONFIG_SCOPE_PROMPT
+        ? { activePromptApiConfigId: nextConfig.id }
+        : apiScope === API_CONFIG_SCOPE_AGNES
+          ? { activeAgnesApiConfigId: nextConfig.id }
+          : { activeApiConfigId: nextConfig.id }),
       apiConfigs: [...(current.apiConfigs || []), nextConfig],
     }));
   };
@@ -65,8 +89,9 @@ export const useApiConfig = (deps) => {
       if (!nextConfigs.length) return current;
       return {
         ...current,
-        activeApiConfigId: String(current.activeApiConfigId) === String(id) ? nextConfigs.find((item) => item.apiScope !== API_CONFIG_SCOPE_PROMPT)?.id || nextConfigs[0].id : current.activeApiConfigId,
-        activePromptApiConfigId: String(current.activePromptApiConfigId) === String(id) ? nextConfigs.find((item) => item.apiScope !== API_CONFIG_SCOPE_IMAGE)?.id || nextConfigs[0].id : current.activePromptApiConfigId,
+        activeApiConfigId: String(current.activeApiConfigId) === String(id) ? nextConfigs.find((item) => item.apiScope !== API_CONFIG_SCOPE_PROMPT && item.apiScope !== API_CONFIG_SCOPE_AGNES)?.id || nextConfigs[0].id : current.activeApiConfigId,
+        activePromptApiConfigId: String(current.activePromptApiConfigId) === String(id) ? nextConfigs.find((item) => item.apiScope !== API_CONFIG_SCOPE_IMAGE && item.apiScope !== API_CONFIG_SCOPE_AGNES)?.id || nextConfigs[0].id : current.activePromptApiConfigId,
+        activeAgnesApiConfigId: String(current.activeAgnesApiConfigId) === String(id) ? nextConfigs.find((item) => item.apiScope !== API_CONFIG_SCOPE_IMAGE && item.apiScope !== API_CONFIG_SCOPE_PROMPT)?.id || nextConfigs[0].id : current.activeAgnesApiConfigId,
         apiConfigs: nextConfigs,
       };
     });
@@ -88,10 +113,12 @@ export const useApiConfig = (deps) => {
           apiKey: '',
           imageApi: { ...normalized.imageApi, hasApiKey: item.imageApi?.hasApiKey || item.hasApiKey, apiKeyHint: item.imageApi?.apiKeyHint || item.apiKeyHint || '', apiKey: '' },
           promptApi: { ...normalized.promptApi, hasApiKey: item.promptApi?.hasApiKey || false, apiKeyHint: item.promptApi?.apiKeyHint || '', apiKey: '' },
+          agnesApi: { ...normalized.agnesApi, hasApiKey: item.agnesApi?.hasApiKey || false, apiKeyHint: item.agnesApi?.apiKeyHint || '', apiKey: '' },
         };
       }) : [defaultApiConfigItem],
-      activeApiConfigId: current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
-      activePromptApiConfigId: current.apiConfigs?.find((item) => item.apiScope !== API_CONFIG_SCOPE_IMAGE)?.id || current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
+      activeApiConfigId: current.apiConfigs?.find((item) => item.apiScope !== API_CONFIG_SCOPE_PROMPT && item.apiScope !== API_CONFIG_SCOPE_AGNES)?.id || current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
+      activePromptApiConfigId: current.apiConfigs?.find((item) => item.apiScope !== API_CONFIG_SCOPE_IMAGE && item.apiScope !== API_CONFIG_SCOPE_AGNES)?.id || current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
+      activeAgnesApiConfigId: current.apiConfigs?.find((item) => item.apiScope !== API_CONFIG_SCOPE_IMAGE && item.apiScope !== API_CONFIG_SCOPE_PROMPT)?.id || current.apiConfigs?.[0]?.id || defaultApiConfigItem.id,
     }));
     setForm(defaultForm);
   };

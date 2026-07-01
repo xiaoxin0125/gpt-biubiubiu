@@ -83,6 +83,21 @@ export const imageMimeForOutputFormat = (format) => {
   return 'image/png';
 };
 
+export const readImageFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+  if (!file || !String(file.type || '').startsWith('image/')) {
+    reject(new Error('只支持图片文件。'));
+    return;
+  }
+  if (typeof FileReader === 'undefined') {
+    reject(new Error('当前浏览器不支持读取本地图片。'));
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ''));
+  reader.onerror = () => reject(new Error('本地图片读取失败。'));
+  reader.readAsDataURL(file);
+});
+
 export const imageToSavePayload = (image, fallbackMime = 'image/png') => {
   const b64Json = String(image?.b64_json || image?.image_b64 || '');
   const url = String(image?.downloadUrl || image?.originalUrl || image?.original_url || image?.url || image?.image_url || '');

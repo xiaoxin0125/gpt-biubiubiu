@@ -75,6 +75,10 @@ function api_exact_routes(): array
             return [
                 'settings' => settings_for_user((int) $user['id']),
                 'apiKey' => stored_user_own_api_key(),
+                'apiKeys' => [
+                    'imageApi' => stored_user_own_api_key_for_category('image'),
+                    'agnesApi' => stored_user_own_api_key_for_category('agnes'),
+                ],
             ];
         }],
         ['POST', '/settings', function (array $body): array {
@@ -94,6 +98,12 @@ function api_exact_routes(): array
         }],
         ['POST', '/images/edits', function (): array {
             return handle_shared_image_edit(require_user());
+        }],
+        ['POST', '/agnes/proxy', function (array $body): array {
+            return handle_shared_agnes_proxy(require_user(), $body);
+        }],
+        ['GET', '/agnes/result', function (): array {
+            return handle_shared_agnes_result(require_user());
         }],
         ['POST', '/prompt-tools/optimize', function (array $body): array {
             return handle_prompt_optimize($body);

@@ -123,37 +123,40 @@ function has_prefixed_api_key(array $row, string $prefix = ''): bool
 function normalized_api_scope(array $row): string
 {
     $scope = trim((string) ($row['api_scope'] ?? 'all'));
-    return in_array($scope, ['all', 'image', 'prompt'], true) ? $scope : 'all';
+    return in_array($scope, ['all', 'image', 'prompt', 'agnes'], true) ? $scope : 'all';
 }
 
 function config_scope_allows_category(array $row, string $category): bool
 {
     $scope = normalized_api_scope($row);
     if ($scope === 'all') return true;
-    if ($category === 'image') return $scope === 'image';
-    return $scope === 'prompt';
+    return $scope === $category;
 }
 
 function category_storage_key(string $category): string
 {
-    return $category === 'prompt' ? 'prompt' : 'image';
+    if ($category === 'prompt') return 'prompt';
+    if ($category === 'agnes') return 'agnes';
+    return 'image';
 }
 
 function category_key_prefix(string $category): string
 {
     $storageKey = category_storage_key($category);
-    return $storageKey === 'prompt' ? 'prompt_' : '';
+    if ($storageKey === 'prompt') return 'prompt_';
+    if ($storageKey === 'agnes') return 'agnes_';
+    return '';
 }
 
 function config_has_category_api_key(array $row, string $category): bool
 {
     if (!config_scope_allows_category($row, $category)) return false;
-    return $category === 'prompt' ? has_prefixed_api_key($row, 'prompt_') : has_prefixed_api_key($row);
+    return has_prefixed_api_key($row, category_key_prefix($category));
 }
 
 function config_has_any_api_key(array $row): bool
 {
-    return config_has_category_api_key($row, 'image') || config_has_category_api_key($row, 'prompt');
+    return config_has_category_api_key($row, 'image') || config_has_category_api_key($row, 'prompt') || config_has_category_api_key($row, 'agnes');
 }
 
 function decrypt_prefixed_api_key(array $row, string $prefix = ''): string
@@ -172,6 +175,17 @@ function decrypt_prefixed_api_key(array $row, string $prefix = ''): string
 
 function api_client_category(array $row, string $category): array
 {
+    if ($category === 'agnes') {
+        return [
+            'apiName' => trim((string) ($row['agnes_api_name'] ?? '')) ?: DEFAULT_AGNES_API_NAME,
+            'apiBaseUrl' => trim((string) ($row['agnes_api_base_url'] ?? '')) ?: DEFAULT_AGNES_API_BASE_URL,
+            'model' => trim((string) ($row['agnes_model'] ?? '')) ?: DEFAULT_AGNES_IMAGE_MODEL,
+            'requestTimeout' => normalize_request_timeout($row['agnes_request_timeout'] ?? ($row['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
+            'hasApiKey' => has_prefixed_api_key($row, 'agnes_'),
+            'apiKeyHint' => prefixed_api_key_hint($row, 'agnes_'),
+        ];
+    }
+
     if ($category === 'prompt') {
         return [
             'apiName' => trim((string) ($row['prompt_api_name'] ?? '')) ?: DEFAULT_PROMPT_API_NAME,
@@ -197,6 +211,7 @@ function api_client_with_model_fields(array $client): array
 {
     return $client + [
         'promptModel' => $client['promptApi']['model'] ?? '',
+        'agnesModel' => $client['agnesApi']['model'] ?? '',
     ];
 }
 
@@ -244,6 +259,7 @@ function config_from_row(array $row): array
         'apiKeyHint' => $imageApi['apiKeyHint'],
         'imageApi' => $imageApi,
         'promptApi' => api_client_category($row, 'prompt'),
+        'agnesApi' => api_client_category($row, 'agnes'),
         'hasAnyApiKey' => config_has_any_api_key($row),
         'sortOrder' => (int) ($row['sort_order'] ?? 0),
     ]);
@@ -273,7 +289,7 @@ function ensure_user_api_config(int $userId): ?array
 
     $settings = stored_user_settings_row($userId) ?: [];
     $legacy = legacy_settings_config($settings);
-    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_scope, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
+    $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_scope, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, agnes_api_name, agnes_api_base_url, agnes_model, agnes_request_timeout, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)');
     $stmt->execute([
         $userId,
         'all',
@@ -293,6 +309,10 @@ function ensure_user_api_config(int $userId): ?array
         $legacy['api_key_iv'],
         $legacy['api_key_tag'],
         $legacy['api_key_hint'],
+        DEFAULT_AGNES_API_NAME,
+        DEFAULT_AGNES_API_BASE_URL,
+        DEFAULT_AGNES_IMAGE_MODEL,
+        $legacy['requestTimeout'],
     ]);
     $configId = (int) $db->lastInsertId();
     $stmt = $db->prepare('INSERT INTO user_settings (user_id, model, api_name, api_base_url, request_timeout, stream, active_api_config_id, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE active_api_config_id = COALESCE(active_api_config_id, VALUES(active_api_config_id))');
@@ -389,30 +409,67 @@ function active_prompt_api_config_row(int $userId): ?array
     return $row ?: null;
 }
 
+function active_agnes_api_config_row(int $userId): ?array
+{
+    $settings = ensure_user_settings_row($userId);
+    $activeId = (int) ($settings['active_agnes_api_config_id'] ?? 0);
+    if ($activeId > 0) {
+        $stmt = pdo()->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+        $stmt->execute([$activeId, $userId]);
+        $row = $stmt->fetch();
+        if ($row && config_scope_allows_category($row, 'agnes')) return $row;
+    }
+
+    $configs = user_api_config_rows($userId);
+    $row = first_keyed_user_api_config_row_for_category($configs, 'agnes');
+    if (!$row) {
+        foreach ($configs as $config) {
+            if (config_scope_allows_category($config, 'agnes')) {
+                $row = $config;
+                break;
+            }
+        }
+    }
+    if ($row) {
+        $stmt = pdo()->prepare('UPDATE user_settings SET active_agnes_api_config_id = ? WHERE user_id = ?');
+        $stmt->execute([(int) $row['id'], $userId]);
+    }
+    return $row ?: null;
+}
+
 function settings_for_user(int $userId): ?array
 {
     $settings = ensure_user_settings_row($userId);
     $configs = user_api_config_rows($userId);
     $active = active_api_config_row($userId);
     $activePrompt = active_prompt_api_config_row($userId);
+    $activeAgnes = active_agnes_api_config_row($userId);
     $activeClient = $active ? config_from_row($active) : null;
     $activePromptClient = $activePrompt ? config_from_row($activePrompt) : $activeClient;
+    $activeAgnesClient = $activeAgnes ? config_from_row($activeAgnes) : $activeClient;
 
     $apiConfigs = array_map('config_from_row', $configs);
     if (shared_api_enabled()) {
         $sharedClient = shared_api_config_client();
         $keyedOwnImageConfig = first_keyed_user_api_config_row_for_category($configs, 'image');
         $keyedOwnPromptConfig = first_keyed_user_api_config_row_for_category($configs, 'prompt');
+        $keyedOwnAgnesConfig = first_keyed_user_api_config_row_for_category($configs, 'agnes');
         $wantsSharedImage = !empty($settings['active_shared']);
         $wantsSharedPrompt = !empty($settings['active_prompt_shared']);
+        $wantsSharedAgnes = shared_agnes_api_enabled() && !empty($settings['active_agnes_shared']);
+        $hasSharedAgnes = !empty($sharedClient['agnesApi']['hasApiKey']);
+        $shouldExposeShared = $keyedOwnImageConfig || $keyedOwnPromptConfig || $keyedOwnAgnesConfig || $hasSharedAgnes;
 
-        if ($keyedOwnImageConfig || $keyedOwnPromptConfig) {
+        if ($shouldExposeShared) {
             $apiConfigs[] = $sharedClient;
             if ($wantsSharedImage || !$keyedOwnImageConfig) $activeClient = $sharedClient;
             elseif (!$activeClient || empty($activeClient['hasApiKey'])) $activeClient = config_from_row($keyedOwnImageConfig);
 
             if ($wantsSharedPrompt || !$keyedOwnPromptConfig) $activePromptClient = $sharedClient;
             elseif (!$activePromptClient || empty($activePromptClient['promptApi']['hasApiKey'])) $activePromptClient = config_from_row($keyedOwnPromptConfig);
+
+            if ($wantsSharedAgnes || (!$keyedOwnAgnesConfig && $hasSharedAgnes)) $activeAgnesClient = $sharedClient;
+            elseif (!$activeAgnesClient || empty($activeAgnesClient['agnesApi']['hasApiKey'])) $activeAgnesClient = $keyedOwnAgnesConfig ? config_from_row($keyedOwnAgnesConfig) : $activeAgnesClient;
         } else {
             array_unshift($apiConfigs, $sharedClient);
             $activeClient = $sharedClient;
@@ -424,13 +481,17 @@ function settings_for_user(int $userId): ?array
         'stream' => !empty($settings['stream']),
         'activeApiConfigId' => $activeClient['id'] ?? null,
         'activePromptApiConfigId' => $activePromptClient['id'] ?? ($activeClient['id'] ?? null),
+        'activeAgnesApiConfigId' => $activeAgnesClient['id'] ?? ($activeClient['id'] ?? null),
         'apiConfigs' => $apiConfigs,
         'activeConfig' => $activeClient,
         'activePromptConfig' => $activePromptClient,
+        'activeAgnesConfig' => $activeAgnesClient,
         'model' => $activeClient['model'] ?? DEFAULT_IMAGE_MODEL,
         'promptModel' => $activePromptClient['promptApi']['model'] ?? ($activePromptClient['promptModel'] ?? ''),
+        'agnesModel' => $activeAgnesClient['agnesApi']['model'] ?? ($activeAgnesClient['agnesModel'] ?? DEFAULT_AGNES_IMAGE_MODEL),
         'imageApi' => $activeClient['imageApi'] ?? null,
         'promptApi' => $activePromptClient['promptApi'] ?? null,
+        'agnesApi' => $activeAgnesClient['agnesApi'] ?? null,
         'apiName' => $activeClient['apiName'] ?? DEFAULT_API_NAME,
         'apiBaseUrl' => $activeClient['apiBaseUrl'] ?? DEFAULT_API_BASE_URL,
         'requestTimeout' => normalize_request_timeout($settings['request_timeout'] ?? ($activeClient['requestTimeout'] ?? DEFAULT_REQUEST_TIMEOUT)),
@@ -439,17 +500,26 @@ function settings_for_user(int $userId): ?array
     ];
 }
 
-function stored_user_own_api_key(): string
+function stored_user_own_api_key_for_category(string $category): string
 {
     $userId = session_user_id();
     if (!$userId) return '';
 
-    $active = active_api_config_row($userId);
-    if ($active && decrypt_prefixed_api_key($active, '') !== '') return decrypt_prefixed_api_key($active, '');
+    if ($category === 'prompt') $active = active_prompt_api_config_row($userId);
+    elseif ($category === 'agnes') $active = active_agnes_api_config_row($userId);
+    else $active = active_api_config_row($userId);
+
+    $prefix = category_key_prefix($category);
+    if ($active && decrypt_prefixed_api_key($active, $prefix) !== '') return decrypt_prefixed_api_key($active, $prefix);
 
     $configs = user_api_config_rows($userId);
-    $keyedOwnConfig = first_keyed_user_api_config_row_for_category($configs, 'image');
-    return $keyedOwnConfig ? decrypt_prefixed_api_key($keyedOwnConfig, '') : '';
+    $keyedOwnConfig = first_keyed_user_api_config_row_for_category($configs, $category);
+    return $keyedOwnConfig ? decrypt_prefixed_api_key($keyedOwnConfig, $prefix) : '';
+}
+
+function stored_user_own_api_key(): string
+{
+    return stored_user_own_api_key_for_category('image');
 }
 
 function stored_user_api_key(): string
@@ -490,9 +560,9 @@ function upsert_user_settings_from_config(int $userId, array $active, int $activ
 
 function api_category_input_spec(string $category): array
 {
-    $defaultApiName = $category === 'prompt' ? DEFAULT_PROMPT_API_NAME : DEFAULT_API_NAME;
-    $defaultModel = $category === 'image' ? cfg('openai_image_model', DEFAULT_IMAGE_MODEL) : '';
-    $modelKey = $category === 'prompt' ? 'promptModel' : 'model';
+    $defaultApiName = $category === 'prompt' ? DEFAULT_PROMPT_API_NAME : ($category === 'agnes' ? DEFAULT_AGNES_API_NAME : DEFAULT_API_NAME);
+    $defaultModel = $category === 'image' ? cfg('openai_image_model', DEFAULT_IMAGE_MODEL) : ($category === 'agnes' ? DEFAULT_AGNES_IMAGE_MODEL : '');
+    $modelKey = $category === 'prompt' ? 'promptModel' : ($category === 'agnes' ? 'agnesModel' : 'model');
 
     return [
         'category' => $category,
@@ -574,7 +644,9 @@ function api_category_input_from_spec(array $source, string $category, array $fa
 
 function api_config_category_input(array $config, string $category, int $globalRequestTimeout): array
 {
-    $fallback = $category === 'image' ? ['apiName' => 'OpenAI Compatible', 'model' => cfg('openai_image_model', DEFAULT_IMAGE_MODEL)] : [];
+    if ($category === 'image') $fallback = ['apiName' => 'OpenAI Compatible', 'model' => cfg('openai_image_model', DEFAULT_IMAGE_MODEL)];
+    elseif ($category === 'agnes') $fallback = ['apiName' => DEFAULT_AGNES_API_NAME, 'apiBaseUrl' => DEFAULT_AGNES_API_BASE_URL, 'model' => DEFAULT_AGNES_IMAGE_MODEL];
+    else $fallback = [];
     return api_category_input_from_spec($config, $category, $fallback, $globalRequestTimeout, true);
 }
 
@@ -611,23 +683,28 @@ function save_user_settings(array $user, array $body): array
     // (int) 对字符串 id 取 0，循环里再按 raw id 精确匹配落库后的真实数字 id。
     $activeRawId = (string) ($settings['activeApiConfigId'] ?? ($settings['active_api_config_id'] ?? ''));
     $activePromptRawId = (string) ($settings['activePromptApiConfigId'] ?? ($settings['active_prompt_api_config_id'] ?? $activeRawId));
+    $activeAgnesRawId = (string) ($settings['activeAgnesApiConfigId'] ?? ($settings['active_agnes_api_config_id'] ?? $activeRawId));
     $wantShared = shared_api_enabled() && $activeRawId === SHARED_API_CONFIG_ID;
     $wantSharedPrompt = shared_api_enabled() && $activePromptRawId === SHARED_API_CONFIG_ID;
+    $wantSharedAgnes = shared_agnes_api_enabled() && $activeAgnesRawId === SHARED_API_CONFIG_ID;
     $activeId = $wantShared ? 0 : (int) $activeRawId;
     $activePromptId = $wantSharedPrompt ? 0 : (int) $activePromptRawId;
+    $activeAgnesId = $wantSharedAgnes ? 0 : (int) $activeAgnesRawId;
     $stream = !empty($settings['stream']);
     $requestTimeout = normalize_request_timeout($settings['requestTimeout'] ?? ($settings['request_timeout'] ?? DEFAULT_REQUEST_TIMEOUT));
     $normalizedConfigs = [];
     foreach ($configs as $index => $config) {
         $imageInput = api_config_category_input($config, 'image', $requestTimeout);
         $promptInput = api_config_category_input($config, 'prompt', $requestTimeout);
+        $agnesInput = api_config_category_input($config, 'agnes', $requestTimeout);
         $apiScope = trim((string) ($config['apiScope'] ?? ($config['api_scope'] ?? 'all')));
-        if (!in_array($apiScope, ['all', 'image', 'prompt'], true)) $apiScope = 'all';
+        if (!in_array($apiScope, ['all', 'image', 'prompt', 'agnes'], true)) $apiScope = 'all';
         $hasPendingApiKey = false;
 
         foreach ([
             ['label' => '生图', 'input' => $imageInput],
             ['label' => '提示词助手', 'input' => $promptInput],
+            ['label' => 'Agnes', 'input' => $agnesInput],
         ] as $item) {
             if (!valid_api_base_url($item['input']['apiBaseUrl'])) json_response(['error' => $item['label'] . ' API 地址必须是 http 或 https 地址'], 400);
             if (trim((string) ($item['input']['apiKey'] ?? '')) !== '') {
@@ -645,6 +722,7 @@ function save_user_settings(array $user, array $body): array
             'apiScope' => $apiScope,
             'imageInput' => $imageInput,
             'promptInput' => $promptInput,
+            'agnesInput' => $agnesInput,
         ];
     }
     $seenIds = [];
@@ -658,6 +736,7 @@ function save_user_settings(array $user, array $body): array
             $apiScope = $normalizedConfig['apiScope'];
             $imageInput = $normalizedConfig['imageInput'];
             $promptInput = $normalizedConfig['promptInput'];
+            $agnesInput = $normalizedConfig['agnesInput'];
 
             $existing = [];
             if ($configId > 0) {
@@ -669,9 +748,10 @@ function save_user_settings(array $user, array $body): array
 
             $imageApiFields = api_key_storage_fields_for_category($imageInput, $existing);
             $promptApiFields = api_key_storage_fields_for_category($promptInput, $existing, 'prompt_');
+            $agnesApiFields = api_key_storage_fields_for_category($agnesInput, $existing, 'agnes_');
 
             if ($configId > 0) {
-                $stmt = $db->prepare('UPDATE user_api_configs SET api_scope = ?, api_name = ?, api_base_url = ?, model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, prompt_api_name = ?, prompt_api_base_url = ?, prompt_model = ?, prompt_request_timeout = ?, prompt_api_key_ciphertext = ?, prompt_api_key_iv = ?, prompt_api_key_tag = ?, prompt_api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
+                $stmt = $db->prepare('UPDATE user_api_configs SET api_scope = ?, api_name = ?, api_base_url = ?, model = ?, request_timeout = ?, api_key_ciphertext = ?, api_key_iv = ?, api_key_tag = ?, api_key_hint = ?, prompt_api_name = ?, prompt_api_base_url = ?, prompt_model = ?, prompt_request_timeout = ?, prompt_api_key_ciphertext = ?, prompt_api_key_iv = ?, prompt_api_key_tag = ?, prompt_api_key_hint = ?, agnes_api_name = ?, agnes_api_base_url = ?, agnes_model = ?, agnes_request_timeout = ?, agnes_api_key_ciphertext = ?, agnes_api_key_iv = ?, agnes_api_key_tag = ?, agnes_api_key_hint = ?, sort_order = ? WHERE id = ? AND user_id = ?');
                 $stmt->execute([
                     $apiScope,
                     $imageInput['apiName'],
@@ -690,12 +770,20 @@ function save_user_settings(array $user, array $body): array
                     $promptApiFields[1],
                     $promptApiFields[2],
                     $promptApiFields[3],
+                    $agnesInput['apiName'],
+                    $agnesInput['apiBaseUrl'],
+                    $agnesInput['model'],
+                    $agnesInput['requestTimeout'],
+                    $agnesApiFields[0],
+                    $agnesApiFields[1],
+                    $agnesApiFields[2],
+                    $agnesApiFields[3],
                     $index,
                     $configId,
                     $user['id'],
                 ]);
             } else {
-                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_scope, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt = $db->prepare('INSERT INTO user_api_configs (user_id, api_scope, api_name, api_base_url, model, request_timeout, api_key_ciphertext, api_key_iv, api_key_tag, api_key_hint, prompt_api_name, prompt_api_base_url, prompt_model, prompt_request_timeout, prompt_api_key_ciphertext, prompt_api_key_iv, prompt_api_key_tag, prompt_api_key_hint, agnes_api_name, agnes_api_base_url, agnes_model, agnes_request_timeout, agnes_api_key_ciphertext, agnes_api_key_iv, agnes_api_key_tag, agnes_api_key_hint, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
                 $stmt->execute([
                     $user['id'],
                     $apiScope,
@@ -715,6 +803,14 @@ function save_user_settings(array $user, array $body): array
                     $promptApiFields[1],
                     $promptApiFields[2],
                     $promptApiFields[3],
+                    $agnesInput['apiName'],
+                    $agnesInput['apiBaseUrl'],
+                    $agnesInput['model'],
+                    $agnesInput['requestTimeout'],
+                    $agnesApiFields[0],
+                    $agnesApiFields[1],
+                    $agnesApiFields[2],
+                    $agnesApiFields[3],
                     $index,
                 ]);
                 $configId = (int) $db->lastInsertId();
@@ -724,6 +820,7 @@ function save_user_settings(array $user, array $body): array
             // 尚未选定 active，或本配置的 raw id 正是请求指定的 active，则锁定为当前真实数字 id。
             if ((!$activeId || (isset($config['id']) && (string) $config['id'] === $activeRawId)) && config_scope_allows_category(['api_scope' => $apiScope], 'image')) $activeId = $configId;
             if ((!$activePromptId || (isset($config['id']) && (string) $config['id'] === $activePromptRawId)) && config_scope_allows_category(['api_scope' => $apiScope], 'prompt')) $activePromptId = $configId;
+            if ((!$activeAgnesId || (isset($config['id']) && (string) $config['id'] === $activeAgnesRawId)) && config_scope_allows_category(['api_scope' => $apiScope], 'agnes')) $activeAgnesId = $configId;
         }
 
         $placeholders = implode(',', array_fill(0, count($seenIds), '?'));
@@ -731,6 +828,7 @@ function save_user_settings(array $user, array $body): array
         $db->prepare("DELETE FROM user_api_configs WHERE user_id = ? AND id NOT IN ({$placeholders})")->execute($params);
         if (!in_array($activeId, $seenIds, true)) $activeId = 0;
         if (!in_array($activePromptId, $seenIds, true)) $activePromptId = 0;
+        if (!in_array($activeAgnesId, $seenIds, true)) $activeAgnesId = 0;
 
         if ($activeId > 0) {
             $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
@@ -757,8 +855,22 @@ function save_user_settings(array $user, array $body): array
             $activePrompt = $stmt->fetch() ?: null;
             if ($activePrompt) $activePromptId = (int) $activePrompt['id'];
         }
+
+        if ($activeAgnesId > 0) {
+            $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
+            $stmt->execute([$activeAgnesId, $user['id']]);
+            $activeAgnes = $stmt->fetch() ?: null;
+            if (!$activeAgnes || !config_scope_allows_category($activeAgnes, 'agnes')) $activeAgnesId = 0;
+        }
+        if ($activeAgnesId <= 0) {
+            $stmt = $db->prepare("SELECT * FROM user_api_configs WHERE user_id = ? AND api_scope IN ('all', 'agnes') ORDER BY sort_order ASC, id ASC LIMIT 1");
+            $stmt->execute([$user['id']]);
+            $activeAgnes = $stmt->fetch() ?: null;
+            if ($activeAgnes) $activeAgnesId = (int) $activeAgnes['id'];
+        }
         if ($activeId <= 0) $activeId = $seenIds[0];
         if ($activePromptId <= 0) $activePromptId = $activeId;
+        if ($activeAgnesId <= 0) $activeAgnesId = $activeId;
 
         $stmt = $db->prepare('SELECT * FROM user_api_configs WHERE id = ? AND user_id = ? LIMIT 1');
         $stmt->execute([$activeId, $user['id']]);
@@ -766,7 +878,7 @@ function save_user_settings(array $user, array $body): array
         if (!$active) throw new RuntimeException('当前 API 配置不存在');
 
         upsert_user_settings_from_config((int) $user['id'], $active, $activeId, $stream ? 1 : 0, true, $requestTimeout);
-        $db->prepare('UPDATE user_settings SET active_shared = ?, active_prompt_api_config_id = ?, active_prompt_shared = ? WHERE user_id = ?')->execute([$wantShared ? 1 : 0, $activePromptId, $wantSharedPrompt ? 1 : 0, $user['id']]);
+        $db->prepare('UPDATE user_settings SET active_shared = ?, active_prompt_api_config_id = ?, active_prompt_shared = ?, active_agnes_api_config_id = ?, active_agnes_shared = ? WHERE user_id = ?')->execute([$wantShared ? 1 : 0, $activePromptId, $wantSharedPrompt ? 1 : 0, $activeAgnesId, $wantSharedAgnes ? 1 : 0, $user['id']]);
 
         $db->commit();
         return settings_for_user((int) $user['id']);
@@ -826,6 +938,7 @@ function model_ids_from_response(array $data): array
 function api_config_for_model_fetch(array $user, string $rawId, string $category): array
 {
     if (shared_api_enabled() && $rawId === SHARED_API_CONFIG_ID) {
+        if ($category === 'agnes' && !shared_agnes_api_enabled()) json_response(['error' => '共享 Agnes API 配置未启用'], 403);
         $row = site_settings_row();
         $client = shared_api_category_client($row, $category);
         return [
@@ -842,7 +955,7 @@ function api_config_for_model_fetch(array $user, string $rawId, string $category
     $stmt->execute([$configId, $user['id']]);
     $row = $stmt->fetch() ?: [];
     $client = api_client_category($row, $category);
-    $prefix = $category === 'prompt' ? 'prompt_' : '';
+    $prefix = category_key_prefix($category);
     $apiKey = decrypt_prefixed_api_key($row, $prefix);
 
     return [
@@ -856,7 +969,7 @@ function fetch_api_models_for_user(array $user, array $body): array
 {
     $rawId = (string) ($body['configId'] ?? ($body['config_id'] ?? ''));
     $category = (string) ($body['category'] ?? ($body['apiCategory'] ?? ($body['api_category'] ?? 'image')));
-    if (!in_array($category, ['image', 'prompt'], true)) $category = 'image';
+    if (!in_array($category, ['image', 'prompt', 'agnes'], true)) $category = 'image';
     $stored = api_config_for_model_fetch($user, $rawId, $category);
     $apiBaseUrl = normalize_api_base_url((string) ($body['apiBaseUrl'] ?? ($body['api_base_url'] ?? $stored['apiBaseUrl'])));
     if ($apiBaseUrl === '') $apiBaseUrl = $stored['apiBaseUrl'];
@@ -877,11 +990,14 @@ function switch_active_api_config(array $user, array $body): array
 {
     $rawId = (string) ($body['activeApiConfigId'] ?? ($body['active_api_config_id'] ?? ''));
     $category = (string) ($body['category'] ?? ($body['apiCategory'] ?? ($body['api_category'] ?? 'image')));
-    if (!in_array($category, ['image', 'prompt'], true)) $category = 'image';
+    if (!in_array($category, ['image', 'prompt', 'agnes'], true)) $category = 'image';
 
     if (shared_api_enabled() && $rawId === SHARED_API_CONFIG_ID) {
+        if ($category === 'agnes' && !shared_agnes_api_enabled()) json_response(['error' => '共享 Agnes API 配置未启用'], 403);
         ensure_user_settings_row((int) $user['id']);
-        if ($category === 'prompt') {
+        if ($category === 'agnes') {
+            pdo()->prepare('UPDATE user_settings SET active_agnes_shared = 1 WHERE user_id = ?')->execute([$user['id']]);
+        } elseif ($category === 'prompt') {
             pdo()->prepare('UPDATE user_settings SET active_prompt_shared = 1 WHERE user_id = ?')->execute([$user['id']]);
         } else {
             pdo()->prepare('UPDATE user_settings SET active_shared = 1 WHERE user_id = ?')->execute([$user['id']]);
@@ -901,6 +1017,12 @@ function switch_active_api_config(array $user, array $body): array
     if ($category === 'prompt') {
         ensure_user_settings_row((int) $user['id']);
         pdo()->prepare('UPDATE user_settings SET active_prompt_api_config_id = ?, active_prompt_shared = 0 WHERE user_id = ?')->execute([$configId, $user['id']]);
+        return settings_for_user((int) $user['id']);
+    }
+
+    if ($category === 'agnes') {
+        ensure_user_settings_row((int) $user['id']);
+        pdo()->prepare('UPDATE user_settings SET active_agnes_api_config_id = ?, active_agnes_shared = 0 WHERE user_id = ?')->execute([$configId, $user['id']]);
         return settings_for_user((int) $user['id']);
     }
 

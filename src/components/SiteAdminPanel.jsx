@@ -47,6 +47,11 @@ export default function SiteAdminPanel({
             <span>启用共享 API 参数设置</span>
             <small>关闭后用户不会使用管理员提供的共享 API 配置。</small>
           </label>
+          <label className="toggle-row full-field">
+            <input type="checkbox" checked={siteSettings.sharedAgnesApiEnabled !== false} onChange={(event) => updateFlag('sharedAgnesApiEnabled', event.target.checked)} disabled={siteSettings.sharedApiEnabled === false} />
+            <span>启用 Agnes 共享 API 参数</span>
+            <small>只控制 Agnes 共享配置；全局共享关闭时该项不会生效。</small>
+          </label>
         </div>
       </section>
 
@@ -54,7 +59,7 @@ export default function SiteAdminPanel({
         <div className="api-config-card-head">
           <div>
             <strong>共享 API 参数</strong>
-            <span>共享配置保留原后台结构；前台只维护生图 API 与提示词助手 API。</span>
+            <span>管理员可分别维护生图、提示词助手和 Agnes 的共享参数。</span>
           </div>
         </div>
         <ApiCategoryEditor

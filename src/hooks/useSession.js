@@ -57,7 +57,7 @@ export const useSession = (deps) => {
       if (data.user) {
         applyServerSettings(data.settings, data.user);
         const normalizedSettings = normalizeServerSettings(data.settings || {});
-        if (normalizedSettings.hasApiKey) await syncDirectApiKey(normalizedSettings);
+        if (normalizedSettings.hasApiKey || normalizedSettings.activeAgnesConfig?.agnesApi?.hasApiKey) await syncDirectApiKey(normalizedSettings);
         await syncGeneratedImages({ user: data.user });
       }
       setAuthForm(emptyAuthForm);
@@ -99,7 +99,7 @@ export const useSession = (deps) => {
 
     const pendingApiKeys = new Map();
     (apiConfigForm.apiConfigs || []).forEach((item) => {
-      ['imageApi', 'promptApi'].forEach((key) => {
+      ['imageApi', 'promptApi', 'agnesApi'].forEach((key) => {
         const apiKey = String(item[key]?.apiKey || (key === 'imageApi' ? item.apiKey : '') || '').trim();
         if (apiKey) pendingApiKeys.set(`${item.id}:${key}`, apiKey);
       });
@@ -109,11 +109,14 @@ export const useSession = (deps) => {
       ...apiConfigForm,
       apiConfigs: apiConfigForm.apiConfigs,
       activeApiConfigId: apiConfigForm.activeApiConfigId,
+      activePromptApiConfigId: apiConfigForm.activePromptApiConfigId,
+      activeAgnesApiConfigId: apiConfigForm.activeAgnesApiConfigId,
       stream: apiConfigForm.stream,
       requestTimeout: apiConfigForm.requestTimeout,
     });
     const activeApiConfigId = String(apiConfigForm.activeApiConfigId) === 'shared' ? 'shared' : nextSettings.activeApiConfigId;
     const activePromptApiConfigId = String(apiConfigForm.activePromptApiConfigId) === 'shared' ? 'shared' : nextSettings.activePromptApiConfigId;
+    const activeAgnesApiConfigId = String(apiConfigForm.activeAgnesApiConfigId) === 'shared' ? 'shared' : nextSettings.activeAgnesApiConfigId;
     try {
       const data = await requestJson('/api/settings', {
         method: 'POST',
@@ -122,11 +125,13 @@ export const useSession = (deps) => {
           settings: {
             activeApiConfigId,
             activePromptApiConfigId,
+            activeAgnesApiConfigId,
             stream: nextSettings.stream,
             requestTimeout: nextSettings.requestTimeout,
           },
           apiConfigs: (apiConfigForm.apiConfigs || []).filter((item) => !item.isShared).map((item) => {
             const promptApi = item.promptApi || {};
+            const agnesApi = item.agnesApi || {};
             return {
               id: item.id,
               apiScope: item.apiScope,
@@ -146,6 +151,10 @@ export const useSession = (deps) => {
                 ...promptApi,
                 confirmApiKeySave: Boolean(promptApi.apiKey),
               },
+              agnesApi: {
+                ...agnesApi,
+                confirmApiKeySave: Boolean(agnesApi.apiKey),
+              },
             };
           }),
         }),
@@ -154,8 +163,9 @@ export const useSession = (deps) => {
       pendingApiKeys.forEach((apiKey, storageKey) => {
         const [configId, category] = String(storageKey).split(':');
         if (category === 'imageApi') apiKeyVaultRef.current.set(configId, apiKey);
+        apiKeyVaultRef.current.set(`${configId}:${category}`, apiKey);
       });
-      if (data.settings?.hasApiKey) await syncDirectApiKey(data.settings);
+      if (data.settings?.hasApiKey || data.settings?.activeAgnesConfig?.agnesApi?.hasApiKey) await syncDirectApiKey(data.settings);
       setForm((current) => ({ ...current, model: data.settings?.model || activeApiConfig?.model || current.model }));
       setError('');
       setAuthTab('settings');

@@ -1,4 +1,5 @@
 import {
+  API_CONFIG_SCOPE_AGNES,
   API_CONFIG_SCOPE_IMAGE,
   API_CONFIG_SCOPE_PROMPT,
   defaultApiConfigItem,
@@ -14,6 +15,7 @@ export default function Topbar({
   statusText,
   activeApiConfig,
   activePromptApiConfig,
+  activeAgnesApiConfig,
   apiConfigForm,
   siteFlags,
   switchActiveApiConfig,
@@ -59,6 +61,13 @@ export default function Topbar({
             提示词助手
           </button>
         ) : null}
+        <button
+          type="button"
+          className={view === 'agnes' ? 'is-active' : ''}
+          onClick={() => setView('agnes')}
+        >
+          Agnes
+        </button>
       </nav>
 
       <div className="topbar-actions">
@@ -76,14 +85,15 @@ export default function Topbar({
             });
           }
 
-          const apiScope = view === 'prompt-tools' ? API_CONFIG_SCOPE_PROMPT : view === 'generate' ? API_CONFIG_SCOPE_IMAGE : '';
+          const apiScope = view === 'prompt-tools' ? API_CONFIG_SCOPE_PROMPT : view === 'agnes' ? API_CONFIG_SCOPE_AGNES : view === 'generate' ? API_CONFIG_SCOPE_IMAGE : '';
           if (!apiScope || !user) return <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>;
 
-          const activeConfig = apiScope === API_CONFIG_SCOPE_PROMPT ? activePromptApiConfig : activeApiConfig;
-          const activeId = apiScope === API_CONFIG_SCOPE_PROMPT ? apiConfigForm.activePromptApiConfigId : apiConfigForm.activeApiConfigId;
+          const activeConfig = apiScope === API_CONFIG_SCOPE_PROMPT ? activePromptApiConfig : apiScope === API_CONFIG_SCOPE_AGNES ? activeAgnesApiConfig : activeApiConfig;
+          const activeId = apiScope === API_CONFIG_SCOPE_PROMPT ? apiConfigForm.activePromptApiConfigId : apiScope === API_CONFIG_SCOPE_AGNES ? apiConfigForm.activeAgnesApiConfigId : apiConfigForm.activeApiConfigId;
+          const fallbackName = apiScope === API_CONFIG_SCOPE_AGNES ? 'Agnes API' : apiScope === API_CONFIG_SCOPE_PROMPT ? '提示词助手 API' : defaultApiConfigItem.apiName;
           const options = (apiConfigForm.apiConfigs || [])
             .filter((item) => apiConfigHasKeyForScope(item, apiScope))
-            .map((item) => ({ label: apiConfigLabelForScope(item, apiScope, defaultApiConfigItem.apiName), value: item.id }));
+            .map((item) => ({ label: apiConfigLabelForScope(item, apiScope, fallbackName), value: item.id }));
 
           if (!options.length) return <span className={`status-pill ${status.configured ? 'is-ready' : 'is-warning'}`}>{statusText}</span>;
 

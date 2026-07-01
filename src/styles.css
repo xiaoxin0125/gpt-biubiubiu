@@ -2945,6 +2945,151 @@ select option {
   width: 100%;
 }
 
+.agnes-page {
+  overflow: hidden;
+  padding-bottom: 188px;
+}
+
+.agnes-toolbar {
+  width: min(70%, 940px);
+}
+
+.agnes-toolbar-tabs {
+  flex: 0 0 190px;
+}
+
+.agnes-toolbar-tabs button {
+  min-height: 34px;
+}
+
+.agnes-status-pill,
+.agnes-stream-pill {
+  min-height: 34px;
+  white-space: nowrap;
+}
+
+.agnes-board.has-images {
+  max-width: 70%;
+}
+
+.agnes-result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.agnes-video-grid {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+.agnes-result-card {
+  cursor: default;
+}
+
+.agnes-result-media {
+  aspect-ratio: 4 / 3;
+}
+
+.agnes-video-card-body {
+  display: grid;
+  min-height: 280px;
+  background: var(--paper-2);
+}
+
+.agnes-video-card-body video {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  max-height: 420px;
+  background: var(--black);
+}
+
+.agnes-task-meta {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border-top: 2px solid var(--line);
+  background: var(--white);
+}
+
+.agnes-task-meta span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 820;
+  line-height: 1.5;
+}
+
+.agnes-bottom-workbench {
+  max-width: 1120px;
+}
+
+.agnes-workbench-actions .custom-select-field {
+  flex: 1 0 auto;
+}
+
+.agnes-reference-input-control {
+  flex: 1 1 320px;
+}
+
+.agnes-mode-control,
+.agnes-resolution-control {
+  flex-basis: 150px;
+}
+
+.agnes-duration-control {
+  flex: 0 0 86px;
+}
+
+.agnes-duration-control strong {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--black);
+  font-size: 0.84rem;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.agnes-wide-control {
+  flex: 1 1 260px;
+  min-width: min(260px, 100%);
+}
+
+.agnes-workbench-actions textarea {
+  width: 100%;
+  min-height: 32px;
+  max-height: 84px;
+  padding: 7px 10px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--white);
+  color: var(--black);
+  font-size: 0.82rem;
+  font-weight: 740;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.agnes-reference-preview {
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr) auto;
+}
+
+.agnes-reference-preview span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agnes-empty-canvas .secondary-action {
+  min-height: 34px;
+}
 @media (max-width: 1320px) {
   .prompt-tools-page {
     width: 100%;
@@ -2998,11 +3143,64 @@ select option {
   .tool-upload-zone {
     height: 180px;
   }
+
+  .agnes-toolbar,
+  .agnes-board.has-images {
+    width: calc(100% - 24px);
+    max-width: calc(100% - 24px);
+  }
+
+  .agnes-result-grid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
   .prompt-tools-page {
     padding: 8px 0;
+  }
+
+  .agnes-toolbar {
+    align-items: stretch;
+  }
+
+  .agnes-toolbar-tabs {
+    flex: 1 1 100%;
+  }
+
+  .agnes-status-pill,
+  .agnes-stream-pill,
+  .agnes-toolbar .toolbar-text-button {
+    flex: 1 1 calc(50% - 4px);
+    justify-content: center;
+  }
+
+  .agnes-result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .agnes-video-card-body video {
+    min-height: 190px;
+  }
+
+  .canvas-stage.agnes-page {
+    padding-bottom: 250px;
+  }
+
+  .agnes-reference-input-control {
+    grid-column: 1 / -1;
+  }
+
+  .agnes-reference-preview {
+    grid-template-columns: 1fr auto;
+  }
+
+  .agnes-reference-preview .reference-preview-list {
+    grid-column: 1 / -1;
+  }
+
+  .agnes-reference-preview span {
+    display: none;
   }
 
   .prompt-tool-body {

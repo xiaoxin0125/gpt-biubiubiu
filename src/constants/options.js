@@ -1,5 +1,6 @@
 export const HISTORY_KEY = 'gpt-biubiubiu:image-history';
 export const DEFAULT_DIRECT_API_BASE_URL = 'https://api.openai.com';
+export const DEFAULT_AGNES_API_BASE_URL = 'https://apihub.agnes-ai.com';
 export const MAX_REFERENCE_IMAGES = 16;
 export const MAX_REQUEST_TIMEOUT_SECONDS = 999;
 export const MAX_MASK_SIZE_BYTES = 4 * 1024 * 1024;
@@ -13,11 +14,13 @@ export const SHARED_API_CONFIG_ID = 'shared';
 export const API_CONFIG_SCOPE_ALL = 'all';
 export const API_CONFIG_SCOPE_IMAGE = 'image';
 export const API_CONFIG_SCOPE_PROMPT = 'prompt';
+export const API_CONFIG_SCOPE_AGNES = 'agnes';
 
 export const defaultSiteFlags = {
   wallRequireLogin: false,
   registrationEnabled: true,
   sharedApiEnabled: true,
+  sharedAgnesApiEnabled: true,
   promptToolsEnabled: true,
 };
 
@@ -199,6 +202,54 @@ export const defaultPromptApiCategory = {
   apiName: '提示词助手 API',
 };
 
+export const defaultAgnesApiCategory = {
+  ...defaultApiCategory,
+  apiName: 'Agnes API',
+  apiBaseUrl: DEFAULT_AGNES_API_BASE_URL,
+  model: 'agnes-image-2.1-flash',
+};
+
+export const defaultAgnesImageForm = {
+  model: 'agnes-image-2.1-flash',
+  prompt: '',
+  size: '1024x768',
+  responseFormat: 'url',
+  imageInputs: '',
+};
+
+export const defaultAgnesVideoForm = {
+  model: 'agnes-video-v2.0',
+  prompt: '',
+  mode: 'ti2vid',
+  image: '',
+  extraImages: '',
+  width: 1152,
+  height: 768,
+  numFrames: 121,
+  frameRate: 24,
+  numInferenceSteps: '',
+  seed: '',
+  negativePrompt: '',
+};
+
+export const agnesResponseFormatOptions = [
+  { label: 'URL', value: 'url' },
+  { label: 'Base64', value: 'b64_json' },
+];
+
+export const agnesVideoModeOptions = [
+  { label: '文生/图生视频', value: 'ti2vid' },
+  { label: '关键帧', value: 'keyframes' },
+];
+
+export const agnesVideoResolutionOptions = [
+  { label: '横版 1152×768', value: '1152x768' },
+  { label: '竖版 768×1152', value: '768x1152' },
+  { label: '方形 1024×1024', value: '1024x1024' },
+  { label: '16:9 1280×720', value: '1280x720' },
+  { label: '9:16 720×1280', value: '720x1280' },
+];
+
 export const defaultApiConfigItem = {
   id: 'default-api-config',
   apiScope: API_CONFIG_SCOPE_ALL,
@@ -211,6 +262,7 @@ export const defaultApiConfigItem = {
   requestTimeout: MAX_REQUEST_TIMEOUT_SECONDS,
   imageApi: defaultImageApiCategory,
   promptApi: defaultPromptApiCategory,
+  agnesApi: defaultAgnesApiCategory,
 };
 
 export const defaultApiConfigForm = {
@@ -218,5 +270,6 @@ export const defaultApiConfigForm = {
   stream: false,
   activeApiConfigId: defaultApiConfigItem.id,
   activePromptApiConfigId: defaultApiConfigItem.id,
+  activeAgnesApiConfigId: defaultApiConfigItem.id,
   apiConfigs: [defaultApiConfigItem],
 };

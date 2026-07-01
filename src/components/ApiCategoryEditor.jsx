@@ -15,6 +15,14 @@ const apiCategorySections = [
     modelPlaceholder: '例如 gpt-4o-mini',
     namePlaceholder: '提示词助手 API',
   },
+  {
+    key: 'agnesApi',
+    title: 'Agnes API 参数',
+    description: '用于 Agnes 生图和视频生成。',
+    modelLabel: 'Agnes 默认模型 ID',
+    modelPlaceholder: 'agnes-image-2.1-flash',
+    namePlaceholder: 'Agnes API',
+  },
 ];
 
 export const userApiCategorySections = apiCategorySections;
@@ -23,7 +31,7 @@ export const sharedApiCategorySections = apiCategorySections.map((section) => ({
   ...section,
   title: section.title.replace(/^/, '共享'),
   description: section.description.replace('用于', '提供给'),
-  namePlaceholder: section.key === 'imageApi' ? '共享生图 API' : '共享提示词助手 API',
+  namePlaceholder: section.key === 'imageApi' ? '共享生图 API' : section.key === 'promptApi' ? '共享提示词助手 API' : '共享 Agnes API',
 }));
 
 export const applyApiCategoryUpdate = (source, categoryKey, field, value) => {
@@ -44,6 +52,7 @@ export const applyApiCategoryUpdate = (source, categoryKey, field, value) => {
   }
 
   if (categoryKey === 'promptApi') return { ...nextSource, promptModel: nextCategory.model };
+  if (categoryKey === 'agnesApi') return { ...nextSource, agnesModel: nextCategory.model };
   return nextSource;
 };
 

@@ -13,15 +13,18 @@ define('REQUEST_TIMEOUT_BUFFER', 60);
 define('WALL_DISPLAY_MAX_BYTES', 1048576);
 define('DEFAULT_API_NAME', 'OpenAI gpt-image-2');
 define('DEFAULT_PROMPT_API_NAME', '提示词助手 API');
+define('DEFAULT_AGNES_API_NAME', 'Agnes API');
 define('DEFAULT_API_BASE_URL', 'https://api.openai.com');
+define('DEFAULT_AGNES_API_BASE_URL', 'https://apihub.agnes-ai.com');
 define('DEFAULT_IMAGE_MODEL', 'gpt-image-2');
+define('DEFAULT_AGNES_IMAGE_MODEL', 'agnes-image-2.1-flash');
 define('MAX_IMAGE_UPLOAD_BYTES', 20 * 1024 * 1024);
 define('MAX_PROXY_UPLOAD_BYTES', 80 * 1024 * 1024);
 define('MAX_PROXY_RESPONSE_BYTES', 120 * 1024 * 1024);
 define('MAX_OUTPUT_IMAGES', 10);
 define('OUTBOUND_MAX_RESPONSE_BYTES', 25 * 1024 * 1024);
 define('MIN_SECRET_LENGTH', 32);
-define('SCHEMA_VERSION', '2026-06-30c');
+define('SCHEMA_VERSION', '2026-07-01a');
 define('SHARED_API_CONFIG_ID', 'shared');
 
 define('WEAK_SECRET_VALUES', [

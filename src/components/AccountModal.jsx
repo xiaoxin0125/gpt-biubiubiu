@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  API_CONFIG_SCOPE_AGNES,
   API_CONFIG_SCOPE_IMAGE,
   API_CONFIG_SCOPE_PROMPT,
   MAX_REQUEST_TIMEOUT_SECONDS,
@@ -14,6 +15,7 @@ export default function AccountModal({
   setAuthMode,
   authTab,
   setAuthTab,
+  initialApiSettingsTab = API_CONFIG_SCOPE_IMAGE,
   authForm,
   setAuthForm,
   profileForm,
@@ -45,7 +47,7 @@ export default function AccountModal({
   const registrationEnabled = siteFlags?.registrationEnabled !== false;
   const [captchaImage, setCaptchaImage] = useState('');
   const [captchaLoading, setCaptchaLoading] = useState(false);
-  const [apiSettingsTab, setApiSettingsTab] = useState(API_CONFIG_SCOPE_IMAGE);
+  const [apiSettingsTab, setApiSettingsTab] = useState(initialApiSettingsTab);
   const refreshCaptcha = async () => {
     setCaptchaLoading(true);
     try {
@@ -56,6 +58,10 @@ export default function AccountModal({
       setCaptchaLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (authTab === 'settings') setApiSettingsTab(initialApiSettingsTab);
+  }, [authTab, initialApiSettingsTab]);
 
   useEffect(() => {
     if (!user) refreshCaptcha().catch(() => {});
@@ -69,11 +75,18 @@ export default function AccountModal({
   const apiConfigs = apiConfigForm.apiConfigs || [];
   const sharedApiConfig = apiConfigs.find((config) => config.isShared);
   const editableApiConfigs = apiConfigs.filter((config) => !config.isShared);
+  const apiScopeMeta = {
+    [API_CONFIG_SCOPE_IMAGE]: { categoryKey: 'imageApi', activeIdKey: 'activeApiConfigId', title: '生图 API', emptyTitle: '暂无生图 API' },
+    [API_CONFIG_SCOPE_PROMPT]: { categoryKey: 'promptApi', activeIdKey: 'activePromptApiConfigId', title: '提示词助手 API', emptyTitle: '暂无提示词助手 API' },
+    [API_CONFIG_SCOPE_AGNES]: { categoryKey: 'agnesApi', activeIdKey: 'activeAgnesApiConfigId', title: 'Agnes API', emptyTitle: '暂无 Agnes API' },
+  };
+  const activeScopeMeta = apiScopeMeta[apiSettingsTab] || apiScopeMeta[API_CONFIG_SCOPE_IMAGE];
   const imageApiConfigs = editableApiConfigs.filter((config) => config.apiScope === API_CONFIG_SCOPE_IMAGE || config.apiScope === 'all');
   const promptApiConfigs = editableApiConfigs.filter((config) => config.apiScope === API_CONFIG_SCOPE_PROMPT || config.apiScope === 'all');
-  const visibleApiConfigs = apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? promptApiConfigs : imageApiConfigs;
-  const activeConfigId = apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? apiConfigForm.activePromptApiConfigId : apiConfigForm.activeApiConfigId;
-  const activeCategoryKey = apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? 'promptApi' : 'imageApi';
+  const agnesApiConfigs = editableApiConfigs.filter((config) => config.apiScope === API_CONFIG_SCOPE_AGNES || config.apiScope === 'all');
+  const visibleApiConfigs = apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? promptApiConfigs : apiSettingsTab === API_CONFIG_SCOPE_AGNES ? agnesApiConfigs : imageApiConfigs;
+  const activeConfigId = apiConfigForm[activeScopeMeta.activeIdKey];
+  const activeCategoryKey = activeScopeMeta.categoryKey;
   const hasSharedApiConfig = Boolean(sharedApiConfig);
   const isSharedActive = hasSharedApiConfig && String(sharedApiConfig.id) === String(activeConfigId);
   const updateApiConfigCategory = (configId, categoryKey, field, value) => {
@@ -177,12 +190,13 @@ export default function AccountModal({
                 <div className="api-config-card-head">
                   <div>
                     <strong>API 配置</strong>
-                    <span>生图和提示词助手分开维护；提示词优化与图片反推共用同一套提示词助手 API。</span>
+                    <span>生图、提示词助手和 Agnes 分开维护；提示词优化与图片反推共用同一套提示词助手 API。</span>
                   </div>
                 </div>
-                <div className="segmented-control two-tabs account-tabs api-scope-tabs">
+                <div className="segmented-control account-tabs api-scope-tabs">
                   <button type="button" className={apiSettingsTab === API_CONFIG_SCOPE_IMAGE ? 'is-active' : ''} onClick={() => setApiSettingsTab(API_CONFIG_SCOPE_IMAGE)}>生图 API</button>
                   <button type="button" className={apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? 'is-active' : ''} onClick={() => setApiSettingsTab(API_CONFIG_SCOPE_PROMPT)}>提示词助手 API</button>
+                  <button type="button" className={apiSettingsTab === API_CONFIG_SCOPE_AGNES ? 'is-active' : ''} onClick={() => setApiSettingsTab(API_CONFIG_SCOPE_AGNES)}>Agnes API</button>
                 </div>
               </section>
 
@@ -193,11 +207,11 @@ export default function AccountModal({
                   <section className={isActiveConfig ? 'api-config-card full-field is-active' : 'api-config-card full-field'} key={`${apiSettingsTab}-${config.id}`}>
                     <div className="api-config-card-head">
                       <div>
-                        <strong>{category.apiName || `${apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? '提示词助手 API' : '生图 API'} ${index + 1}`}</strong>
+                        <strong>{category.apiName || `${activeScopeMeta.title} ${index + 1}`}</strong>
                         <span>{isActiveConfig ? '当前启用' : '备用配置'}</span>
                       </div>
                       <div className="api-config-actions">
-                        <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, ...(apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? { activePromptApiConfigId: config.id } : { activeApiConfigId: config.id }) }))}>启用</button>
+                        <button type="button" className="secondary-action" onClick={() => setApiConfigForm((current) => ({ ...current, [activeScopeMeta.activeIdKey]: config.id }))}>启用</button>
                         <button type="button" className="secondary-action danger-action" onClick={() => removeApiConfig(config.id)} disabled={editableApiConfigs.length <= 1}>删除</button>
                       </div>
                     </div>
@@ -217,7 +231,7 @@ export default function AccountModal({
                 <section className="api-config-card full-field">
                   <div className="api-config-card-head">
                     <div>
-                      <strong>{apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? '暂无提示词助手 API' : '暂无生图 API'}</strong>
+                      <strong>{activeScopeMeta.emptyTitle}</strong>
                       <span>点击下方新增当前类型的 API 参数。</span>
                     </div>
                   </div>
@@ -225,7 +239,7 @@ export default function AccountModal({
               )}
 
               <div className="account-add-config-row full-field">
-                <button type="button" className="secondary-action" onClick={() => addApiConfig(apiSettingsTab)}>新增{apiSettingsTab === API_CONFIG_SCOPE_PROMPT ? '提示词助手 API' : '生图 API'}</button>
+                <button type="button" className="secondary-action" onClick={() => addApiConfig(apiSettingsTab)}>新增{activeScopeMeta.title}</button>
               </div>
 
               <section className="api-config-card full-field">

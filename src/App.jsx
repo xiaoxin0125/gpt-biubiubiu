@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AccountModal from './components/AccountModal';
+import AgnesWorkbench from './components/AgnesWorkbench';
 import CustomSelect from './components/CustomSelect';
 import ImageBoard from './components/ImageBoard';
 import ImageDetailModal from './components/ImageDetailModal';
@@ -10,6 +11,7 @@ import SizeDialog from './components/SizeDialog';
 import Topbar from './components/Topbar';
 import Workbench from './components/Workbench';
 import {
+  API_CONFIG_SCOPE_AGNES,
   API_CONFIG_SCOPE_IMAGE,
   API_CONFIG_SCOPE_PROMPT,
   boardFilterOptions,
@@ -30,6 +32,7 @@ import {
 import {
   apiConfigHasKeyForScope,
   apiConfigLabelForScope,
+  apiConfigSupportsScope,
   normalizeApiConfigItem,
   normalizeServerSettings,
   requestJson,
@@ -85,6 +88,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState('login');
   const [authTab, setAuthTab] = useState('profile');
+  const [accountApiSettingsTab, setAccountApiSettingsTab] = useState(API_CONFIG_SCOPE_IMAGE);
   const [authForm, setAuthForm] = useState(emptyAuthForm);
   const [profileForm, setProfileForm] = useState(emptyProfileForm);
   const [passwordForm, setPasswordForm] = useState(emptyPasswordForm);
@@ -151,17 +155,24 @@ function App() {
   const activeBoardFilter = activeFilterOptions.some((option) => option.value === boardFilter) ? boardFilter : 'all';
   const activeApiConfig = useMemo(() => {
     const configs = Array.isArray(apiConfigForm.apiConfigs) && apiConfigForm.apiConfigs.length ? apiConfigForm.apiConfigs : [normalizeApiConfigItem(apiConfigForm)];
-    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId)) || configs.find((item) => item.apiScope !== API_CONFIG_SCOPE_PROMPT) || configs[0];
+    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activeApiConfigId) && apiConfigSupportsScope(item, API_CONFIG_SCOPE_IMAGE)) || configs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_IMAGE)) || configs[0];
     return { ...activeConfig, requestTimeout: apiConfigForm.requestTimeout };
   }, [apiConfigForm]);
   const activePromptApiConfig = useMemo(() => {
     const configs = Array.isArray(apiConfigForm.apiConfigs) && apiConfigForm.apiConfigs.length ? apiConfigForm.apiConfigs : [normalizeApiConfigItem(apiConfigForm)];
-    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activePromptApiConfigId)) || configs.find((item) => item.apiScope !== API_CONFIG_SCOPE_IMAGE) || activeApiConfig;
+    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activePromptApiConfigId) && apiConfigSupportsScope(item, API_CONFIG_SCOPE_PROMPT)) || configs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_PROMPT)) || activeApiConfig;
     return { ...activeConfig, requestTimeout: apiConfigForm.requestTimeout };
   }, [activeApiConfig, apiConfigForm]);
-  const currentApiScope = view === 'prompt-tools' ? API_CONFIG_SCOPE_PROMPT : API_CONFIG_SCOPE_IMAGE;
-  const currentActiveApiConfig = currentApiScope === API_CONFIG_SCOPE_PROMPT ? activePromptApiConfig : activeApiConfig;
-  const statusText = status.configured ? apiConfigLabelForScope(currentActiveApiConfig, currentApiScope, status.apiName || defaultApiConfigItem.apiName) : status.message;
+  const activeAgnesApiConfig = useMemo(() => {
+    const configs = Array.isArray(apiConfigForm.apiConfigs) && apiConfigForm.apiConfigs.length ? apiConfigForm.apiConfigs : [normalizeApiConfigItem(apiConfigForm)];
+    const activeConfig = configs.find((item) => String(item.id) === String(apiConfigForm.activeAgnesApiConfigId) && apiConfigSupportsScope(item, API_CONFIG_SCOPE_AGNES)) || configs.find((item) => apiConfigSupportsScope(item, API_CONFIG_SCOPE_AGNES)) || activeApiConfig;
+    return { ...activeConfig, requestTimeout: apiConfigForm.requestTimeout };
+  }, [activeApiConfig, apiConfigForm]);
+  const currentApiScope = view === 'prompt-tools' ? API_CONFIG_SCOPE_PROMPT : view === 'agnes' ? API_CONFIG_SCOPE_AGNES : API_CONFIG_SCOPE_IMAGE;
+  const currentActiveApiConfig = currentApiScope === API_CONFIG_SCOPE_PROMPT ? activePromptApiConfig : currentApiScope === API_CONFIG_SCOPE_AGNES ? activeAgnesApiConfig : activeApiConfig;
+  const currentScopeConfigured = apiConfigHasKeyForScope(currentActiveApiConfig, currentApiScope);
+  const currentScopeFallbackName = currentApiScope === API_CONFIG_SCOPE_AGNES ? 'Agnes API' : currentApiScope === API_CONFIG_SCOPE_PROMPT ? '提示词助手 API' : (status.apiName || defaultApiConfigItem.apiName);
+  const statusText = currentScopeConfigured ? apiConfigLabelForScope(currentActiveApiConfig, currentApiScope, currentScopeFallbackName) : (user ? `未配置${currentScopeFallbackName}` : status.message);
   const canSubmitGeneration = Boolean(user) && !apiKeySyncing && apiConfigHasKeyForScope(activeApiConfig, API_CONFIG_SCOPE_IMAGE);
 
   const { updateApiConfig, addApiConfig, removeApiConfig, resetDirectSettings } = useApiConfig({
@@ -183,11 +194,16 @@ function App() {
     />
   );
 
-  const mergeDirectApiKey = (settings, apiKey) => {
+  const mergeDirectApiKey = (settings, apiKey, apiKeys = {}) => {
     const normalized = normalizeServerSettings(settings || {});
-    const directApiKey = String(apiKey || '').trim();
+    const directApiKey = String(apiKey || apiKeys.imageApi || '').trim();
+    const agnesApiKey = String(apiKeys.agnesApi || '').trim();
 
-    if (directApiKey) apiKeyVaultRef.current.set(String(normalized.activeApiConfigId), directApiKey);
+    if (directApiKey) {
+      apiKeyVaultRef.current.set(String(normalized.activeApiConfigId), directApiKey);
+      apiKeyVaultRef.current.set(`${normalized.activeApiConfigId}:imageApi`, directApiKey);
+    }
+    if (agnesApiKey) apiKeyVaultRef.current.set(`${normalized.activeAgnesApiConfigId}:agnesApi`, agnesApiKey);
     setApiConfigForm(normalized);
     setStatus((current) => ({
       ...current,
@@ -200,12 +216,16 @@ function App() {
 
   const syncDirectApiKey = async (settings) => {
     const normalized = normalizeServerSettings(settings || {});
-    if (!normalized.hasApiKey || normalized.isShared) return normalized;
+    const hasOwnDirectKey = Boolean(
+      (!normalized.isShared && normalized.hasApiKey)
+      || (!normalized.activeAgnesConfig?.isShared && normalized.activeAgnesConfig?.agnesApi?.hasApiKey)
+    );
+    if (!hasOwnDirectKey) return normalized;
 
     setApiKeySyncing(true);
     try {
       const data = await requestJson('/api/settings/direct');
-      mergeDirectApiKey(data.settings || normalized, data.apiKey || '');
+      mergeDirectApiKey(data.settings || normalized, data.apiKey || '', data.apiKeys || {});
       return normalizeServerSettings(data.settings || normalized);
     } finally {
       setApiKeySyncing(false);
@@ -241,7 +261,9 @@ function App() {
       const normalized = normalizeServerSettings(data.settings || {});
       const nextActiveConfig = apiScope === API_CONFIG_SCOPE_PROMPT
         ? (normalized.apiConfigs || []).find((item) => String(item.id) === String(normalized.activePromptApiConfigId)) || normalized.activePromptConfig || normalized
-        : normalized;
+        : apiScope === API_CONFIG_SCOPE_AGNES
+          ? (normalized.apiConfigs || []).find((item) => String(item.id) === String(normalized.activeAgnesApiConfigId)) || normalized.activeAgnesConfig || normalized
+          : normalized;
       setApiConfigForm(normalized);
       if (apiScope === API_CONFIG_SCOPE_IMAGE) setForm((current) => ({ ...current, model: normalized.model || current.model }));
       setStatus((current) => ({
@@ -252,6 +274,7 @@ function App() {
         message: apiConfigHasKeyForScope(nextActiveConfig, apiScope) ? apiConfigLabelForScope(nextActiveConfig, apiScope, normalized.apiName) : '未配置 API Key',
       }));
       if (apiScope === API_CONFIG_SCOPE_IMAGE && normalized.hasApiKey) await syncDirectApiKey(normalized);
+      if (apiScope === API_CONFIG_SCOPE_AGNES && nextActiveConfig?.agnesApi?.hasApiKey) await syncDirectApiKey(normalized);
       setOpenSelect('');
       setError('');
     } catch (switchError) {
@@ -278,6 +301,7 @@ function App() {
           wallRequireLogin: siteSettings.wallRequireLogin,
           registrationEnabled: siteSettings.registrationEnabled,
           sharedApiEnabled: siteSettings.sharedApiEnabled,
+          sharedAgnesApiEnabled: siteSettings.sharedAgnesApiEnabled,
           promptToolsEnabled: siteSettings.promptToolsEnabled,
           sharedApi: {
             imageApi: {
@@ -288,6 +312,10 @@ function App() {
               ...(siteSettings.sharedApi?.promptApi || {}),
               confirmApiKeySave: Boolean(siteSettings.sharedApi?.promptApi?.apiKey),
             },
+            agnesApi: {
+              ...(siteSettings.sharedApi?.agnesApi || {}),
+              confirmApiKeySave: Boolean(siteSettings.sharedApi?.agnesApi?.apiKey),
+            },
           },
         }),
       });
@@ -297,6 +325,7 @@ function App() {
           wallRequireLogin: Boolean(data.site.wallRequireLogin),
           registrationEnabled: Boolean(data.site.registrationEnabled),
           sharedApiEnabled: Boolean(data.site.sharedApiEnabled),
+          sharedAgnesApiEnabled: Boolean(data.site.sharedAgnesApiEnabled),
           promptToolsEnabled: Boolean(data.site.promptToolsEnabled),
         });
       }
@@ -433,6 +462,7 @@ function App() {
               wallRequireLogin: Boolean(data.site.wallRequireLogin),
               registrationEnabled: Boolean(data.site.registrationEnabled),
               sharedApiEnabled: Boolean(data.site.sharedApiEnabled),
+              sharedAgnesApiEnabled: Boolean(data.site.sharedAgnesApiEnabled),
               promptToolsEnabled: Boolean(data.site.promptToolsEnabled),
             });
           }
@@ -447,7 +477,7 @@ function App() {
           if (nextUser) {
             applyServerSettings(data.settings, nextUser);
             const normalizedSettings = normalizeServerSettings(data.settings || {});
-            if (normalizedSettings.hasApiKey) syncDirectApiKey(normalizedSettings).catch(() => {
+            if (normalizedSettings.hasApiKey || normalizedSettings.activeAgnesConfig?.agnesApi?.hasApiKey) syncDirectApiKey(normalizedSettings).catch(() => {
               setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
             });
             syncGeneratedImages({ user: nextUser });
@@ -815,7 +845,7 @@ function App() {
       ? { ...(siteSettings.sharedApi || {}), id: 'shared' }
       : (apiConfigForm.apiConfigs || []).find((item) => String(item.id) === rawConfigId);
     const category = config?.[categoryKey] || (categoryKey === 'imageApi' ? config : {});
-    const apiCategory = categoryKey === 'promptApi' ? 'prompt' : 'image';
+    const apiCategory = categoryKey === 'promptApi' ? 'prompt' : categoryKey === 'agnesApi' ? 'agnes' : 'image';
     if (!config) {
       setError('API 配置不存在。');
       return;
@@ -868,6 +898,7 @@ function App() {
                     [categoryKey]: { ...(item[categoryKey] || {}), model: options[0].value },
                     ...(categoryKey === 'imageApi' ? { model: options[0].value } : {}),
                     ...(categoryKey === 'promptApi' ? { promptModel: options[0].value } : {}),
+                    ...(categoryKey === 'agnesApi' ? { agnesModel: options[0].value } : {}),
                   }
                 : item
             )),
@@ -1004,17 +1035,19 @@ function App() {
         statusText={statusText}
         activeApiConfig={activeApiConfig}
         activePromptApiConfig={activePromptApiConfig}
+        activeAgnesApiConfig={activeAgnesApiConfig}
         apiConfigForm={apiConfigForm}
         siteFlags={siteFlags}
         switchActiveApiConfig={switchActiveApiConfig}
         renderSelect={renderSelect}
         openAccount={() => {
+          setAccountApiSettingsTab(API_CONFIG_SCOPE_IMAGE);
           setAuthTab('profile');
           setActiveDialog('auth');
         }}
       />
 
-      {view !== 'prompt-tools' ? (
+      {view === 'generate' || view === 'wall' ? (
         <ImageBoard
           view={view}
           boardScope={boardScope}
@@ -1063,6 +1096,23 @@ function App() {
           setView={setView}
           updateForm={updateForm}
           setError={setError}
+        />
+      ) : null}
+
+      {view === 'agnes' ? (
+        <AgnesWorkbench
+          user={user}
+          activeAgnesApiConfig={activeAgnesApiConfig}
+          apiConfigForm={apiConfigForm}
+          apiKeyVaultRef={apiKeyVaultRef}
+          syncDirectApiKey={syncDirectApiKey}
+          renderSelect={renderSelect}
+          setError={setError}
+          openAccount={() => {
+            setAccountApiSettingsTab(API_CONFIG_SCOPE_AGNES);
+            setAuthTab('settings');
+            setActiveDialog('auth');
+          }}
         />
       ) : null}
 
@@ -1129,6 +1179,7 @@ function App() {
               setAuthMode={setAuthMode}
               authTab={authTab}
               setAuthTab={setAuthTab}
+              initialApiSettingsTab={accountApiSettingsTab}
               authForm={authForm}
               setAuthForm={setAuthForm}
               profileForm={profileForm}
