@@ -50,6 +50,7 @@ return [
 
     'session_secret' => $envValue('SESSION_SECRET'),
     'user_api_key_secret' => $envValue('USER_API_KEY_SECRET'),
+    'storage_dir' => $envValue('STORAGE_DIR'),
 
     // 可选：首次部署时显式创建管理员。留空则不自动创建。
     'bootstrap_admin_username' => $envValue('BOOTSTRAP_ADMIN_USERNAME'),

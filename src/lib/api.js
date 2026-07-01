@@ -438,6 +438,16 @@ export const requestAgnesResult = async (config, apiKey, videoId) => {
   return readDirectImageResponse(response);
 };
 
+export const requestReferenceImageUpload = async (formData) => {
+  const response = await fetch(toApiUrl('/api/images/reference-upload'), {
+    method: 'POST',
+    body: formData,
+  });
+  const data = await readApiResponse(response);
+  if (!response.ok) throw new Error(data.error || data.message || data.detail || '参考图上传失败');
+  return data;
+};
+
 export const requestSharedAgnesJson = (path, payload) => requestJson('/api/agnes/proxy', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },

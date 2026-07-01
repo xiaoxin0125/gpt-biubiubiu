@@ -99,6 +99,10 @@ function api_exact_routes(): array
         ['POST', '/images/edits', function (): array {
             return handle_shared_image_edit(require_user());
         }],
+        ['POST', '/images/reference-upload', function (): array {
+            require_user();
+            return handle_reference_image_upload();
+        }],
         ['POST', '/agnes/proxy', function (array $body): array {
             return handle_shared_agnes_proxy(require_user(), $body);
         }],
@@ -143,6 +147,9 @@ function api_exact_routes(): array
 function api_pattern_routes(): array
 {
     return [
+        ['GET', '#^/images/reference/([a-f0-9]{24}\.(?:png|jpg|jpeg|webp|gif))$#i', function (array $body, array $matches): array {
+            return handle_reference_image_read((string) $matches[1]);
+        }],
         ['DELETE', '#^/generated-images/(\d+)$#', function (array $body, array $matches): array {
             return handle_delete_generated_image(require_user(), (int) $matches[1]);
         }],

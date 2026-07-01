@@ -9,8 +9,8 @@ import {
   defaultSizeDraft,
 } from '../constants/options';
 import SizeDialog from './SizeDialog';
-import { apiConfigHasKeyForScope, apiConfigLabelForScope } from '../lib/api';
-import { createImageSrc, readImageFileAsDataUrl } from '../lib/images';
+import { apiConfigHasKeyForScope, apiConfigLabelForScope, requestReferenceImageUpload } from '../lib/api';
+import { createImageSrc } from '../lib/images';
 import { getAvailableRatios, getDraftSize, parseSize } from '../lib/size';
 import { useAgnesGeneration } from '../hooks/useAgnesGeneration';
 
@@ -259,14 +259,20 @@ export default function AgnesWorkbench({
 
     try {
       const nextFiles = files.slice(0, remaining);
-      const nextReferences = await Promise.all(nextFiles.map(async (file) => ({
-        id: createReferenceId(file),
-        name: file.name,
-        dataUrl: await readImageFileAsDataUrl(file),
-      })));
+      const formData = new FormData();
+      nextFiles.forEach((file) => formData.append('images[]', file, file.name));
+      const data = await requestReferenceImageUpload(formData);
+      const uploadedItems = Array.isArray(data.items) ? data.items : [];
+      const nextReferences = uploadedItems.map((item, index) => ({
+        id: createReferenceId(nextFiles[index] || { name: item.name || 'reference-image', size: index, lastModified: Date.now() }),
+        name: item.name || nextFiles[index]?.name || 'reference-image',
+        url: item.absoluteUrl || item.url || '',
+        previewUrl: item.displayUrl || item.absoluteUrl || item.url || '',
+      })).filter((item) => item.url);
+      if (!nextReferences.length) throw new Error('参考图上传后没有返回 URL。');
       if (files.length > remaining) setError(`参考图最多支持 ${MAX_REFERENCE_IMAGES} 张，已保留前 ${MAX_REFERENCE_IMAGES} 张。`);
       setUploadedImageReferences((current) => [...current, ...nextReferences]);
-      updateImageForm('imageInputs', (value) => appendLines(value, nextReferences.map((item) => item.dataUrl)));
+      updateImageForm('imageInputs', (value) => appendLines(value, nextReferences.map((item) => item.url)));
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '参考图读取失败。');
     } finally {
@@ -278,13 +284,13 @@ export default function AgnesWorkbench({
     const target = uploadedImageReferences.find((item) => item.id === id);
     if (!target) return;
     setUploadedImageReferences((current) => current.filter((item) => item.id !== id));
-    updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => line.trim() !== target.dataUrl).join('\n'));
+    updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => line.trim() !== target.url).join('\n'));
   };
 
   const clearUploadedImageReferences = () => {
-    const dataUrls = new Set(uploadedImageReferences.map((item) => item.dataUrl));
+    const referenceUrls = new Set(uploadedImageReferences.map((item) => item.url));
     setUploadedImageReferences([]);
-    updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => !dataUrls.has(line.trim())).join('\n'));
+    updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => !referenceUrls.has(line.trim())).join('\n'));
   };
 
   const submitActiveForm = activeTab === 'image' ? runImageGeneration : runVideoGeneration;
@@ -419,7 +425,7 @@ export default function AgnesWorkbench({
               <div className="reference-preview-list">
                 {uploadedImageReferences.map((image, index) => (
                   <figure key={image.id}>
-                    <img src={image.dataUrl} alt={`Agnes 参考图 ${index + 1}`} />
+                    <img src={image.previewUrl || image.url} alt={`Agnes 参考图 ${index + 1}`} />
                     <figcaption>图{index + 1}</figcaption>
                     <button type="button" className="mini-remove" onClick={() => removeUploadedImageReference(image.id)} aria-label={`移除 Agnes 参考图 ${index + 1}`}>×</button>
                   </figure>

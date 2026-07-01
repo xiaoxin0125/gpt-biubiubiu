@@ -7,12 +7,59 @@ function public_base_dir(): string
     return dirname(__DIR__, 2);
 }
 
+function project_base_dir(): string
+{
+    return dirname(__DIR__, 3);
+}
+
+function storage_base_dir(): string
+{
+    $configured = trim((string) cfg('storage_dir', ''));
+    return $configured !== '' ? rtrim($configured, '/\\') : project_base_dir() . '/storage';
+}
+
+function reference_image_storage_dir(): string
+{
+    return storage_base_dir() . '/reference-images';
+}
+
 function public_url_for_path(string $path): string
 {
     $relative = str_replace('\\', '/', $path);
     $root = str_replace('\\', '/', public_base_dir());
     if (strpos($relative, $root) === 0) $relative = substr($relative, strlen($root));
     return '/' . ltrim($relative, '/');
+}
+
+function public_absolute_url_for_path(string $path): string
+{
+    $relative = public_url_for_path($path);
+    $host = trim((string) ($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ($_SERVER['HTTP_HOST'] ?? '')));
+    if ($host === '') return $relative;
+    $forwardedProto = strtolower(trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0] ?? ''));
+    $scheme = in_array($forwardedProto, ['http', 'https'], true) ? $forwardedProto : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
+    return $scheme . '://' . $host . $relative;
+}
+
+function current_request_origin(): string
+{
+    $host = trim((string) ($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ($_SERVER['HTTP_HOST'] ?? '')));
+    if ($host === '') return '';
+    $forwardedProto = strtolower(trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0] ?? ''));
+    $scheme = in_array($forwardedProto, ['http', 'https'], true) ? $forwardedProto : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
+    return $scheme . '://' . $host;
+}
+
+function api_route_url(string $route): string
+{
+    return '/api/index.php?route=' . rawurlencode('/' . ltrim($route, '/'));
+}
+
+function api_route_absolute_url(string $route): string
+{
+    $relative = api_route_url($route);
+    $origin = current_request_origin();
+    return $origin === '' ? $relative : $origin . $relative;
 }
 
 function ensure_dir(string $path): void
@@ -228,6 +275,115 @@ function store_image_files(array $image): array
         'originalBytes' => filesize($originalPath) ?: strlen($payload['binary']),
         'displayBytes' => $display['bytes'],
     ];
+}
+
+function normalized_uploaded_files(string $field): array
+{
+    $raw = $_FILES[$field] ?? null;
+    if (!$raw) return [];
+
+    if (is_array($raw['name'] ?? null)) {
+        $items = [];
+        $count = count($raw['name']);
+        for ($index = 0; $index < $count; $index += 1) {
+            $items[] = [
+                'name' => $raw['name'][$index] ?? '',
+                'type' => $raw['type'][$index] ?? '',
+                'tmp_name' => $raw['tmp_name'][$index] ?? '',
+                'error' => $raw['error'][$index] ?? UPLOAD_ERR_NO_FILE,
+                'size' => $raw['size'][$index] ?? 0,
+            ];
+        }
+        return $items;
+    }
+
+    return [[
+        'name' => $raw['name'] ?? '',
+        'type' => $raw['type'] ?? '',
+        'tmp_name' => $raw['tmp_name'] ?? '',
+        'error' => $raw['error'] ?? UPLOAD_ERR_NO_FILE,
+        'size' => $raw['size'] ?? 0,
+    ]];
+}
+
+function store_reference_image_file(string $binary, string $mime): array
+{
+    $mime = validate_image_binary($binary, $mime);
+    $id = bin2hex(random_bytes(12));
+    $referenceDir = reference_image_storage_dir();
+    ensure_dir($referenceDir);
+
+    $filename = $id . '.' . extension_for_mime($mime);
+    $path = $referenceDir . '/' . $filename;
+    if (file_put_contents($path, $binary) === false) throw new RuntimeException('无法保存参考图文件。');
+
+    $route = '/images/reference/' . $filename;
+    return [
+        'imageMime' => $mime,
+        'path' => $path,
+        'url' => api_route_url($route),
+        'absoluteUrl' => api_route_absolute_url($route),
+        'bytes' => filesize($path) ?: strlen($binary),
+    ];
+}
+
+function handle_reference_image_upload(): array
+{
+    $files = array_merge(normalized_uploaded_files('images'), normalized_uploaded_files('images[]'));
+    $files = array_values(array_filter($files, function ($file) {
+        return (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+    }));
+    if (!$files) json_response(['error' => '请选择参考图文件'], 400);
+    if (count($files) > 16) json_response(['error' => '参考图最多支持 16 张'], 400);
+
+    $items = [];
+    foreach ($files as $file) {
+        if ((int) ($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) json_response(['error' => '参考图上传失败'], 400);
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) json_response(['error' => '参考图上传来源无效'], 400);
+        if ((int) ($file['size'] ?? 0) > MAX_IMAGE_UPLOAD_BYTES) json_response(['error' => '图片不能超过 20MB'], 413);
+
+        $binary = file_get_contents($tmpName);
+        if ($binary === false) json_response(['error' => '无法读取参考图文件'], 400);
+        $stored = store_reference_image_file($binary, (string) ($file['type'] ?? 'image/png'));
+        $items[] = [
+            'name' => basename((string) ($file['name'] ?? 'reference-image')),
+            'mime' => $stored['imageMime'],
+            'url' => $stored['absoluteUrl'],
+            'absoluteUrl' => $stored['absoluteUrl'],
+            'displayUrl' => $stored['url'],
+            'bytes' => $stored['bytes'],
+        ];
+    }
+
+    return ['items' => $items];
+}
+
+function handle_reference_image_read(string $filename): array
+{
+    $filename = basename($filename);
+    if (!preg_match('/^[a-f0-9]{24}\.(png|jpg|jpeg|webp|gif)$/i', $filename)) json_response(['error' => '参考图不存在'], 404);
+
+    $storageDir = reference_image_storage_dir();
+    $root = realpath($storageDir);
+    $path = realpath($storageDir . '/' . $filename);
+    if (!$root || !$path) json_response(['error' => '参考图不存在'], 404);
+
+    $normalizedRoot = rtrim(str_replace('\\', '/', $root), '/') . '/';
+    $normalizedPath = str_replace('\\', '/', $path);
+    if (strpos($normalizedPath, $normalizedRoot) !== 0 || !is_file($path)) json_response(['error' => '参考图不存在'], 404);
+
+    $info = @getimagesize($path);
+    $mime = is_array($info) && !empty($info['mime']) ? (string) $info['mime'] : 'image/png';
+    if (!supported_image_mime($mime)) json_response(['error' => '参考图不存在'], 404);
+
+    if (ob_get_level() > 0) ob_clean();
+    http_response_code(200);
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . (string) (filesize($path) ?: 0));
+    header('Cache-Control: public, max-age=604800, immutable');
+    readfile($path);
+    exit;
 }
 
 function stored_generated_image(array $image, string $fallbackMime = 'image/png'): array
