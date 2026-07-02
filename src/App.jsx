@@ -1243,9 +1243,7 @@ function App() {
   const detailIsPending = ['pending', 'running'].includes(selectedImage?.status) && !detailSrc && !detailVideoSrc;
   const detailInputPrompt = selectedImage?.prompt || detailParams.prompt || '';
   const detailRevisedPrompt = normalizeVisibleRevisedPrompt(detailInputPrompt, selectedImage?.revised_prompt);
-  const detailElapsedSeconds = selectedImage?.mediaType === 'video' && selectedImage?.seconds !== undefined && selectedImage?.seconds !== null && selectedImage?.seconds !== ''
-    ? Number(selectedImage.seconds)
-    : selectedImage ? getElapsedSeconds(selectedImage) : null;
+  const detailElapsedSeconds = detailMediaType === 'video' ? null : selectedImage ? getElapsedSeconds(selectedImage) : null;
   const detailElapsed = Number.isFinite(detailElapsedSeconds) && detailElapsedSeconds > 0 ? formatDuration(detailElapsedSeconds) : '';
   const selectedWallItem = detailSrc ? findWallItem(selectedImage) : null;
   const selectedOnWall = Boolean(selectedWallItem);

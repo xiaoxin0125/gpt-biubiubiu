@@ -712,18 +712,15 @@ export default function AgnesWorkbench({
     updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => !referenceUrls.has(line.trim())).join('\n'));
   };
 
-  const handleVideoImageUpload = async (event, target) => {
+  const handleVideoImageUpload = async (event) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
     if (!files.length) return;
 
     try {
-      const selectedFiles = target === 'primary' ? files.slice(0, 1) : files;
-      const { values, fallbackToBase64 } = await uploadImageFilesAsValues(selectedFiles);
+      const { values, fallbackToBase64 } = await uploadImageFilesAsValues(files);
       if (!values.length) throw new Error('图片上传后没有返回 URL 或 Base64。');
-      if (target === 'primary') updateVideoForm('image', values[0]);
-      else updateVideoForm('extraImages', (value) => appendLines(value, values));
-      if (target === 'primary' && files.length > 1) setError('主图只使用第一张图片。');
-      else if (fallbackToBase64) setError('图片上传接口不可用，已自动转换为 Base64。');
+      updateVideoForm('imageInputs', (value) => appendLines(value, values));
+      if (fallbackToBase64) setError('图片上传接口不可用，已自动转换为 Base64。');
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '视频图片读取失败。');
     } finally {
@@ -895,38 +892,26 @@ export default function AgnesWorkbench({
                   <span>估算</span>
                   <strong>{estimatedVideoSeconds.toFixed(1)} 秒</strong>
                 </div>
-                <div className="control-field workbench-extra-control agnes-wide-control agnes-video-image-input-control">
-                  <span>主图 URL / Base64</span>
-                  <div className="agnes-upload-textarea-row">
-                    <textarea value={videoForm.image} onChange={(event) => updateVideoForm('image', event.target.value)} rows={2} placeholder="图生视频、多图视频或关键帧模式使用" />
-                    <label className="control-field file-control icon-file-control agnes-inline-upload-control" title="上传主图" aria-label="上传主图">
-                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" onChange={(event) => handleVideoImageUpload(event, 'primary')} />
-                      <ReferenceUploadIcon count={videoForm.image ? 1 : 0} />
-                    </label>
-                  </div>
-                </div>
-                <div className="control-field workbench-extra-control agnes-wide-control agnes-video-image-input-control">
-                  <span>额外图片 URL / Base64</span>
-                  <div className="agnes-upload-textarea-row">
-                    <textarea value={videoForm.extraImages} onChange={(event) => updateVideoForm('extraImages', event.target.value)} rows={2} placeholder="每行一张；多图视频和关键帧使用" />
-                    <label className="control-field file-control icon-file-control agnes-inline-upload-control" title="上传额外图片" aria-label="上传额外图片">
-                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={(event) => handleVideoImageUpload(event, 'extra')} />
-                      <ReferenceUploadIcon count={splitLines(videoForm.extraImages).filter((line) => line.trim()).length} />
-                    </label>
-                  </div>
-                </div>
                 <label className="control-field workbench-extra-control agnes-wide-control">
                   <span>负向提示词</span>
                   <textarea value={videoForm.negativePrompt} onChange={(event) => updateVideoForm('negativePrompt', event.target.value)} rows={2} placeholder="可选" />
                 </label>
+                <div className="control-field workbench-extra-control agnes-wide-control agnes-video-image-input-control">
+                  <span>图片 URL / Base64</span>
+                  <textarea value={videoForm.imageInputs} onChange={(event) => updateVideoForm('imageInputs', event.target.value)} rows={2} placeholder="每行一张；留空为文生视频，1 张走 image，多张走 extra_body.image" />
+                </div>
+                <div className="agnes-video-action-column">
+                  <label className="control-field file-control icon-file-control agnes-inline-upload-control agnes-video-upload-control" title="上传视频图片" aria-label="上传视频图片">
+                    <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleVideoImageUpload} />
+                    <ReferenceUploadIcon count={splitLines(videoForm.imageInputs).filter((line) => line.trim()).length} />
+                  </label>
+                  <button type="submit" className="send-button" disabled={!configured || activeLoading} aria-label="创建视频任务">
+                    {activeLoading ? <LoadingDotsIcon /> : <SendIcon />}
+                  </button>
+                </div>
               </>
             )}
 
-            {activeTab === 'video' ? (
-              <button type="submit" className="send-button" disabled={!configured || activeLoading} aria-label="创建视频任务">
-                {activeLoading ? <LoadingDotsIcon /> : <SendIcon />}
-              </button>
-            ) : null}
           </div>
 
           {activeTab === 'image' && uploadedImageReferences.length ? (

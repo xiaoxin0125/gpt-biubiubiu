@@ -3268,6 +3268,40 @@ select option {
   min-width: min(330px, 100%);
 }
 
+.agnes-video-action-column {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(2, 40px);
+  align-self: end;
+  gap: 8px;
+}
+
+.agnes-video-action-column .icon-file-control,
+.agnes-video-action-column .send-button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  align-self: auto;
+}
+
+.agnes-video-action-column .icon-file-control strong,
+.agnes-video-action-column .send-button {
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+}
+
+.agnes-video-action-column .send-button {
+  padding: 0;
+  border-radius: var(--radius-sm);
+}
+
+.agnes-video-upload-control {
+  align-self: auto;
+  min-width: 40px;
+}
+
 .agnes-upload-textarea-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 40px;

@@ -135,6 +135,12 @@ const extractVideoId = (data = {}) => {
 
 const normalizeAgnesVideoMode = (mode) => (String(mode || '').trim() === 'keyframes' ? 'keyframes' : 'ti2vid');
 
+const getVideoImageInputs = (form) => [
+  ...splitInputs(form.imageInputs),
+  String(form.image || '').trim(),
+  ...splitInputs(form.extraImages),
+].filter(Boolean);
+
 const validateVideoForm = (form) => {
   const numFrames = Number(form.numFrames);
   const frameRate = Number(form.frameRate);
@@ -142,9 +148,9 @@ const validateVideoForm = (form) => {
   if (!form.prompt.trim()) return '请输入 Agnes 视频提示词。';
   if (!Number.isFinite(numFrames) || numFrames < 9 || numFrames > 441 || (numFrames - 1) % 8 !== 0) return '视频帧数必须小于等于 441，并符合 8n + 1。';
   if (!Number.isFinite(frameRate) || frameRate < 1 || frameRate > 60) return '帧率必须在 1–60 之间。';
-  const imageInputs = [String(form.image || '').trim(), ...splitInputs(form.extraImages)].filter(Boolean);
+  const imageInputs = getVideoImageInputs(form);
   const invalidImageInput = imageInputs.find((value) => !isValidVideoImageInput(value));
-  if (invalidImageInput) return '主图和额外图片只能填写 http(s) 链接或图片 Base64。';
+  if (invalidImageInput) return '视频图片只能填写 http(s) 链接或图片 Base64。';
   if (apiMode === 'keyframes' && imageInputs.length < 2) return '关键帧模式需要至少提供两张图片 URL 或 Base64。';
   return '';
 };
@@ -167,9 +173,7 @@ const buildAgnesImagePayload = (form, category) => {
 };
 
 const buildAgnesVideoPayload = (form) => {
-  const primaryImage = String(form.image || '').trim();
-  const extraImages = splitInputs(form.extraImages);
-  const images = [primaryImage, ...extraImages].filter(Boolean);
+  const images = getVideoImageInputs(form);
   const apiMode = normalizeAgnesVideoMode(form.mode);
 
   const payload = {
