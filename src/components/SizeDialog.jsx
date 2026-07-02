@@ -1,6 +1,20 @@
 import { ratioToSize, resolutionGroups } from '../constants/options';
 import { getAvailableRatios } from '../lib/size';
 
+const getRatioIconStyle = (ratio) => {
+  const [width, height] = String(ratio || '').split(':').map(Number);
+  if (!width || !height) return {};
+
+  const maxWidth = 26;
+  const maxHeight = 24;
+  const scale = Math.min(maxWidth / width, maxHeight / height);
+
+  return {
+    '--ratio-icon-width': `${Math.max(8, Math.round(width * scale))}px`,
+    '--ratio-icon-height': `${Math.max(8, Math.round(height * scale))}px`,
+  };
+};
+
 export default function SizeDialog({
   sizeDraft,
   setSizeDraft,
@@ -74,7 +88,7 @@ export default function SizeDialog({
                   key={item.value}
                   onClick={() => setSizeDraft((draft) => ({ ...draft, ratio: item.value }))}
                 >
-                  <span className={`ratio-icon ${item.icon}`} />
+                  <span className={`ratio-icon ${item.icon}`} style={getRatioIconStyle(item.value)} />
                   <strong>{item.label}</strong>
                 </button>
               ))}

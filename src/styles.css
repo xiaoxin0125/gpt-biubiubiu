@@ -1765,16 +1765,12 @@ input::placeholder {
 
 .ratio-icon {
   display: block;
+  width: var(--ratio-icon-width, 18px);
+  height: var(--ratio-icon-height, 18px);
   border: 1px solid currentColor;
   border-radius: 3px;
 }
 
-.ratio-icon.square { width: 15px; height: 15px; }
-.ratio-icon.landscape { width: 20px; height: 13px; }
-.ratio-icon.portrait { width: 13px; height: 20px; }
-.ratio-icon.wide { width: 23px; height: 12px; }
-.ratio-icon.tall { width: 12px; height: 23px; }
-.ratio-icon.ultra { width: 25px; height: 9px; }
 .ratio-icon.custom {
   position: relative;
   width: 18px;
