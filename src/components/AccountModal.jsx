@@ -7,6 +7,7 @@ import {
 } from '../constants/options';
 import { requestJson } from '../lib/api';
 import ApiCategoryEditor, { applyApiCategoryUpdate, userApiCategorySections } from './ApiCategoryEditor';
+import AdminUserPanel from './AdminUserPanel';
 import SiteAdminPanel from './SiteAdminPanel';
 
 export default function AccountModal({
@@ -18,6 +19,8 @@ export default function AccountModal({
   initialApiSettingsTab = API_CONFIG_SCOPE_IMAGE,
   authForm,
   setAuthForm,
+  authPersistentNotice,
+  setAuthPersistentNotice,
   profileForm,
   setProfileForm,
   passwordForm,
@@ -41,10 +44,23 @@ export default function AccountModal({
   siteSettings,
   setSiteSettings,
   saveSiteSettings,
+  adminUsers,
+  userManagementLoading,
+  userManagementBusyId,
+  userPasswordDrafts,
+  setUserPasswordDrafts,
+  loadAdminUsers,
+  updateAdminUserPassword,
+  toggleAdminUserDisabled,
+  deleteAdminUser,
   scrollRef,
 }) {
   const isAdmin = Boolean(user?.isAdmin);
   const registrationEnabled = siteFlags?.registrationEnabled !== false;
+  const qqGroupUrl = 'https://qm.qq.com/q/IFARabo38k';
+  const qqGroupLink = (
+    <a href={qqGroupUrl} target="_blank" rel="noreferrer">Q群：1001234361</a>
+  );
   const [captchaImage, setCaptchaImage] = useState('');
   const [captchaLoading, setCaptchaLoading] = useState(false);
   const [apiSettingsTab, setApiSettingsTab] = useState(initialApiSettingsTab);
@@ -62,6 +78,10 @@ export default function AccountModal({
   useEffect(() => {
     if (authTab === 'settings') setApiSettingsTab(initialApiSettingsTab);
   }, [authTab, initialApiSettingsTab]);
+
+  useEffect(() => {
+    if (!registrationEnabled && authMode !== 'login') setAuthMode('login');
+  }, [authMode, registrationEnabled, setAuthMode]);
 
   useEffect(() => {
     if (!user) refreshCaptcha().catch(() => {});
@@ -110,11 +130,14 @@ export default function AccountModal({
 
       {user ? (
         <div className="account-panel">
-          <div className={isAdmin ? 'segmented-control account-tabs' : 'segmented-control two-tabs account-tabs'}>
+          <div className={isAdmin ? 'segmented-control four-tabs account-tabs' : 'segmented-control two-tabs account-tabs'}>
             <button type="button" className={authTab === 'profile' ? 'is-active' : ''} onClick={() => setAuthTab('profile')}>账号信息</button>
             <button type="button" className={authTab === 'settings' ? 'is-active' : ''} onClick={() => setAuthTab('settings')}>参数设置</button>
             {isAdmin ? (
               <button type="button" className={authTab === 'site' ? 'is-active' : ''} onClick={() => setAuthTab('site')}>网站管理</button>
+            ) : null}
+            {isAdmin ? (
+              <button type="button" className={authTab === 'users' ? 'is-active' : ''} onClick={() => setAuthTab('users')}>用户管理</button>
             ) : null}
           </div>
 
@@ -280,18 +303,48 @@ export default function AccountModal({
               renderSelect={renderSelect}
             />
           ) : null}
+
+          {authTab === 'users' && isAdmin ? (
+            <AdminUserPanel
+              adminUsers={adminUsers}
+              userManagementLoading={userManagementLoading}
+              userManagementBusyId={userManagementBusyId}
+              userPasswordDrafts={userPasswordDrafts}
+              setUserPasswordDrafts={setUserPasswordDrafts}
+              currentUserId={user.id}
+              loadAdminUsers={loadAdminUsers}
+              updateAdminUserPassword={updateAdminUserPassword}
+              toggleAdminUserDisabled={toggleAdminUserDisabled}
+              deleteAdminUser={deleteAdminUser}
+            />
+          ) : null}
         </div>
       ) : (
         <form className="auth-form" onSubmit={submitAuthWithCaptcha}>
           {registrationEnabled ? (
             <div className="segmented-control two-tabs">
-              <button type="button" className={authMode === 'login' ? 'is-active' : ''} onClick={() => setAuthMode('login')}>登录</button>
-              <button type="button" className={authMode === 'register' ? 'is-active' : ''} onClick={() => setAuthMode('register')}>注册</button>
+              <button type="button" className={authMode === 'login' ? 'is-active' : ''} onClick={() => { setAuthMode('login'); setAuthPersistentNotice(null); }}>登录</button>
+              <button type="button" className={authMode === 'register' ? 'is-active' : ''} onClick={() => { setAuthMode('register'); setAuthPersistentNotice(null); }}>注册</button>
+            </div>
+          ) : null}
+          {!registrationEnabled ? (
+            <div className="auth-notice-card">
+              <strong>注册已关闭</strong>
+              <span>如需注册请加{qqGroupLink}。</span>
+            </div>
+          ) : null}
+          {authPersistentNotice?.type === 'ban' ? (
+            <div className="auth-notice-card is-danger">
+              <strong>账户被封禁</strong>
+              <span>账户被封禁，请加{qqGroupLink}申请解禁。</span>
             </div>
           ) : null}
           <label>
             <span>用户名</span>
-            <input value={authForm.username} onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))} placeholder="2-20 位" />
+            <input value={authForm.username} onChange={(event) => {
+              setAuthPersistentNotice(null);
+              setAuthForm((current) => ({ ...current, username: event.target.value }));
+            }} placeholder="2-20 位" />
           </label>
           {registrationEnabled && authMode === 'register' ? (
             <label>
@@ -301,14 +354,20 @@ export default function AccountModal({
           ) : null}
           <label>
             <span>密码</span>
-            <input type="password" value={authForm.password} onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))} placeholder="至少 6 位" />
+            <input type="password" value={authForm.password} onChange={(event) => {
+              setAuthPersistentNotice(null);
+              setAuthForm((current) => ({ ...current, password: event.target.value }));
+            }} placeholder="至少 6 位" />
           </label>
           <div className="captcha-field">
             <label>
               <span>验证码</span>
               <input
                 value={authForm.captcha}
-                onChange={(event) => setAuthForm((current) => ({ ...current, captcha: event.target.value.replace(/[^a-z0-9]/gi, '').toUpperCase() }))}
+                onChange={(event) => {
+                  setAuthPersistentNotice(null);
+                  setAuthForm((current) => ({ ...current, captcha: event.target.value.replace(/[^a-z0-9]/gi, '').toUpperCase() }));
+                }}
                 placeholder="输入右侧字符"
                 autoComplete="off"
                 maxLength={8}

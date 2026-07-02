@@ -70,13 +70,13 @@ function bootstrap_admin_user(PDO $db): void
     $stmt->execute([$username]);
     $existing = $stmt->fetch();
     if ($existing) {
-        $db->prepare('UPDATE users SET is_admin = 1 WHERE id = ?')->execute([(int) $existing['id']]);
+        $db->prepare('UPDATE users SET is_admin = 1, is_disabled = 0 WHERE id = ?')->execute([(int) $existing['id']]);
         return;
     }
 
     $displayName = normalize_display_name((string) cfg('bootstrap_admin_display_name', $username), $username);
     $hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
-    $stmt = $db->prepare("INSERT INTO users (username, display_name, password_hash, is_admin) VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE is_admin = 1, display_name = COALESCE(NULLIF(display_name, ''), VALUES(display_name))");
+    $stmt = $db->prepare("INSERT INTO users (username, display_name, password_hash, is_admin, is_disabled) VALUES (?, ?, ?, 1, 0) ON DUPLICATE KEY UPDATE is_admin = 1, is_disabled = 0, display_name = COALESCE(NULLIF(display_name, ''), VALUES(display_name))");
     $stmt->execute([$username, $displayName, $hash]);
 }
 
@@ -105,6 +105,7 @@ function ensure_schema(): void
       display_name VARCHAR(96) DEFAULT NULL,
       password_hash VARCHAR(255) NOT NULL,
       is_admin TINYINT(1) NOT NULL DEFAULT 0,
+      is_disabled TINYINT(1) NOT NULL DEFAULT 0,
       token_version INT UNSIGNED NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
@@ -259,7 +260,8 @@ function ensure_schema(): void
 
     ensure_column($db, 'users', 'display_name', 'display_name VARCHAR(96) DEFAULT NULL AFTER username');
     ensure_column($db, 'users', 'is_admin', 'is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER password_hash');
-    ensure_column($db, 'users', 'token_version', 'token_version INT UNSIGNED NOT NULL DEFAULT 0 AFTER is_admin');
+    ensure_column($db, 'users', 'is_disabled', 'is_disabled TINYINT(1) NOT NULL DEFAULT 0 AFTER is_admin');
+    ensure_column($db, 'users', 'token_version', 'token_version INT UNSIGNED NOT NULL DEFAULT 0 AFTER is_disabled');
     ensure_column($db, 'user_settings', 'api_name', 'api_name VARCHAR(128) DEFAULT NULL AFTER model');
     ensure_column($db, 'user_settings', 'api_base_url', 'api_base_url VARCHAR(255) DEFAULT NULL AFTER api_name');
     ensure_column($db, 'user_settings', 'request_timeout', 'request_timeout INT UNSIGNED NOT NULL DEFAULT 999 AFTER api_base_url');

@@ -1638,6 +1638,10 @@ input::placeholder {
   grid-template-columns: repeat(2, 1fr);
 }
 
+.segmented-control.four-tabs {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 .segmented-control button {
   min-height: 38px;
   border: 2px solid transparent;
@@ -1930,6 +1934,50 @@ input::placeholder {
   align-items: end;
 }
 
+.auth-notice-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+}
+
+.auth-notice-card.is-danger {
+  border-color: #8f1d1d;
+  background: #fff7f4;
+}
+
+.auth-notice-card strong {
+  color: var(--black);
+  font-size: 0.9rem;
+  font-weight: 950;
+}
+
+.auth-notice-card.is-danger strong {
+  color: #8f1d1d;
+}
+
+.auth-notice-card span,
+.auth-notice-card a {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 820;
+  line-height: 1.55;
+}
+
+.auth-notice-card a {
+  color: var(--black);
+  font-weight: 950;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.auth-notice-card.is-danger a {
+  color: #8f1d1d;
+}
+
 .captcha-field label {
   min-width: 0;
 }
@@ -2106,6 +2154,65 @@ select option {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.user-management-empty {
+  justify-items: start;
+}
+
+.user-management-empty strong {
+  color: var(--black);
+  font-size: 0.92rem;
+  font-weight: 950;
+}
+
+.user-management-empty span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+.user-card-head {
+  align-items: stretch;
+}
+
+.user-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.user-card-stats span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-2);
+  color: var(--black);
+  font-size: 0.68rem;
+  font-weight: 920;
+}
+
+.user-card-fields {
+  align-items: end;
+}
+
+.user-card.is-disabled-user {
+  border-style: dashed;
+  background: #fff7f4;
+}
+
+.user-card.is-disabled-user .api-config-card-head strong {
+  color: #8f1d1d;
+}
+
+.user-card-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .settings-section-title,
@@ -2670,8 +2777,13 @@ select option {
   .custom-size-row,
   .detail-meta-grid,
   .detail-actions,
-  .api-config-fields {
+  .api-config-fields,
+  .user-card-actions {
     grid-template-columns: 1fr;
+  }
+
+  .segmented-control.four-tabs {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .api-config-card-head,

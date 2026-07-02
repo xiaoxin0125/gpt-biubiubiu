@@ -123,6 +123,9 @@ function api_exact_routes(): array
             require_admin();
             return ['site' => save_site_settings($body)];
         }],
+        ['GET', '/admin/users', function (): array {
+            return handle_admin_users();
+        }],
         ['GET', '/generated-images', function (): array {
             return handle_generated_images(require_user());
         }],
@@ -156,6 +159,15 @@ function api_pattern_routes(): array
         }],
         ['DELETE', '#^/generated-images/(\d+)$#', function (array $body, array $matches): array {
             return handle_delete_generated_image(require_user(), (int) $matches[1]);
+        }],
+        ['POST', '#^/admin/users/(\d+)/password$#', function (array $body, array $matches): array {
+            return handle_admin_user_password((int) $matches[1], $body);
+        }],
+        ['POST', '#^/admin/users/(\d+)/disabled$#', function (array $body, array $matches): array {
+            return handle_admin_user_disabled((int) $matches[1], $body);
+        }],
+        ['DELETE', '#^/admin/users/(\d+)$#', function (array $body, array $matches): array {
+            return handle_admin_user_delete((int) $matches[1]);
         }],
         ['GET', '#^/wall/(\d+)$#', function (array $body, array $matches): array {
             return handle_wall_detail((int) $matches[1]);

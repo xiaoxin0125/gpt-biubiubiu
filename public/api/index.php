@@ -7,6 +7,7 @@ require_once __DIR__ . '/lib/database.php';
 require_once __DIR__ . '/lib/auth.php';
 require_once __DIR__ . '/lib/settings.php';
 require_once __DIR__ . '/lib/site.php';
+require_once __DIR__ . '/lib/admin_users.php';
 require_once __DIR__ . '/lib/files.php';
 require_once __DIR__ . '/lib/image_proxy.php';
 require_once __DIR__ . '/lib/agnes_proxy.php';

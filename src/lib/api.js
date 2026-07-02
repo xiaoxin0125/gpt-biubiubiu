@@ -46,7 +46,13 @@ export const requestJson = async (input, init) => {
   const response = await fetch(toApiUrl(input), init);
   const data = await readApiResponse(response);
 
-  if (!response.ok) throw new Error(data.error || data.message || data.detail || '请求失败');
+  if (!response.ok) {
+    const error = new Error(data.error || data.message || data.detail || '请求失败');
+    error.code = data.code || '';
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
   return data;
 };
 

@@ -135,6 +135,7 @@ function App() {
   const [apiModelLoadingByConfigId, setApiModelLoadingByConfigId] = useState({});
   const [runningGenerations, setRunningGenerations] = useState(0);
   const [error, setError] = useState('');
+  const [authPersistentNotice, setAuthPersistentNotice] = useState(null);
   const [activeDialog, setActiveDialog] = useState(null);
   const [sizeDraft, setSizeDraft] = useState(defaultSizeDraft);
   const [wallBusyId, setWallBusyId] = useState('');
@@ -147,6 +148,10 @@ function App() {
   const [imageLayoutMeta, setImageLayoutMeta] = useState({});
   const [siteFlags, setSiteFlags] = useState(defaultSiteFlags);
   const [siteSettings, setSiteSettings] = useState({ ...defaultSiteFlags, sharedApi: {} });
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [userPasswordDrafts, setUserPasswordDrafts] = useState({});
+  const [userManagementLoading, setUserManagementLoading] = useState(false);
+  const [userManagementBusyId, setUserManagementBusyId] = useState('');
   const [installStatus, setInstallStatus] = useState({ checking: true, needsInstall: false });
   const {
     boardVisibleCount,
@@ -321,6 +326,104 @@ function App() {
       if (data.site) setSiteSettings({ ...data.site, sharedApi: data.site.sharedApi || {} });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '网站设置加载失败');
+    }
+  };
+
+  const loadAdminUsers = async () => {
+    if (!user?.isAdmin) return;
+    setUserManagementLoading(true);
+    try {
+      const data = await requestJson('/api/admin/users');
+      setAdminUsers(Array.isArray(data.users) ? data.users : []);
+      setError('');
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '用户列表加载失败');
+    } finally {
+      setUserManagementLoading(false);
+    }
+  };
+
+  const updateAdminUserPassword = async (targetUserId) => {
+    const password = String(userPasswordDrafts[String(targetUserId)] || '').trim();
+    if (password.length < 6) {
+      setError('新密码至少 6 位');
+      return;
+    }
+
+    setUserManagementBusyId(String(targetUserId));
+    try {
+      await requestJson(`/api/admin/users/${targetUserId}/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword: password }),
+      });
+      setUserPasswordDrafts((current) => ({ ...current, [targetUserId]: '' }));
+      setError('');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : '用户密码修改失败');
+    } finally {
+      setUserManagementBusyId('');
+    }
+  };
+
+  const toggleAdminUserDisabled = async (targetUser) => {
+    if (!targetUser?.id) return;
+    if (String(targetUser.id) === String(user?.id)) {
+      setError('不能禁用当前登录账号');
+      return;
+    }
+
+    const nextDisabled = !targetUser.isDisabled;
+    const confirmText = nextDisabled
+      ? `确认禁用用户 ${targetUser.displayName || targetUser.username}？该用户将无法登录。`
+      : `确认启用用户 ${targetUser.displayName || targetUser.username}？`;
+    if (!window.confirm(confirmText)) return;
+
+    setUserManagementBusyId(String(targetUser.id));
+    const previousUsers = adminUsers;
+    setAdminUsers((current) => current.map((item) => (
+      String(item.id) === String(targetUser.id) ? { ...item, isDisabled: nextDisabled } : item
+    )));
+
+    try {
+      await requestJson(`/api/admin/users/${targetUser.id}/disabled`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disabled: nextDisabled }),
+      });
+      setError('');
+    } catch (disableError) {
+      setAdminUsers(previousUsers);
+      setError(disableError instanceof Error ? disableError.message : '用户状态更新失败');
+    } finally {
+      setUserManagementBusyId('');
+    }
+  };
+
+  const deleteAdminUser = async (targetUser) => {
+    if (!targetUser?.id) return;
+    if (String(targetUser.id) === String(user?.id)) {
+      setError('不能删除当前登录账号');
+      return;
+    }
+    if (!window.confirm(`确认删除用户 ${targetUser.displayName || targetUser.username}？历史作品会保留，但会移除账号归属。`)) return;
+
+    setUserManagementBusyId(String(targetUser.id));
+    const previousUsers = adminUsers;
+    setAdminUsers((current) => current.filter((item) => String(item.id) !== String(targetUser.id)));
+    try {
+      await requestJson(`/api/admin/users/${targetUser.id}`, { method: 'DELETE' });
+      setUserPasswordDrafts((current) => {
+        const next = { ...current };
+        delete next[targetUser.id];
+        return next;
+      });
+      setError('');
+    } catch (deleteError) {
+      setAdminUsers(previousUsers);
+      setError(deleteError instanceof Error ? deleteError.message : '用户删除失败');
+    } finally {
+      setUserManagementBusyId('');
     }
   };
 
@@ -611,7 +714,14 @@ function App() {
   }, [user]);
 
   useEffect(() => {
-    if (user?.isAdmin) loadSiteSettings();
+    if (user?.isAdmin) {
+      loadSiteSettings();
+      loadAdminUsers();
+      return;
+    }
+
+    setAdminUsers([]);
+    setUserPasswordDrafts({});
   }, [user?.isAdmin]);
 
   useEffect(() => {
@@ -1208,6 +1318,7 @@ function App() {
     syncGeneratedImages,
     setUser,
     setError,
+    setAuthPersistentNotice,
     setImages,
     setHistory,
     setWallItems,
@@ -1450,6 +1561,8 @@ function App() {
               initialApiSettingsTab={accountApiSettingsTab}
               authForm={authForm}
               setAuthForm={setAuthForm}
+              authPersistentNotice={authPersistentNotice}
+              setAuthPersistentNotice={setAuthPersistentNotice}
               profileForm={profileForm}
               setProfileForm={setProfileForm}
               passwordForm={passwordForm}
@@ -1474,6 +1587,15 @@ function App() {
               siteSettings={siteSettings}
               setSiteSettings={setSiteSettings}
               saveSiteSettings={saveSiteSettings}
+              adminUsers={adminUsers}
+              userManagementLoading={userManagementLoading}
+              userManagementBusyId={userManagementBusyId}
+              userPasswordDrafts={userPasswordDrafts}
+              setUserPasswordDrafts={setUserPasswordDrafts}
+              loadAdminUsers={loadAdminUsers}
+              updateAdminUserPassword={updateAdminUserPassword}
+              toggleAdminUserDisabled={toggleAdminUserDisabled}
+              deleteAdminUser={deleteAdminUser}
               scrollRef={accountModalScrollRef}
             />
           ) : null}

@@ -130,10 +130,14 @@ function current_user(): ?array
     $token = session_token();
     if ($token['id'] <= 0) return null;
 
-    $stmt = pdo()->prepare('SELECT id, username, display_name, is_admin, token_version, created_at FROM users WHERE id = ? LIMIT 1');
+    $stmt = pdo()->prepare('SELECT id, username, display_name, is_admin, is_disabled, token_version, created_at FROM users WHERE id = ? LIMIT 1');
     $stmt->execute([$token['id']]);
     $user = $stmt->fetch();
     if (!$user) return null;
+    if (!empty($user['is_disabled'])) {
+        clear_cookie_value('session_user');
+        return null;
+    }
     if ((int) ($user['token_version'] ?? 0) !== $token['version']) return null;
 
     $displayName = trim((string) ($user['display_name'] ?? '')) ?: $user['username'];
@@ -232,6 +236,11 @@ function handle_auth_login(array $body): array
     $stmt->execute([$username]);
     $user = $stmt->fetch();
     if (!$user || !password_verify((string) ($body['password'] ?? ''), $user['password_hash'])) json_response(['error' => '用户名或密码错误'], 401);
+    if (!empty($user['is_disabled'])) {
+        reset_rate_limit('login', $username);
+        clear_cookie_value('session_user');
+        json_response(['error' => '账户被封禁', 'code' => 'ACCOUNT_DISABLED'], 403);
+    }
 
     reset_rate_limit('login', $username);
     issue_session_cookie((int) $user['id'], (int) ($user['token_version'] ?? 0));

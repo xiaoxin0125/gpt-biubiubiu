@@ -23,6 +23,7 @@ export const useSession = (deps) => {
     syncGeneratedImages,
     setUser,
     setError,
+    setAuthPersistentNotice,
     setImages,
     setHistory,
     setWallItems,
@@ -45,9 +46,11 @@ export const useSession = (deps) => {
   const submitAuth = async (event) => {
     event.preventDefault();
     setError('');
+    setAuthPersistentNotice(null);
+    const endpointMode = authMode === 'register' ? 'register' : 'login';
 
     try {
-      const data = await requestJson(`/api/auth/${authMode === 'login' ? 'login' : 'register'}`, {
+      const data = await requestJson(`/api/auth/${endpointMode}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(authForm),
@@ -61,9 +64,15 @@ export const useSession = (deps) => {
         await syncGeneratedImages({ user: data.user });
       }
       setAuthForm(emptyAuthForm);
+      setAuthPersistentNotice(null);
       setAuthTab('profile');
       setActiveDialog(data.user ? 'auth' : null);
     } catch (authError) {
+      if (authError?.code === 'ACCOUNT_DISABLED') {
+        setAuthPersistentNotice({ type: 'ban' });
+        setError('');
+        return;
+      }
       setError(authError instanceof Error ? authError.message : '账号操作失败');
     }
   };
@@ -74,6 +83,7 @@ export const useSession = (deps) => {
     } finally {
       saveHistory([]);
       setUser(null);
+      setAuthPersistentNotice(null);
       setImages([]);
       setHistory([]);
       setWallItems([]);
