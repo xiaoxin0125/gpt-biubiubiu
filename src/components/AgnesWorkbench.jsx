@@ -20,7 +20,7 @@ import ScrollTopButton from './ScrollTopButton';
 import { apiConfigHasKeyForScope, apiConfigLabelForScope, requestReferenceImageUpload } from '../lib/api';
 import { createImageSrc } from '../lib/images';
 import { estimateImageAspectRatio, getImageIdentity, getMasonryColumns } from '../lib/board';
-import { clampNumber } from '../lib/math';
+import { clampNumber, normalizePercent } from '../lib/math';
 import { getAgnesVideoDraftSize, getAvailableRatios, getDraftSize, parseSize } from '../lib/size';
 import { useAgnesGeneration } from '../hooks/useAgnesGeneration';
 import { useBoard } from '../hooks/useBoard';
@@ -227,24 +227,43 @@ const AgnesResults = ({
     if (isVideo) {
       const videoUrl = String(item.videoUrl || '').trim();
       const responseSize = getDisplayVideoSize(item);
-      const caption = item.error || [statusLabel(item.status), item.progress ? `进度 ${item.progress}` : '', item.seconds ? `${item.seconds}s` : '', responseSize].filter(Boolean).join(' · ') || 'Agnes 视频任务';
+      const progress = normalizePercent(item.progress, isFailed ? '' : isPending ? 0 : 100);
+      const hasProgress = progress !== '';
+      const progressLabel = hasProgress ? `${progress}%` : '未知';
+      const statusNotice = String(item.statusNotice || '').trim();
+      const caption = item.error || [statusLabel(item.status), hasProgress ? `进度 ${progressLabel}` : '', item.seconds ? `${item.seconds}s` : '', responseSize].filter(Boolean).join(' · ') || 'Agnes 视频任务';
       return (
         <ResultShell key={`video-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)} onDelete={() => deleteImage?.(item)}>
           <div className="agnes-video-card-body">
-            {videoUrl && isHttpUrl(videoUrl) ? (
-              <video src={videoUrl} controls playsInline onClick={(event) => event.stopPropagation()} />
-            ) : (
-              <div className="pending-preview">
-                <span className="loading-ring" aria-hidden="true" />
-                <strong>{isFailed ? '任务失败' : statusLabel(item.status)}</strong>
-                <p>{item.error || item.videoId || '等待 Agnes 返回视频结果。'}</p>
-              </div>
-            )}
+            <div className="agnes-video-preview-wrap">
+              {videoUrl && isHttpUrl(videoUrl) ? (
+                <video src={videoUrl} controls playsInline onClick={(event) => event.stopPropagation()} />
+              ) : (
+                <div className="pending-preview agnes-video-pending-preview">
+                  <span className="loading-ring" aria-hidden="true" />
+                  <strong>{isFailed ? '任务失败' : statusLabel(item.status)}</strong>
+                  <p>{item.error || statusNotice || item.videoId || '等待 Agnes 返回视频结果。'}</p>
+                </div>
+              )}
+              {isPending && hasProgress ? (
+                <div className="agnes-progress agnes-card-progress" role="progressbar" aria-label="视频生成进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}>
+                  <div className="agnes-progress-head">
+                    <span>当前进度</span>
+                    <strong>{progressLabel}</strong>
+                  </div>
+                  <span className="agnes-progress-track">
+                    <span style={{ width: `${progress}%` }} />
+                  </span>
+                </div>
+              ) : null}
+            </div>
             <div className="agnes-task-meta">
               <span>{modeLabel(item.mode)}</span>
               <span>{responseSize}</span>
+              {hasProgress ? <span>进度 {progressLabel}</span> : null}
               {item.seconds ? <span>{item.seconds} 秒</span> : null}
               <span>{item.numFrames || defaultAgnesVideoForm.numFrames} 帧 / {item.frameRate || defaultAgnesVideoForm.frameRate} fps</span>
+              {statusNotice ? <span>{statusNotice}</span> : null}
               {videoUrl && !isHttpUrl(videoUrl) ? <span>结果字段：{videoUrl}</span> : null}
             </div>
           </div>
@@ -474,6 +493,7 @@ export default function AgnesWorkbench({
       item.status,
       item.rawStatus,
       item.error,
+      item.statusNotice,
       item.videoId,
       item.videoUrl,
       item.mode,

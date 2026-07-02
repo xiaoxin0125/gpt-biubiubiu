@@ -3091,31 +3091,125 @@ select option {
 
 .agnes-video-card-body {
   display: grid;
-  min-height: 280px;
+  grid-template-rows: auto auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--paper-2);
+}
+
+.agnes-video-preview-wrap {
+  position: relative;
+  display: grid;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  min-height: 0;
+  overflow: hidden;
   background: var(--paper-2);
 }
 
 .agnes-video-card-body video {
   display: block;
   width: 100%;
-  min-height: 220px;
-  max-height: 420px;
+  height: 100%;
+  min-height: 0;
+  object-fit: cover;
   background: var(--black);
 }
 
 .agnes-task-meta {
   display: grid;
   gap: 4px;
+  min-width: 0;
+  max-height: 118px;
+  overflow: hidden;
   padding: 9px 10px;
   border-top: 2px solid var(--line);
   background: var(--white);
 }
 
 .agnes-task-meta span {
+  overflow: hidden;
   color: var(--muted);
   font-size: 0.74rem;
   font-weight: 820;
   line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agnes-video-pending-preview {
+  min-height: 0;
+  overflow: hidden;
+  padding: 18px 16px 52px;
+}
+
+.agnes-video-pending-preview p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.agnes-progress {
+  display: grid;
+  width: min(82%, 260px);
+  gap: 7px;
+  margin-top: 2px;
+}
+
+.agnes-card-progress {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  left: 14px;
+  z-index: 1;
+  width: auto;
+  margin: 0;
+  padding: 7px 8px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.agnes-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--black);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.agnes-progress-head span {
+  color: var(--muted);
+}
+
+.agnes-progress-head strong {
+  font-size: 0.78rem;
+  font-weight: 950;
+}
+
+.agnes-progress-track {
+  display: block;
+  height: 10px;
+  overflow: hidden;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: var(--white);
+}
+
+.agnes-progress-track span {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  border-radius: 999px;
+  background: var(--black);
+  transition: width 260ms ease;
+}
+
+.detail-agnes-progress {
+  width: min(78%, 340px);
 }
 
 .agnes-bottom-workbench {

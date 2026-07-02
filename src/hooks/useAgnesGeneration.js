@@ -11,10 +11,15 @@ import {
   requestSharedAgnesJson,
   requestSharedAgnesResult,
 } from '../lib/api';
-import { clampNumber } from '../lib/math';
+import { clampNumber, normalizePercent } from '../lib/math';
 
-const pollDelayMs = 3000;
-const maxPollAttempts = 80;
+const pollDelayMs = 6000;
+const maxPollAttempts = 120;
+const pollRateLimitDelayMs = 20000;
+const maxPollDelayMs = 45000;
+const manualRefreshThrottleMs = 12000;
+
+const isRateLimitError = (error) => /rate limit|too many|429|exceeded/i.test(String(error?.message || error || ''));
 
 const splitInputs = (value) => String(value || '')
   .split(/\r?\n/)
@@ -94,12 +99,14 @@ export const normalizeAgnesVideoResult = (data = {}) => {
       ? 'failed'
       : 'running';
 
+  const progress = normalizePercent(progressValue, status === 'completed' ? 100 : status === 'failed' ? '' : 0);
+
   return {
     status,
     rawStatus: rawStatus || status,
     videoId,
     videoUrl,
-    progress: progressValue === null || progressValue === undefined || progressValue === '' ? '' : String(progressValue),
+    progress,
     seconds: source.seconds ?? body.seconds ?? resultNode.seconds ?? outputNode.seconds ?? '',
     size: source.size ?? body.size ?? resultNode.size ?? outputNode.size ?? '',
     error: firstString(source.error, source.message, body.error?.message, body.error, body.message),
@@ -121,7 +128,8 @@ const validateVideoForm = (form) => {
   if (!form.prompt.trim()) return '请输入 Agnes 视频提示词。';
   if (!Number.isFinite(numFrames) || numFrames < 9 || numFrames > 441 || (numFrames - 1) % 8 !== 0) return '视频帧数必须小于等于 441，并符合 8n + 1。';
   if (!Number.isFinite(frameRate) || frameRate < 1 || frameRate > 60) return '帧率必须在 1–60 之间。';
-  if (apiMode === 'keyframes' && !String(form.image || form.extraImages || '').trim()) return '关键帧模式需要至少提供一张图片 URL 或 Base64。';
+  const imageCount = [String(form.image || '').trim(), ...splitInputs(form.extraImages)].filter(Boolean).length;
+  if (apiMode === 'keyframes' && imageCount < 2) return '关键帧模式需要至少提供两张图片 URL 或 Base64。';
   return '';
 };
 
@@ -143,9 +151,10 @@ const buildAgnesImagePayload = (form, category) => {
 };
 
 const buildAgnesVideoPayload = (form) => {
-  const images = [form.image.trim(), ...splitInputs(form.extraImages)].filter(Boolean);
-  const extraBody = { mode: normalizeAgnesVideoMode(form.mode) };
-  if (images.length) extraBody.image = images.length === 1 ? images[0] : images;
+  const primaryImage = String(form.image || '').trim();
+  const extraImages = splitInputs(form.extraImages);
+  const images = [primaryImage, ...extraImages].filter(Boolean);
+  const apiMode = normalizeAgnesVideoMode(form.mode);
 
   const payload = {
     model: form.model || defaultAgnesVideoForm.model,
@@ -154,8 +163,18 @@ const buildAgnesVideoPayload = (form) => {
     height: Number(form.height),
     num_frames: Number(form.numFrames),
     frame_rate: Number(form.frameRate),
-    extra_body: extraBody,
   };
+
+  if (apiMode === 'keyframes') {
+    payload.extra_body = {
+      image: images,
+      mode: 'keyframes',
+    };
+  } else if (images.length === 1) {
+    payload.image = images[0];
+  } else if (images.length > 1) {
+    payload.extra_body = { image: images };
+  }
 
   if (String(form.numInferenceSteps).trim()) payload.num_inference_steps = Number(form.numInferenceSteps);
   if (String(form.seed).trim()) payload.seed = Number(form.seed);
@@ -179,6 +198,7 @@ export const useAgnesGeneration = ({
   const [imageLoading, setImageLoading] = useState(false);
   const [videoLoading, setVideoLoading] = useState(false);
   const cancelledRef = useRef(false);
+  const lastVideoRefreshAtRef = useRef(0);
 
   useEffect(() => () => {
     cancelledRef.current = true;
@@ -290,27 +310,50 @@ export const useAgnesGeneration = ({
 
   const pollVideoTask = useCallback(async ({ client, taskId, videoId }) => {
     let latestVideoId = videoId || taskId;
+    let nextDelayMs = pollDelayMs;
     for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
       if (cancelledRef.current) return;
-      const data = await callAgnesResult({ client, videoId: latestVideoId });
-      const normalized = normalizeAgnesVideoResult(data);
-      latestVideoId = normalized.videoId || latestVideoId;
-      let nextTask = null;
-      setVideoTasks((items) => items.map((item) => {
-        if (item.id !== taskId) return item;
-        const updatedAt = new Date().toISOString();
-        nextTask = {
-          ...item,
-          ...normalized,
-          videoId: latestVideoId,
-          updatedAt,
-          ...(['completed', 'failed'].includes(normalized.status) ? { finishedAt: updatedAt } : {}),
-        };
-        return nextTask;
-      }));
-      if (nextTask && typeof persistVideoTask === 'function') persistVideoTask(nextTask);
-      if (normalized.status === 'completed' || normalized.status === 'failed') return;
-      await wait(pollDelayMs);
+      try {
+        const data = await callAgnesResult({ client, videoId: latestVideoId });
+        const normalized = normalizeAgnesVideoResult(data);
+        latestVideoId = normalized.videoId || latestVideoId;
+        nextDelayMs = pollDelayMs;
+        let nextTask = null;
+        setVideoTasks((items) => items.map((item) => {
+          if (item.id !== taskId) return item;
+          const updatedAt = new Date().toISOString();
+          nextTask = {
+            ...item,
+            ...normalized,
+            videoId: latestVideoId,
+            error: normalized.error || '',
+            statusNotice: '',
+            updatedAt,
+            ...(['completed', 'failed'].includes(normalized.status) ? { finishedAt: updatedAt } : {}),
+          };
+          return nextTask;
+        }));
+        if (nextTask && typeof persistVideoTask === 'function') persistVideoTask(nextTask);
+        if (normalized.status === 'completed' || normalized.status === 'failed') return;
+      } catch (error) {
+        if (!isRateLimitError(error)) throw error;
+        nextDelayMs = Math.min(maxPollDelayMs, Math.max(pollRateLimitDelayMs, nextDelayMs * 2));
+        let throttledTask = null;
+        setVideoTasks((items) => items.map((item) => {
+          if (item.id !== taskId) return item;
+          throttledTask = {
+            ...item,
+            status: item.status === 'pending' ? 'running' : item.status,
+            rawStatus: 'rate_limited',
+            statusNotice: '状态查询过快，已自动降低刷新频率。',
+            videoId: latestVideoId,
+            updatedAt: new Date().toISOString(),
+          };
+          return throttledTask;
+        }));
+        if (throttledTask && typeof persistVideoTask === 'function') persistVideoTask(throttledTask);
+      }
+      await wait(nextDelayMs);
     }
     let timeoutTask = null;
     setVideoTasks((items) => items.map((item) => {
@@ -364,18 +407,20 @@ export const useAgnesGeneration = ({
       const client = await createRequestClient({ config: activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey });
       const payload = buildAgnesVideoPayload(videoForm);
       const data = await callAgnesJson({ client, path: '/v1/videos', payload });
-      const videoId = extractVideoId(data);
+      const createdResult = normalizeAgnesVideoResult(data);
+      const videoId = createdResult.videoId || extractVideoId(data);
       if (!videoId) throw new Error('Agnes 未返回 video_id 或 task_id。');
       const runningTask = {
         ...pendingTask,
-        status: 'running',
-        rawStatus: 'created',
+        ...createdResult,
+        status: createdResult.status || 'running',
+        rawStatus: createdResult.rawStatus || 'created',
         videoId,
         apiName: client.category.apiName || defaultAgnesApiCategory.apiName,
       };
       setVideoTasks((items) => items.map((item) => (item.id === localId ? runningTask : item)));
       if (typeof persistVideoTask === 'function') persistVideoTask(runningTask);
-      await pollVideoTask({ client, taskId: localId, videoId });
+      if (!['completed', 'failed'].includes(runningTask.status)) await pollVideoTask({ client, taskId: localId, videoId });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Agnes 视频生成失败';
       setError(message);
@@ -388,24 +433,46 @@ export const useAgnesGeneration = ({
   const refreshVideoTasks = useCallback(async () => {
     const targets = videoTasks.filter((task) => task.videoId && !['completed', 'failed'].includes(task.status));
     if (!targets.length) return;
+    const now = Date.now();
+    if (now - lastVideoRefreshAtRef.current < manualRefreshThrottleMs) {
+      setError('视频状态刷新太频繁，请稍后再试。');
+      return;
+    }
+    lastVideoRefreshAtRef.current = now;
 
     setVideoLoading(true);
     setError('');
     try {
       const client = await createRequestClient({ config: activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey });
-      const updates = await Promise.all(targets.map(async (task) => {
-        const data = await callAgnesResult({ client, videoId: task.videoId });
-        return { id: task.id, normalized: normalizeAgnesVideoResult(data) };
-      }));
+      const updates = [];
+      for (const task of targets) {
+        try {
+          const data = await callAgnesResult({ client, videoId: task.videoId });
+          updates.push({ id: task.id, normalized: normalizeAgnesVideoResult(data) });
+          if (targets.length > 1) await wait(pollDelayMs);
+        } catch (error) {
+          if (!isRateLimitError(error)) throw error;
+          updates.push({ id: task.id, rateLimited: true });
+          setError('Agnes 状态查询频率受限，已降低刷新频率。');
+          break;
+        }
+      }
       const updatedAt = new Date().toISOString();
       const persistedTasks = [];
       setVideoTasks((items) => items.map((item) => {
         const update = updates.find((entry) => entry.id === item.id);
         if (!update) return item;
-        const nextTask = {
+        const nextTask = update.rateLimited ? {
+          ...item,
+          rawStatus: 'rate_limited',
+          statusNotice: '状态查询过快，已自动降低刷新频率。',
+          updatedAt,
+        } : {
           ...item,
           ...update.normalized,
           videoId: update.normalized.videoId || item.videoId,
+          error: update.normalized.error || '',
+          statusNotice: '',
           updatedAt,
           ...(['completed', 'failed'].includes(update.normalized.status) ? { finishedAt: updatedAt } : {}),
         };
@@ -421,7 +488,10 @@ export const useAgnesGeneration = ({
   }, [activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, persistVideoTask, setError, syncDirectApiKey, videoTasks]);
 
   const refreshVideoHistoryTasks = useCallback(async (tasks = []) => {
-    const targets = tasks.filter((task) => String(task?.videoId || task?.video_id || '').trim());
+    const targets = tasks.filter((task) => {
+      if (!String(task?.videoId || task?.video_id || '').trim()) return false;
+      return !['completed', 'failed'].includes(String(task?.status || '').trim());
+    });
     if (!targets.length) return [];
 
     setVideoLoading(true);
@@ -429,21 +499,31 @@ export const useAgnesGeneration = ({
     try {
       const client = await createRequestClient({ config: activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey });
       const updatedAt = new Date().toISOString();
-      const refreshedTasks = await Promise.all(targets.map(async (task) => {
-        const data = await callAgnesResult({ client, videoId: task.videoId || task.video_id });
-        const normalized = normalizeAgnesVideoResult(data);
-        const nextTask = {
-          ...task,
-          ...normalized,
-          videoId: normalized.videoId || task.videoId || task.video_id,
-          source: 'agnes-video',
-          mediaType: 'video',
-          updatedAt,
-          ...(['completed', 'failed'].includes(normalized.status) ? { finishedAt: updatedAt } : {}),
-        };
-        if (typeof persistVideoTask === 'function') persistVideoTask(nextTask);
-        return nextTask;
-      }));
+      const refreshedTasks = [];
+      for (const task of targets) {
+        try {
+          const data = await callAgnesResult({ client, videoId: task.videoId || task.video_id });
+          const normalized = normalizeAgnesVideoResult(data);
+          const nextTask = {
+            ...task,
+            ...normalized,
+            videoId: normalized.videoId || task.videoId || task.video_id,
+            error: normalized.error || '',
+            statusNotice: '',
+            source: 'agnes-video',
+            mediaType: 'video',
+            updatedAt,
+            ...(['completed', 'failed'].includes(normalized.status) ? { finishedAt: updatedAt } : {}),
+          };
+          if (typeof persistVideoTask === 'function') persistVideoTask(nextTask);
+          refreshedTasks.push(nextTask);
+          if (targets.length > 1) await wait(pollDelayMs);
+        } catch (error) {
+          if (!isRateLimitError(error)) throw error;
+          setError('Agnes 状态查询频率受限，已降低刷新频率。');
+          break;
+        }
+      }
       return refreshedTasks;
     } catch (error) {
       setError(error instanceof Error ? error.message : '刷新 Agnes 视频历史失败');
