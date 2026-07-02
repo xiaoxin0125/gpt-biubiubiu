@@ -687,28 +687,37 @@ export default function AgnesWorkbench({
 
             {activeTab === 'image' ? (
               <>
-                <div className="control-field size-control workbench-extra-control">
-                  <span>尺寸</span>
-                  <button type="button" className="tool-pill" onClick={openImageSizeDialog}>
-                    {imageForm.size || '自动'}
-                  </button>
+                <div className="agnes-image-options-column">
+                  <div className="control-field size-control workbench-extra-control">
+                    <span>尺寸</span>
+                    <button type="button" className="tool-pill" onClick={openImageSizeDialog}>
+                      {imageForm.size || '自动'}
+                    </button>
+                  </div>
+                  {renderSelect({
+                    id: 'agnes-image-response-format',
+                    label: '返回格式',
+                    value: imageForm.responseFormat,
+                    options: agnesResponseFormatOptions,
+                    onChange: (value) => updateImageForm('responseFormat', value),
+                    className: 'control-field response-format-control workbench-extra-control',
+                  })}
                 </div>
-                {renderSelect({
-                  id: 'agnes-image-response-format',
-                  label: '返回格式',
-                  value: imageForm.responseFormat,
-                  options: agnesResponseFormatOptions,
-                  onChange: (value) => updateImageForm('responseFormat', value),
-                  className: 'control-field response-format-control workbench-extra-control',
-                })}
-                <label className={uploadedImageReferences.length ? 'control-field file-control has-file icon-file-control' : 'control-field file-control icon-file-control'} title={uploadedReferenceNames || '上传参考图'} aria-label="上传参考图">
-                  <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleImageReferenceChange} />
-                  <ReferenceUploadIcon count={uploadedImageReferences.length} />
-                </label>
-                <label className="control-field workbench-extra-control agnes-wide-control agnes-reference-input-control">
-                  <span>参考图 URL / Base64</span>
-                  <textarea value={imageForm.imageInputs} onChange={(event) => updateImageForm('imageInputs', event.target.value)} rows={2} placeholder="每行一张图片；可上传自动回填，也可手动填写" />
-                </label>
+                <div className="agnes-image-reference-column">
+                  <label className="control-field workbench-extra-control agnes-wide-control agnes-reference-input-control">
+                    <span>参考图 URL / Base64</span>
+                    <textarea value={imageForm.imageInputs} onChange={(event) => updateImageForm('imageInputs', event.target.value)} rows={2} placeholder="每行一张图片；可上传自动回填，也可手动填写" />
+                  </label>
+                  <div className="agnes-image-action-column">
+                    <label className={uploadedImageReferences.length ? 'control-field file-control has-file icon-file-control' : 'control-field file-control icon-file-control'} title={uploadedReferenceNames || '上传参考图'} aria-label="上传参考图">
+                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleImageReferenceChange} />
+                      <ReferenceUploadIcon count={uploadedImageReferences.length} />
+                    </label>
+                    <button type="submit" className="send-button" disabled={!configured || activeLoading} aria-label="生成图片">
+                      {activeLoading ? <LoadingDotsIcon /> : <SendIcon />}
+                    </button>
+                  </div>
+                </div>
               </>
             ) : (
               <>
@@ -763,9 +772,11 @@ export default function AgnesWorkbench({
               </>
             )}
 
-            <button type="submit" className="send-button" disabled={!configured || activeLoading} aria-label={activeTab === 'image' ? '生成图片' : '创建视频任务'}>
-              {activeLoading ? <LoadingDotsIcon /> : <SendIcon />}
-            </button>
+            {activeTab === 'video' ? (
+              <button type="submit" className="send-button" disabled={!configured || activeLoading} aria-label="创建视频任务">
+                {activeLoading ? <LoadingDotsIcon /> : <SendIcon />}
+              </button>
+            ) : null}
           </div>
 
           {activeTab === 'image' && uploadedImageReferences.length ? (

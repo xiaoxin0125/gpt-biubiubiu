@@ -222,7 +222,7 @@ export const defaultAgnesApiCategory = {
 export const defaultAgnesImageForm = {
   model: 'agnes-image-2.1-flash',
   prompt: '',
-  size: '1024x768',
+  size: '',
   responseFormat: 'url',
   imageInputs: '',
 };

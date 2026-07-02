@@ -2952,7 +2952,7 @@ select option {
 
 .agnes-page {
   overflow: hidden;
-  padding-bottom: 188px;
+  padding-bottom: 260px;
 }
 
 .agnes-toolbar {
@@ -3018,8 +3018,53 @@ select option {
   flex: 1 0 auto;
 }
 
-.agnes-reference-input-control {
-  flex: 1 1 320px;
+.agnes-image-options-column {
+  display: grid;
+  flex: 0 0 128px;
+  align-self: end;
+  gap: 8px;
+}
+
+.agnes-image-options-column .control-field,
+.agnes-image-options-column .custom-select-field {
+  min-width: 0;
+  width: 100%;
+}
+
+.agnes-image-reference-column {
+  display: grid;
+  grid-template-columns: minmax(520px, 1fr) 40px;
+  flex: 1 1 620px;
+  align-items: end;
+  gap: 8px;
+  min-width: min(620px, 100%);
+}
+
+.agnes-image-action-column {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(2, 40px);
+  align-self: end;
+  gap: 8px;
+}
+
+.agnes-image-action-column .icon-file-control,
+.agnes-image-action-column .send-button {
+  width: 40px;
+  min-width: 40px;
+}
+
+.agnes-image-action-column .icon-file-control {
+  align-self: auto;
+}
+
+.agnes-image-action-column .send-button {
+  align-self: auto;
+}
+
+.agnes-workbench-actions .agnes-reference-input-control {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .agnes-mode-control,
@@ -3064,6 +3109,11 @@ select option {
   font-weight: 740;
   line-height: 1.45;
   resize: vertical;
+}
+
+.agnes-reference-input-control textarea {
+  min-height: 88px;
+  max-height: 160px;
 }
 
 .agnes-reference-preview {
@@ -3423,6 +3473,48 @@ select option {
     width: 100%;
     min-width: 0;
     height: 40px;
+  }
+
+  .agnes-workbench-actions .agnes-image-options-column,
+  .agnes-workbench-actions.is-expanded .agnes-image-options-column,
+  .agnes-workbench-actions .agnes-image-reference-column,
+  .agnes-workbench-actions.is-expanded .agnes-image-reference-column {
+    display: grid;
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .agnes-workbench-actions .agnes-image-options-column {
+    order: 1;
+    grid-template-columns: 1fr;
+  }
+
+  .agnes-workbench-actions .agnes-image-reference-column {
+    order: 2;
+    grid-template-columns: minmax(0, 1fr) 40px;
+    min-width: 0;
+  }
+
+  .agnes-workbench-actions .agnes-image-action-column,
+  .agnes-workbench-actions.is-expanded .agnes-image-action-column {
+    display: grid;
+    grid-template-rows: repeat(2, 40px);
+    gap: 8px;
+  }
+
+  .agnes-workbench-actions .agnes-image-action-column .icon-file-control,
+  .agnes-workbench-actions.is-expanded .agnes-image-action-column .icon-file-control,
+  .agnes-workbench-actions .agnes-image-action-column .send-button,
+  .agnes-workbench-actions.is-expanded .agnes-image-action-column .send-button {
+    grid-column: auto;
+    width: 40px;
+    min-width: 40px;
+  }
+
+  .agnes-workbench-actions .agnes-image-action-column .icon-file-control strong,
+  .agnes-workbench-actions .agnes-image-action-column .send-button {
+    width: 40px;
+    min-width: 40px;
   }
 }
 
