@@ -34,6 +34,7 @@ export default function SizeDialog({
   allowCustomSize = true,
   allowCustomRatio = true,
   normalizationNote = '',
+  normalizationTitle = 'Agnes Video V2.0 会对部分视频生成参数进行标准化处理',
   ratioGridClassName = '',
   modalClassName = '',
 }) {
@@ -176,7 +177,7 @@ export default function SizeDialog({
               <path d="m10 10 5 2-5 2v-4Z" />
             </svg>
           </span>
-          <strong>Agnes Video V2.0 会对部分视频生成参数进行标准化处理</strong>
+          <strong>{normalizationTitle}</strong>
           <span>{normalizationNote}</span>
         </div>
       ) : null}

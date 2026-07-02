@@ -165,7 +165,7 @@ const getDisplayVideoSize = (task) => (
   || '自动'
 );
 
-const videoSizeNormalizationNote = '当提交的 width、height 或宽高比与模型支持规格不完全匹配时，系统会自动映射到最接近的标准输出尺寸。';
+const videoSizeNormalizationNote = '所有画面比例（16:9、4:3、1:1、3:4、9:16）的最大帧数：1080p 为 169 帧，720p 为 409 帧，480p 为 961 帧。';
 
 const EmptyAgnesCanvas = ({ activeTab, configured, openAccount, emptyText }) => (
   <div className="empty-canvas agnes-empty-canvas">
@@ -473,7 +473,11 @@ export default function AgnesWorkbench({
   const displayVideoSize = activeVideoSize;
   const uploadedReferenceNames = uploadedImageReferences.map((item, index) => `图${index + 1}:${item.name}`).join('，');
   const uploadedVideoReferenceNames = uploadedVideoReferences.map((item, index) => `图${index + 1}:${item.name}`).join('，');
-  const workbenchClassName = workbenchExpanded ? 'workbench-actions agnes-workbench-actions is-expanded' : 'workbench-actions agnes-workbench-actions';
+  const workbenchClassName = [
+    'workbench-actions agnes-workbench-actions',
+    workbenchExpanded ? 'is-expanded' : '',
+    activeTab === 'image' ? 'is-image-workbench' : 'is-video-workbench',
+  ].filter(Boolean).join(' ');
   const agnesHistoryImages = useMemo(() => historyImages.filter(isAgnesHistoryImage), [historyImages]);
   const agnesHistoryVideos = useMemo(() => historyImages.filter(isAgnesHistoryVideo), [historyImages]);
   const agnesItems = useMemo(() => {
@@ -873,6 +877,22 @@ export default function AgnesWorkbench({
             <button type="button" className="workbench-toggle-button" onClick={() => setWorkbenchExpanded((current) => !current)} aria-expanded={workbenchExpanded} aria-label={workbenchExpanded ? '收起参数' : '展开参数'}>
               <TuneIcon />
             </button>
+            <div className="agnes-primary-action-column">
+              {activeTab === 'image' ? (
+                <label className={uploadedImageReferences.length ? 'control-field file-control has-file icon-file-control agnes-primary-upload-control' : 'control-field file-control icon-file-control agnes-primary-upload-control'} title={uploadedReferenceNames || '上传参考图'} aria-label="上传参考图">
+                  <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleImageReferenceChange} />
+                  <ReferenceUploadIcon count={uploadedImageReferences.length} />
+                </label>
+              ) : (
+                <label className={uploadedVideoReferences.length ? 'control-field file-control has-file icon-file-control agnes-primary-upload-control' : 'control-field file-control icon-file-control agnes-primary-upload-control'} title={uploadedVideoReferenceNames || '上传视频图片'} aria-label="上传视频图片">
+                  <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleVideoImageUpload} />
+                  <ReferenceUploadIcon count={splitLines(videoForm.imageInputs).filter((line) => line.trim()).length} />
+                </label>
+              )}
+              <button type="submit" className="send-button agnes-primary-send-button" disabled={!configured || activeLoading} aria-label={activeTab === 'image' ? '生成图片' : '创建视频任务'}>
+                {activeLoading ? <LoadingDotsIcon /> : <SendIcon />}
+              </button>
+            </div>
 
             {activeTab === 'image' ? (
               <>
@@ -897,15 +917,6 @@ export default function AgnesWorkbench({
                     <span>参考图 URL / Base64</span>
                     <textarea value={imageForm.imageInputs} onChange={(event) => updateImageForm('imageInputs', event.target.value)} rows={2} placeholder="每行一张图片；可上传自动回填，也可手动填写" />
                   </label>
-                  <div className="agnes-image-action-column">
-                    <label className={uploadedImageReferences.length ? 'control-field file-control has-file icon-file-control' : 'control-field file-control icon-file-control'} title={uploadedReferenceNames || '上传参考图'} aria-label="上传参考图">
-                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleImageReferenceChange} />
-                      <ReferenceUploadIcon count={uploadedImageReferences.length} />
-                    </label>
-                    <button type="submit" className="send-button" disabled={!configured || activeLoading} aria-label="生成图片">
-                      {activeLoading ? <LoadingDotsIcon /> : <SendIcon />}
-                    </button>
-                  </div>
                 </div>
               </>
             ) : (
@@ -924,19 +935,19 @@ export default function AgnesWorkbench({
                     {videoResolution}
                   </button>
                 </div>
-                <label className="control-field count-field workbench-extra-control">
+                <label className="control-field count-field workbench-extra-control agnes-video-frames-control">
                   <span>帧数</span>
                   <input type="number" min="9" max="441" step="8" value={videoForm.numFrames} onChange={(event) => updateVideoForm('numFrames', event.target.value)} />
                 </label>
-                <label className="control-field count-field workbench-extra-control">
+                <label className="control-field count-field workbench-extra-control agnes-video-framerate-control">
                   <span>帧率</span>
                   <input type="number" min="1" max="60" value={videoForm.frameRate} onChange={(event) => updateVideoForm('frameRate', event.target.value)} />
                 </label>
-                <label className="control-field count-field workbench-extra-control">
+                <label className="control-field count-field workbench-extra-control agnes-video-steps-control">
                   <span>步数</span>
                   <input type="number" min="1" value={videoForm.numInferenceSteps} onChange={(event) => updateVideoForm('numInferenceSteps', event.target.value)} placeholder="可选" />
                 </label>
-                <label className="control-field count-field workbench-extra-control">
+                <label className="control-field count-field workbench-extra-control agnes-video-seed-control">
                   <span>Seed</span>
                   <input type="number" value={videoForm.seed} onChange={(event) => updateVideoForm('seed', event.target.value)} placeholder="可选" />
                 </label>
@@ -944,22 +955,13 @@ export default function AgnesWorkbench({
                   <span>估算</span>
                   <strong>{estimatedVideoSeconds.toFixed(1)} 秒</strong>
                 </div>
-                <label className="control-field workbench-extra-control agnes-wide-control">
+                <label className="control-field workbench-extra-control agnes-wide-control agnes-video-negative-control">
                   <span>负向提示词</span>
                   <textarea value={videoForm.negativePrompt} onChange={(event) => updateVideoForm('negativePrompt', event.target.value)} rows={2} placeholder="可选" />
                 </label>
                 <div className="control-field workbench-extra-control agnes-wide-control agnes-video-image-input-control">
                   <span>图片 URL / Base64</span>
                   <textarea value={videoForm.imageInputs} onChange={(event) => updateVideoForm('imageInputs', event.target.value)} rows={2} placeholder="每行一张；留空为文生视频，1 张走 image，多张走 extra_body.image" />
-                </div>
-                <div className="agnes-video-action-column">
-                  <label className={uploadedVideoReferences.length ? 'control-field file-control has-file icon-file-control agnes-inline-upload-control agnes-video-upload-control' : 'control-field file-control icon-file-control agnes-inline-upload-control agnes-video-upload-control'} title={uploadedVideoReferenceNames || '上传视频图片'} aria-label="上传视频图片">
-                    <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleVideoImageUpload} />
-                    <ReferenceUploadIcon count={splitLines(videoForm.imageInputs).filter((line) => line.trim()).length} />
-                  </label>
-                  <button type="submit" className="send-button" disabled={!configured || activeLoading} aria-label="创建视频任务">
-                    {activeLoading ? <LoadingDotsIcon /> : <SendIcon />}
-                  </button>
                 </div>
               </>
             )}
@@ -1039,6 +1041,7 @@ export default function AgnesWorkbench({
               allowCustomSize={false}
               allowCustomRatio={false}
               normalizationNote={videoSizeNormalizationNote}
+              normalizationTitle="尺寸时长限制"
               ratioGridClassName="video-ratio-list"
               modalClassName="video-size-modal"
             />
