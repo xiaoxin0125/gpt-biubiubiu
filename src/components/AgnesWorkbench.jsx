@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   API_CONFIG_SCOPE_AGNES,
+  BOARD_LOAD_DELAY_MS,
+  BOARD_PAGE_SIZE,
   MAX_REFERENCE_IMAGES,
   agnesBoardScopeOptions,
   agnesMediaOptions,
@@ -11,10 +13,14 @@ import {
   defaultSizeDraft,
 } from '../constants/options';
 import SizeDialog from './SizeDialog';
+import ScrollTopButton from './ScrollTopButton';
 import { apiConfigHasKeyForScope, apiConfigLabelForScope, requestReferenceImageUpload } from '../lib/api';
 import { createImageSrc } from '../lib/images';
+import { estimateImageAspectRatio, getImageIdentity, getMasonryColumns } from '../lib/board';
+import { clampNumber } from '../lib/math';
 import { getAvailableRatios, getDraftSize, parseSize } from '../lib/size';
 import { useAgnesGeneration } from '../hooks/useAgnesGeneration';
+import { useBoard } from '../hooks/useBoard';
 
 const statusLabel = (status) => {
   if (status === 'completed') return '已完成';
@@ -100,7 +106,22 @@ const EmptyAgnesCanvas = ({ activeTab, configured, openAccount, emptyText }) => 
   </div>
 );
 
-const ResultShell = ({ children, caption, className = '', onOpen }) => (
+const getAgnesSource = (item) => String(item?.source || item?.form?.source || '').trim();
+const isAgnesHistoryImage = (item) => getAgnesSource(item) === 'agnes-image';
+const isAgnesHistoryVideo = (item) => getAgnesSource(item) === 'agnes-video' || item?.mediaType === 'video';
+
+const uniqueByImageIdentity = (items) => {
+  const seen = new Set();
+  return items.filter((item) => {
+    const identity = getImageIdentity(item);
+    if (!identity) return true;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+};
+
+const ResultShell = ({ children, caption, className = '', onOpen, onDelete }) => (
   <figure
     className={`result-card agnes-result-card ${className}`.trim()}
     onClick={onOpen}
@@ -113,6 +134,19 @@ const ResultShell = ({ children, caption, className = '', onOpen }) => (
     role="button"
     tabIndex={0}
   >
+    {onDelete ? (
+      <button
+        type="button"
+        className="result-delete-button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onDelete();
+        }}
+        aria-label="删除作品"
+      >
+        ×
+      </button>
+    ) : null}
     {children}
     <figcaption className="result-caption" title={caption}>
       <span>{caption}</span>
@@ -120,60 +154,126 @@ const ResultShell = ({ children, caption, className = '', onOpen }) => (
   </figure>
 );
 
-const AgnesResults = ({ items, openDetail }) => {
-  if (!items.length) return null;
+const AgnesResults = ({
+  items,
+  masonryColumns,
+  masonryColumnCount,
+  boardLoadSentinelRef,
+  hasMoreItems,
+  loadingMore,
+  openDetail,
+  deleteImage,
+  imageLayoutMeta,
+  setImageLayoutMeta,
+}) => {
+  if (!items.length) {
+    if (!hasMoreItems && !loadingMore) return null;
 
-  const hasVideo = items.some((item) => item.mediaType === 'video');
+    return (
+      <>
+        <div className="board-load-sentinel" ref={boardLoadSentinelRef} aria-hidden="true" />
+        <div className="board-loader" role="status">
+          {loadingMore ? '加载更多作品...' : '继续加载作品...'}
+        </div>
+      </>
+    );
+  }
+
+  const renderResultItem = (item) => {
+    const isVideo = item.mediaType === 'video';
+    const isFailed = item.status === 'failed';
+    const isPending = item.status === 'pending' || item.status === 'running';
+
+    if (isVideo) {
+      const videoUrl = String(item.videoUrl || '').trim();
+      const caption = item.error || [statusLabel(item.status), item.progress ? `进度 ${item.progress}` : '', item.seconds ? `${item.seconds}s` : '', item.size || ''].filter(Boolean).join(' · ') || 'Agnes 视频任务';
+      return (
+        <ResultShell key={`video-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)} onDelete={() => deleteImage?.(item)}>
+          <div className="agnes-video-card-body">
+            {videoUrl && isHttpUrl(videoUrl) ? (
+              <video src={videoUrl} controls playsInline onClick={(event) => event.stopPropagation()} />
+            ) : (
+              <div className="pending-preview">
+                <span className="loading-ring" aria-hidden="true" />
+                <strong>{isFailed ? '任务失败' : statusLabel(item.status)}</strong>
+                <p>{item.error || item.videoId || '等待 Agnes 返回视频结果。'}</p>
+              </div>
+            )}
+            <div className="agnes-task-meta">
+              <span>{modeLabel(item.mode)}</span>
+              <span>{item.numFrames || defaultAgnesVideoForm.numFrames} 帧 / {item.frameRate || defaultAgnesVideoForm.frameRate} fps</span>
+              {videoUrl && !isHttpUrl(videoUrl) ? <span>结果字段：{videoUrl}</span> : null}
+            </div>
+          </div>
+        </ResultShell>
+      );
+    }
+
+    const src = createImageSrc(item);
+    const imageId = getImageIdentity(item);
+    const imageMeta = imageLayoutMeta[imageId] || {};
+    const aspectRatio = estimateImageAspectRatio(item, imageMeta);
+    const caption = item.error || item.apiName || 'Agnes API';
+    return (
+      <ResultShell key={`image-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''} ${src && !imageMeta.loaded ? 'is-image-loading' : ''}`} onOpen={() => openDetail?.(item)} onDelete={() => deleteImage?.(item)}>
+        <div className="result-image-wrap agnes-result-media" style={{ aspectRatio }}>
+          {src ? (
+            <>
+              {!imageMeta.loaded ? <div className="image-loading-placeholder" aria-hidden="true" /> : null}
+              <img
+                src={src}
+                alt={item.prompt || 'Agnes 生成图片'}
+                loading="lazy"
+                decoding="async"
+                onLoad={(event) => {
+                  const naturalWidth = event.currentTarget.naturalWidth || 1;
+                  const naturalHeight = event.currentTarget.naturalHeight || 1;
+                  setImageLayoutMeta((current) => ({
+                    ...current,
+                    [imageId]: {
+                      loaded: true,
+                      aspectRatio: clampNumber(naturalWidth / naturalHeight, 0.28, 3.2),
+                    },
+                  }));
+                }}
+                onError={() => {
+                  setImageLayoutMeta((current) => ({
+                    ...current,
+                    [imageId]: { ...(current[imageId] || {}), loaded: true, failed: true },
+                  }));
+                }}
+              />
+            </>
+          ) : (
+            <div className="pending-preview">
+              <span className="loading-ring" aria-hidden="true" />
+              <strong>{isFailed ? '生成失败' : '生成中...'}</strong>
+              {item.error ? <p>{item.error}</p> : null}
+            </div>
+          )}
+        </div>
+      </ResultShell>
+    );
+  };
 
   return (
-    <div className={hasVideo ? 'agnes-result-grid agnes-video-grid' : 'agnes-result-grid agnes-image-grid'}>
-      {items.map((item) => {
-        const isVideo = item.mediaType === 'video';
-        const isFailed = item.status === 'failed';
-        const isPending = item.status === 'pending' || item.status === 'running';
-
-        if (isVideo) {
-          const videoUrl = String(item.videoUrl || '').trim();
-          const caption = item.error || [statusLabel(item.status), item.progress ? `进度 ${item.progress}` : '', item.seconds ? `${item.seconds}s` : '', item.size || ''].filter(Boolean).join(' · ') || 'Agnes 视频任务';
-          return (
-            <ResultShell key={`video-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)}>
-              <div className="agnes-video-card-body">
-                {videoUrl && isHttpUrl(videoUrl) ? (
-                  <video src={videoUrl} controls playsInline onClick={(event) => event.stopPropagation()} />
-                ) : (
-                  <div className="pending-preview">
-                    <span className="loading-ring" aria-hidden="true" />
-                    <strong>{isFailed ? '任务失败' : statusLabel(item.status)}</strong>
-                    <p>{item.error || item.videoId || '等待 Agnes 返回视频结果。'}</p>
-                  </div>
-                )}
-                <div className="agnes-task-meta">
-                  <span>{modeLabel(item.mode)}</span>
-                  <span>{item.numFrames || defaultAgnesVideoForm.numFrames} 帧 / {item.frameRate || defaultAgnesVideoForm.frameRate} fps</span>
-                  {videoUrl && !isHttpUrl(videoUrl) ? <span>结果字段：{videoUrl}</span> : null}
-                </div>
-              </div>
-            </ResultShell>
-          );
-        }
-
-        const src = createImageSrc(item);
-        const caption = item.error || item.apiName || 'Agnes API';
-        return (
-          <ResultShell key={`image-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)}>
-            <div className="result-image-wrap agnes-result-media">
-              {src ? <img src={src} alt={item.prompt || 'Agnes 生成图片'} loading="lazy" decoding="async" /> : (
-                <div className="pending-preview">
-                  <span className="loading-ring" aria-hidden="true" />
-                  <strong>{isFailed ? '生成失败' : '生成中...'}</strong>
-                  {item.error ? <p>{item.error}</p> : null}
-                </div>
-              )}
-            </div>
-          </ResultShell>
-        );
-      })}
-    </div>
+    <>
+      <div className="masonry-board" style={{ '--masonry-columns': masonryColumnCount }}>
+        {masonryColumns.map((column) => (
+          <div className="masonry-column" key={column.id}>
+            {column.items.map(renderResultItem)}
+          </div>
+        ))}
+      </div>
+      <div className="board-load-sentinel" ref={boardLoadSentinelRef} aria-hidden="true" />
+      {hasMoreItems || loadingMore ? (
+        <div className="board-loader" role="status">
+          {loadingMore ? '加载更多作品...' : '继续下滑加载更多'}
+        </div>
+      ) : (
+        <div className="board-loader is-complete">已展示全部作品</div>
+      )}
+    </>
   );
 };
 
@@ -187,6 +287,13 @@ export default function AgnesWorkbench({
   setError,
   openAccount,
   openDetail,
+  deleteImage,
+  persistImageResults,
+  persistVideoTask,
+  historyImages = [],
+  historyHasMore = false,
+  loadMoreHistory,
+  refreshHistory,
 }) {
   const [activeTab, setActiveTab] = useState('image');
   const [agnesBoardScope, setAgnesBoardScope] = useState('current');
@@ -195,6 +302,8 @@ export default function AgnesWorkbench({
   const [imageSizeDialogOpen, setImageSizeDialogOpen] = useState(false);
   const [imageSizeDraft, setImageSizeDraft] = useState(defaultSizeDraft);
   const [uploadedImageReferences, setUploadedImageReferences] = useState([]);
+  const [imageLayoutMeta, setImageLayoutMeta] = useState({});
+  const refreshedVideoHistoryRef = useRef(new Set());
   const {
     imageForm,
     videoForm,
@@ -211,7 +320,17 @@ export default function AgnesWorkbench({
     removeImageResult,
     removeVideoTask,
     refreshVideoTasks,
-  } = useAgnesGeneration({ activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey, setError });
+    refreshVideoHistoryTasks,
+  } = useAgnesGeneration({ activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey, setError, persistImageResults, persistVideoTask });
+  const {
+    boardVisibleCount,
+    setBoardVisibleCount,
+    boardLoadingMore,
+    setBoardLoadingMore,
+    masonryColumnCount,
+    boardRef,
+    boardLoadSentinelRef,
+  } = useBoard();
 
   const configured = Boolean(user) && apiConfigHasKeyForScope(activeAgnesApiConfig, API_CONFIG_SCOPE_AGNES);
   const apiName = useMemo(
@@ -226,6 +345,8 @@ export default function AgnesWorkbench({
   const displayImageSize = activeImageSize || '自动';
   const uploadedReferenceNames = uploadedImageReferences.map((item, index) => `图${index + 1}:${item.name}`).join('，');
   const workbenchClassName = workbenchExpanded ? 'workbench-actions agnes-workbench-actions is-expanded' : 'workbench-actions agnes-workbench-actions';
+  const agnesHistoryImages = useMemo(() => historyImages.filter(isAgnesHistoryImage), [historyImages]);
+  const agnesHistoryVideos = useMemo(() => historyImages.filter(isAgnesHistoryVideo), [historyImages]);
   const agnesItems = useMemo(() => {
     const imageItems = imageResults.map((item) => ({
       ...item,
@@ -243,6 +364,22 @@ export default function AgnesWorkbench({
       },
       removeFromAgnes: () => removeImageResult(item.id),
     }));
+    const historyImageItems = agnesHistoryImages.map((item) => ({
+      ...item,
+      source: 'agnes-image',
+      mediaType: 'image',
+      apiName: item.apiName || item.form?.apiName || apiName,
+      form: {
+        ...imageForm,
+        ...(item.form || {}),
+        prompt: item.prompt || item.form?.prompt || '',
+        response_format: item.form?.response_format || item.form?.responseFormat || imageForm.responseFormat,
+        responseFormat: item.form?.responseFormat || item.form?.response_format || imageForm.responseFormat,
+        size: item.form?.size || item.size || '',
+        source: 'agnes-image',
+      },
+    }));
+    const allImageItems = uniqueByImageIdentity([...imageItems, ...historyImageItems]);
     const videoItems = videoTasks.map((task) => ({
       ...task,
       source: 'agnes-video',
@@ -259,12 +396,31 @@ export default function AgnesWorkbench({
       },
       removeFromAgnes: () => removeVideoTask(task.id),
     }));
-    const sourceItems = agnesBoardScope === 'all'
-      ? [...imageItems, ...videoItems].sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime())
-      : activeTab === 'image' ? imageItems : videoItems;
+    const historyVideoItems = agnesHistoryVideos.map((item) => ({
+      ...item,
+      source: 'agnes-video',
+      mediaType: 'video',
+      apiName: item.apiName || item.form?.apiName || apiName,
+      form: {
+        ...videoForm,
+        ...(item.form || {}),
+        prompt: item.prompt || item.form?.prompt || '',
+        size: item.form?.size || item.size || `${item.width || videoForm.width}x${item.height || videoForm.height}`,
+        response_format: 'url',
+        responseFormat: 'url',
+        source: 'agnes-video',
+      },
+    }));
+    const allVideoItems = uniqueByImageIdentity([...videoItems, ...historyVideoItems]);
+    const sourceItems = activeTab === 'image'
+      ? (agnesBoardScope === 'all' ? allImageItems : imageItems)
+      : (agnesBoardScope === 'all' ? allVideoItems : videoItems);
+    const scopedItems = agnesBoardScope === 'all'
+      ? [...sourceItems].sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime())
+      : sourceItems;
     const keyword = agnesBoardSearch.trim().toLowerCase();
-    if (!keyword) return sourceItems;
-    return sourceItems.filter((item) => [
+    if (!keyword) return scopedItems;
+    return scopedItems.filter((item) => [
       item.prompt,
       item.apiName,
       item.status,
@@ -275,9 +431,91 @@ export default function AgnesWorkbench({
       item.mode,
       item.form?.size,
     ].filter(Boolean).join(' ').toLowerCase().includes(keyword));
-  }, [activeTab, agnesBoardScope, agnesBoardSearch, apiName, imageForm, imageResults, removeImageResult, removeVideoTask, videoForm, videoTasks]);
-  const activeResultCount = agnesBoardScope === 'all' ? imageResults.length + videoTasks.length : activeTab === 'image' ? imageResults.length : videoTasks.length;
+  }, [activeTab, agnesBoardScope, agnesBoardSearch, agnesHistoryImages, agnesHistoryVideos, apiName, imageForm, imageResults, removeImageResult, removeVideoTask, videoForm, videoTasks]);
+  const activeResultCount = activeTab === 'image'
+    ? (agnesBoardScope === 'all' ? imageResults.length + agnesHistoryImages.length : imageResults.length)
+    : (agnesBoardScope === 'all' ? videoTasks.length + agnesHistoryVideos.length : videoTasks.length);
+  const visibleAgnesItems = agnesItems.slice(0, boardVisibleCount);
+  const hasMoreLoadedAgnesItems = visibleAgnesItems.length < agnesItems.length;
+  const hasMoreHistoryItems = Boolean(user && activeTab === 'image' && agnesBoardScope === 'all' && historyHasMore);
+  const hasMoreAgnesItems = hasMoreLoadedAgnesItems || hasMoreHistoryItems;
+  const masonryColumns = useMemo(
+    () => getMasonryColumns(visibleAgnesItems, masonryColumnCount, imageLayoutMeta),
+    [imageLayoutMeta, masonryColumnCount, visibleAgnesItems],
+  );
   const emptyText = agnesBoardSearch.trim() && activeResultCount ? '没有匹配的 Agnes 作品' : '';
+  const showAgnesResults = visibleAgnesItems.length > 0 || hasMoreAgnesItems || boardLoadingMore;
+
+  useEffect(() => {
+    setBoardVisibleCount(BOARD_PAGE_SIZE);
+    setBoardLoadingMore(false);
+    if (boardRef.current) boardRef.current.scrollTop = 0;
+  }, [activeTab, agnesBoardScope, agnesBoardSearch, setBoardLoadingMore, setBoardVisibleCount, boardRef]);
+
+  useEffect(() => {
+    if (!hasMoreAgnesItems || boardLoadingMore) return undefined;
+
+    const loadNextPage = () => {
+      setBoardLoadingMore(true);
+      if (hasMoreLoadedAgnesItems) {
+        window.setTimeout(() => {
+          setBoardVisibleCount((count) => Math.min(count + BOARD_PAGE_SIZE, agnesItems.length));
+          setBoardLoadingMore(false);
+        }, BOARD_LOAD_DELAY_MS);
+        return;
+      }
+
+      if (hasMoreHistoryItems && typeof loadMoreHistory === 'function') {
+        Promise.resolve(loadMoreHistory()).finally(() => setBoardLoadingMore(false));
+        return;
+      }
+
+      setBoardLoadingMore(false);
+    };
+
+    const sentinel = boardLoadSentinelRef.current;
+    const board = boardRef.current;
+    const usePageScroll = typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches;
+    const scrollRoot = usePageScroll ? null : board;
+
+    if (sentinel && typeof IntersectionObserver !== 'undefined') {
+      const observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadNextPage();
+      }, { root: scrollRoot, rootMargin: '260px 0px 260px 0px' });
+      observer.observe(sentinel);
+      return () => observer.disconnect();
+    }
+
+    const scrollTarget = usePageScroll ? window : board;
+    if (!scrollTarget) return undefined;
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        ticking = false;
+        if (usePageScroll) {
+          const doc = document.documentElement;
+          if (window.innerHeight + window.scrollY >= doc.scrollHeight - 260) loadNextPage();
+        } else if (board && board.scrollTop + board.clientHeight >= board.scrollHeight - 260) {
+          loadNextPage();
+        }
+      });
+    };
+    scrollTarget.addEventListener('scroll', onScroll, { passive: true });
+    return () => scrollTarget.removeEventListener('scroll', onScroll);
+  }, [agnesItems.length, boardLoadSentinelRef, boardLoadingMore, boardRef, hasMoreAgnesItems, hasMoreHistoryItems, hasMoreLoadedAgnesItems, loadMoreHistory, setBoardLoadingMore, setBoardVisibleCount]);
+
+  useEffect(() => {
+    if (activeTab !== 'video' || agnesBoardScope !== 'all' || typeof refreshVideoHistoryTasks !== 'function') return;
+    const targets = agnesHistoryVideos.filter((item) => {
+      const videoId = String(item.videoId || item.video_id || '').trim();
+      if (!videoId || refreshedVideoHistoryRef.current.has(videoId)) return false;
+      refreshedVideoHistoryRef.current.add(videoId);
+      return true;
+    });
+    if (targets.length) refreshVideoHistoryTasks(targets);
+  }, [activeTab, agnesBoardScope, agnesHistoryVideos, refreshVideoHistoryTasks]);
 
   const updateActivePrompt = (value) => {
     if (activeTab === 'image') updateImageForm('prompt', value);
@@ -354,7 +592,14 @@ export default function AgnesWorkbench({
   };
 
   const refreshActiveResults = () => {
-    if (activeTab === 'video' || agnesBoardScope === 'all') refreshVideoTasks();
+    if (agnesBoardScope === 'all' && activeTab === 'image') refreshHistory?.();
+    if (activeTab === 'video') {
+      refreshVideoTasks();
+      if (agnesBoardScope === 'all' && typeof refreshVideoHistoryTasks === 'function') {
+        refreshedVideoHistoryRef.current.clear();
+        refreshVideoHistoryTasks(agnesHistoryVideos);
+      }
+    }
   };
   const submitActiveForm = activeTab === 'image' ? runImageGeneration : runVideoGeneration;
 
@@ -394,13 +639,30 @@ export default function AgnesWorkbench({
         </label>
       </div>
 
-      <div className={agnesItems.length ? 'image-board agnes-board has-images' : 'image-board agnes-board'}>
-        {agnesItems.length ? (
-          <AgnesResults items={agnesItems} openDetail={openDetail} />
+      <div className={showAgnesResults ? 'image-board agnes-board has-images' : 'image-board agnes-board'} ref={boardRef}>
+        {showAgnesResults ? (
+          <AgnesResults
+            items={visibleAgnesItems}
+            masonryColumns={masonryColumns}
+            masonryColumnCount={masonryColumnCount}
+            boardLoadSentinelRef={boardLoadSentinelRef}
+            hasMoreItems={hasMoreAgnesItems}
+            loadingMore={boardLoadingMore}
+            openDetail={openDetail}
+            deleteImage={deleteImage}
+            imageLayoutMeta={imageLayoutMeta}
+            setImageLayoutMeta={setImageLayoutMeta}
+          />
         ) : (
           <EmptyAgnesCanvas activeTab={activeTab} configured={configured} openAccount={openAccount} emptyText={emptyText} />
         )}
       </div>
+
+      <ScrollTopButton
+        targetRef={boardRef}
+        className="is-page is-generate-board"
+        refreshKey={`agnes-${agnesItems.length}-${activeTab}-${agnesBoardScope}`}
+      />
 
       <form className="bottom-workbench agnes-bottom-workbench" onSubmit={submitActiveForm}>
         <div className="prompt-console agnes-prompt-console">

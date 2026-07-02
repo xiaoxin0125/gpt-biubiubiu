@@ -66,8 +66,10 @@ export const createImageDownloadSrc = (image) => {
 };
 
 export const normalizeImageSource = (source) => {
-  if (source === 'edit') return 'edit';
-  if (source === 'wall') return 'wall';
+  const value = String(source || '').trim();
+  if (value === 'agnes-image' || value === 'agnes-video') return value;
+  if (value === 'edit') return 'edit';
+  if (value === 'wall') return 'wall';
   return 'generation';
 };
 

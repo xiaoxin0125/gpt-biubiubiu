@@ -15,8 +15,12 @@ export const getEmptyBoardText = (scope, view = 'generate') => {
 
 export const normalizeBoardImage = (image, fallback = {}) => {
   const hasRenderableImage = Boolean(createImageSrc(image));
-  const form = normalizeForm(image?.form || fallback.form || {});
-  const prompt = image?.prompt || fallback.prompt || image?.form?.prompt || fallback.form?.prompt || '';
+  const rawForm = image?.form || fallback.form || {};
+  const form = normalizeForm(rawForm);
+  const prompt = image?.prompt || fallback.prompt || rawForm.prompt || fallback.form?.prompt || '';
+  const durationSeconds = image?.durationSeconds ?? image?.duration_seconds ?? rawForm.durationSeconds ?? rawForm.duration_seconds ?? fallback.durationSeconds ?? fallback.form?.durationSeconds ?? null;
+  const startedAt = image?.startedAt || image?.started_at || rawForm.startedAt || rawForm.started_at || fallback.startedAt || fallback.form?.startedAt || '';
+  const finishedAt = image?.finishedAt || image?.finished_at || image?.completedAt || image?.completed_at || rawForm.finishedAt || rawForm.finished_at || fallback.finishedAt || fallback.form?.finishedAt || '';
 
   return {
     ...image,
@@ -26,6 +30,10 @@ export const normalizeBoardImage = (image, fallback = {}) => {
     prompt,
     revised_prompt: normalizeVisibleRevisedPrompt(prompt, image?.revised_prompt, image?.revisedPrompt, image?.prompt_revised),
     createdAt: image?.createdAt || fallback.createdAt || new Date().toISOString(),
+    startedAt,
+    finishedAt,
+    completedAt: image?.completedAt || image?.completed_at || finishedAt || null,
+    durationSeconds,
     source: normalizeImageSource(image?.source || fallback.source),
   };
 };
@@ -39,7 +47,14 @@ export const isSameImageIdentity = (left, right) => {
   return Boolean(leftSrc && rightSrc && leftSrc === rightSrc);
 };
 
-export const canRenderBoardItem = (image) => image?.status === 'pending' || image?.status === 'failed' || Boolean(createImageSrc(image));
+const getVideoSrc = (image) => String(image?.videoUrl || image?.video_url || image?.url || '').trim();
+
+export const canRenderBoardItem = (image) => {
+  if (image?.mediaType === 'video' || image?.source === 'agnes-video') {
+    return image?.status === 'pending' || image?.status === 'running' || image?.status === 'failed' || Boolean(getVideoSrc(image) || image?.videoId || image?.video_id);
+  }
+  return image?.status === 'pending' || image?.status === 'failed' || Boolean(createImageSrc(image));
+};
 
 export const formatDate = (value) => {
   if (!value) return '刚刚';

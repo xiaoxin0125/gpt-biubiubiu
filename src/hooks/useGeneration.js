@@ -159,6 +159,8 @@ export const useGeneration = (deps) => {
       const normalizedData = normalizeDirectImageResponse(data, outputFormat);
 
       const finishedAt = new Date().toISOString();
+      const durationSeconds = Math.max(1, Math.floor((new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 1000));
+      const imageFormWithTiming = { ...imageForm, startedAt, finishedAt, durationSeconds };
       if (deletedRequestIdsRef.current.has(requestId)) {
         setStatus((current) => ({ ...current, message: 'Done · 0' }));
         return;
@@ -170,7 +172,7 @@ export const useGeneration = (deps) => {
             id: `${requestId}-${index}`,
             requestId,
             status: 'completed',
-            form: imageForm,
+            form: imageFormWithTiming,
             apiName: requestApiName,
             prompt,
             startedAt,
@@ -200,8 +202,11 @@ export const useGeneration = (deps) => {
                 image: imagePayload,
                 prompt,
                 revised_prompt: normalizeVisibleRevisedPrompt(prompt, image.revised_prompt),
-                form: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
-                params: { ...imageForm, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
+                form: { ...imageFormWithTiming, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
+                params: { ...imageFormWithTiming, apiName: requestApiName, source: normalizeImageSource(image.source), referenceName: referenceNames },
+                startedAt,
+                finishedAt,
+                durationSeconds,
               }),
             });
             savedImages.push(normalizeBoardImage({
@@ -211,7 +216,7 @@ export const useGeneration = (deps) => {
               source: normalizeImageSource(image.source),
               apiName: requestApiName,
               prompt,
-              form: imageForm,
+              form: imageFormWithTiming,
               referenceName: referenceNames,
             }));
           }
@@ -231,7 +236,7 @@ export const useGeneration = (deps) => {
 
       const record = {
         id: requestId,
-        form: imageForm,
+        form: imageFormWithTiming,
         images: storedImages,
         createdAt: finishedAt,
       };

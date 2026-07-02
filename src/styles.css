@@ -2968,17 +2968,6 @@ select option {
   max-width: 70%;
 }
 
-.agnes-result-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 16px;
-  width: 100%;
-}
-
-.agnes-video-grid {
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-}
-
 .agnes-result-card {
   cursor: pointer;
 }
@@ -2989,7 +2978,7 @@ select option {
 }
 
 .agnes-result-media {
-  aspect-ratio: 4 / 3;
+  min-height: 0;
 }
 
 .agnes-video-card-body {
@@ -3150,10 +3139,6 @@ select option {
     width: calc(100% - 24px);
     max-width: calc(100% - 24px);
   }
-
-  .agnes-result-grid {
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  }
 }
 
 @media (max-width: 720px) {
@@ -3168,10 +3153,6 @@ select option {
   .agnes-toolbar .toolbar-scope,
   .agnes-toolbar .toolbar-filter {
     flex: 1 1 calc(50% - 4px);
-  }
-
-  .agnes-result-grid {
-    grid-template-columns: 1fr;
   }
 
   .agnes-video-card-body video {

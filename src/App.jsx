@@ -43,6 +43,7 @@ import {
   getImageIdentity,
   getMasonryColumns,
   isSameImageIdentity,
+  normalizeBoardImage,
 } from './lib/board';
 import {
   normalizeForm,
@@ -61,6 +62,8 @@ import {
   createImageDownloadSrc,
   createImageSrc,
   getGeneratedImageJobId,
+  imageMimeForOutputFormat,
+  imageToSavePayload,
   normalizeImageSource,
   revokeObjectImageUrls,
 } from './lib/images';
@@ -71,6 +74,36 @@ import { useSession } from './hooks/useSession';
 import { useBoard } from './hooks/useBoard';
 import { findWallItem as findWallItemIn, useWall } from './hooks/useWall';
 
+const mainBoardSources = new Set(['generation', 'edit']);
+const agnesSources = new Set(['agnes-image', 'agnes-video']);
+
+const getItemSource = (item, fallback) => normalizeImageSource(item?.source || item?.form?.source || fallback);
+const isMainBoardItem = (item) => mainBoardSources.has(getItemSource(item));
+const isAgnesItem = (item) => agnesSources.has(getItemSource(item));
+const getHistoryImageSource = (image, record) => getItemSource(image, record?.form?.source);
+const getBoardDedupeIdentity = (item) => {
+  if (item?.mediaType === 'video' || getItemSource(item) === 'agnes-video') {
+    return String(item?.videoId || item?.video_id || item?.requestId || item?.id || item?.videoUrl || item?.video_url || '');
+  }
+  return String(createImageSrc(item) || getImageIdentity(item) || '');
+};
+const uniqueByBoardIdentity = (items) => {
+  const seen = new Set();
+  return (items || []).filter((item) => {
+    const identity = getBoardDedupeIdentity(item);
+    if (!identity) return true;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+};
+const filterHistoryRecordImages = (records, predicate) => (records || [])
+  .map((record) => ({
+    ...record,
+    images: (record.images || []).filter((image) => predicate(image, record)),
+  }))
+  .filter((record) => (record.images || []).length > 0);
+
 if (typeof window !== 'undefined') window.addEventListener('beforeunload', revokeObjectImageUrls);
 
 function App() {
@@ -79,6 +112,8 @@ function App() {
   const [history, setHistory] = useState([]);
   const [historyNextCursor, setHistoryNextCursor] = useState('');
   const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [agnesHistoryNextCursor, setAgnesHistoryNextCursor] = useState('');
+  const [agnesHistoryHasMore, setAgnesHistoryHasMore] = useState(false);
   const [images, setImages] = useState([]);
   const [wallItems, setWallItems] = useState([]);
   const [wallNextCursor, setWallNextCursor] = useState('');
@@ -138,18 +173,15 @@ function App() {
   const activeSize = getDraftSize(sizeDraft);
   const displaySize = activeSize || '自动';
   const userDisplayName = user?.displayName || user?.username || '';
-  const visibleImages = useMemo(() => images.filter(canRenderBoardItem), [images]);
-  const historyImages = useMemo(() => flattenHistoryImages(history).filter(canRenderBoardItem), [history]);
-  const allLocalImages = useMemo(() => {
-    const seen = new Set();
-    return [...visibleImages, ...historyImages].filter((image) => {
-      const identity = getImageIdentity(image);
-      if (!identity) return true;
-      if (seen.has(identity)) return false;
-      seen.add(identity);
-      return true;
-    });
-  }, [historyImages, visibleImages]);
+  const allHistoryItems = useMemo(() => flattenHistoryImages(history).filter(canRenderBoardItem), [history]);
+  const mainHistoryRecords = useMemo(
+    () => filterHistoryRecordImages(history, (image, record) => mainBoardSources.has(getHistoryImageSource(image, record))),
+    [history],
+  );
+  const visibleImages = useMemo(() => images.filter(canRenderBoardItem).filter(isMainBoardItem), [images]);
+  const historyImages = useMemo(() => uniqueByBoardIdentity(allHistoryItems.filter(isMainBoardItem)), [allHistoryItems]);
+  const agnesHistoryItems = useMemo(() => uniqueByBoardIdentity(allHistoryItems.filter(isAgnesItem)), [allHistoryItems]);
+  const allLocalImages = useMemo(() => uniqueByBoardIdentity([...visibleImages, ...historyImages]), [historyImages, visibleImages]);
   const sourceBoardItems = view === 'wall' ? wallItems : boardScope === 'history' ? historyImages : boardScope === 'generate' ? visibleImages : allLocalImages;
   const activeFilterOptions = view === 'wall' ? wallFilterOptions : boardFilterOptions;
   const activeBoardFilter = activeFilterOptions.some((option) => option.value === boardFilter) ? boardFilter : 'all';
@@ -378,6 +410,8 @@ function App() {
       setHistory(readHistory());
       setHistoryNextCursor('');
       setHistoryHasMore(false);
+      setAgnesHistoryNextCursor('');
+      setAgnesHistoryHasMore(false);
       return;
     }
 
@@ -405,16 +439,72 @@ function App() {
     }
   }, [historyNextCursor, user]);
 
+  const syncAgnesGeneratedImages = useCallback(async ({ append = false, user: syncUser = user } = {}) => {
+    if (!syncUser) {
+      setAgnesHistoryNextCursor('');
+      setAgnesHistoryHasMore(false);
+      return;
+    }
+
+    const cursor = append ? agnesHistoryNextCursor : '';
+    if (append && !cursor) return;
+
+    try {
+      const query = new URLSearchParams({
+        scope: 'agnes-image',
+        limit: String(Math.max(BOARD_PAGE_SIZE * 2, 40)),
+      });
+      if (cursor) query.set('cursor', cursor);
+      const data = await requestJson(`/api/generated-images?${query.toString()}`);
+      const generatedItems = Array.isArray(data.items) ? data.items : [];
+      const syncedRecords = createHistoryRecordsFromGeneratedItems(generatedItems);
+
+      setHistory((current) => {
+        const currentHistory = current.length ? current : readHistory();
+        const nextHistory = mergeHistoryRecords(currentHistory, syncedRecords);
+        saveHistory(nextHistory);
+        return nextHistory;
+      });
+      setAgnesHistoryHasMore(Boolean(data.hasMore));
+      setAgnesHistoryNextCursor(data.nextCursor ? String(data.nextCursor) : '');
+    } catch (syncError) {
+      const message = syncError instanceof Error ? syncError.message : 'Agnes 历史同步失败';
+      if (message !== '请先登录') setError(message);
+    }
+  }, [agnesHistoryNextCursor, user]);
+
   const refreshBoard = async () => {
     if (!user) {
       setHistory(readHistory());
       setHistoryNextCursor('');
       setHistoryHasMore(false);
+      setAgnesHistoryNextCursor('');
+      setAgnesHistoryHasMore(false);
       return;
     }
 
     await Promise.all([syncGeneratedImages(), loadWall({ resetBoard: view === 'wall' })]);
   };
+
+  const loadMoreGeneratedImages = useCallback(
+    () => syncGeneratedImages({ append: true }),
+    [syncGeneratedImages],
+  );
+
+  const refreshGeneratedImages = useCallback(
+    () => syncGeneratedImages(),
+    [syncGeneratedImages],
+  );
+
+  const loadMoreAgnesGeneratedImages = useCallback(
+    () => syncAgnesGeneratedImages({ append: true }),
+    [syncAgnesGeneratedImages],
+  );
+
+  const refreshAgnesGeneratedImages = useCallback(
+    () => syncAgnesGeneratedImages(),
+    [syncAgnesGeneratedImages],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -426,6 +516,8 @@ function App() {
       setHistory([]);
       setHistoryNextCursor('');
       setHistoryHasMore(false);
+      setAgnesHistoryNextCursor('');
+      setAgnesHistoryHasMore(false);
       setSelectedImage(null);
       setBoardScope('generate');
       setApiConfigForm(defaultApiConfigForm);
@@ -481,6 +573,7 @@ function App() {
               setStatus((current) => ({ ...current, configured: false, message: 'API Key 同步失败，请重新登录或重新保存。' }));
             });
             syncGeneratedImages({ user: nextUser });
+            syncAgnesGeneratedImages({ user: nextUser });
           } else {
             resetSignedOutState();
           }
@@ -509,6 +602,8 @@ function App() {
     if (user) return;
     setHistoryNextCursor('');
     setHistoryHasMore(false);
+    setAgnesHistoryNextCursor('');
+    setAgnesHistoryHasMore(false);
   }, [user]);
 
   useEffect(() => {
@@ -676,15 +771,16 @@ function App() {
   };
 
   const clearHistory = async () => {
-    if (!history.length || !window.confirm('确认清空历史记录？')) return;
+    if (!historyImages.length || !window.confirm('确认清空历史记录？')) return;
 
     const previousHistory = history;
     const previousHistoryNextCursor = historyNextCursor;
     const previousHistoryHasMore = historyHasMore;
-    setHistory([]);
+    const nextHistory = filterHistoryRecordImages(history, (image, record) => !mainBoardSources.has(getHistoryImageSource(image, record)));
+    setHistory(nextHistory);
     setHistoryNextCursor('');
     setHistoryHasMore(false);
-    saveHistory([]);
+    saveHistory(nextHistory);
     if (boardScope === 'history') setSelectedImage(null);
 
     if (!user) return;
@@ -699,16 +795,147 @@ function App() {
     }
   };
 
+  const persistAgnesImageResults = useCallback(async ({ requestId, images: agnesImages = [], form: resultForm = {}, prompt = '', apiName = '', startedAt = '', finishedAt = '', durationSeconds = null }) => {
+    if (!user) return agnesImages;
+
+    const source = normalizeImageSource(resultForm.source || 'agnes-image');
+    const computedDurationSeconds = startedAt && finishedAt ? Math.floor((new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 1000) : null;
+    const safeDurationSeconds = Number.isFinite(Number(durationSeconds)) && Number(durationSeconds) > 0
+      ? Math.floor(Number(durationSeconds))
+      : Number.isFinite(computedDurationSeconds) && computedDurationSeconds > 0
+        ? computedDurationSeconds
+        : null;
+    const saveForm = { ...resultForm, apiName, source };
+    if (startedAt) saveForm.startedAt = startedAt;
+    if (finishedAt) saveForm.finishedAt = finishedAt;
+    if (safeDurationSeconds !== null) saveForm.durationSeconds = safeDurationSeconds;
+    const savedImages = [];
+
+    for (const image of agnesImages) {
+      const imagePayload = imageToSavePayload(image, imageMimeForOutputFormat(saveForm.output_format));
+      const saved = await requestJson('/api/generated-images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requestId,
+          mode: source,
+          image: imagePayload,
+          prompt,
+          revised_prompt: normalizeVisibleRevisedPrompt(prompt, image.revised_prompt),
+          form: saveForm,
+          params: saveForm,
+          startedAt: saveForm.startedAt,
+          finishedAt: saveForm.finishedAt,
+          durationSeconds: saveForm.durationSeconds,
+        }),
+      });
+
+      savedImages.push(normalizeBoardImage({
+        ...image,
+        ...(saved.item || {}),
+        upstreamImageId: image.upstreamImageId || image.id || '',
+        source,
+        apiName,
+        prompt,
+        form: saveForm,
+      }));
+    }
+
+    if (!savedImages.length) return agnesImages;
+
+    const record = {
+      id: requestId,
+      form: saveForm,
+      images: savedImages,
+      createdAt: savedImages[0]?.createdAt || new Date().toISOString(),
+    };
+
+    setHistory((items) => {
+      const nextHistory = mergeHistoryRecords(items, [record]);
+      saveHistory(nextHistory);
+      return nextHistory;
+    });
+
+    return savedImages;
+  }, [user]);
+
+  const persistAgnesVideoTask = useCallback((task) => {
+    const source = 'agnes-video';
+    const videoId = String(task?.videoId || task?.video_id || '').trim();
+    const videoUrl = String(task?.videoUrl || task?.video_url || task?.url || '').trim();
+    const requestId = String(task?.requestId || task?.id || (videoId ? `agnes-video-${videoId}` : '')).trim();
+    if (!requestId) return task;
+
+    const form = {
+      ...(task.form || {}),
+      prompt: task.prompt || task.form?.prompt || '',
+      size: task.form?.size || task.size || (task.width && task.height ? `${task.width}x${task.height}` : ''),
+      response_format: 'url',
+      responseFormat: 'url',
+      source,
+      videoId,
+    };
+    const savedTask = {
+      id: requestId,
+      requestId,
+      status: task.status || (videoUrl ? 'completed' : 'running'),
+      rawStatus: task.rawStatus || '',
+      source,
+      mediaType: 'video',
+      prompt: task.prompt || form.prompt || '',
+      apiName: task.apiName || form.apiName || '',
+      videoId,
+      videoUrl,
+      url: '',
+      image_url: '',
+      mode: task.mode || form.mode || '',
+      width: task.width || form.width || '',
+      height: task.height || form.height || '',
+      frameRate: task.frameRate || form.frameRate || '',
+      numFrames: task.numFrames || form.numFrames || '',
+      progress: task.progress || '',
+      seconds: task.seconds || '',
+      error: task.error || '',
+      createdAt: task.createdAt || new Date().toISOString(),
+      startedAt: task.startedAt || task.createdAt || '',
+      updatedAt: task.updatedAt || new Date().toISOString(),
+      finishedAt: task.finishedAt || null,
+      form,
+    };
+    const record = {
+      id: requestId,
+      form,
+      images: [savedTask],
+      createdAt: savedTask.createdAt,
+    };
+
+    setHistory((items) => {
+      const nextHistory = mergeHistoryRecords(items, [record]);
+      saveHistory(nextHistory);
+      return nextHistory;
+    });
+
+    return savedTask;
+  }, []);
+
   const deleteImage = async (image) => {
     if (!image) return;
-    if (typeof image.removeFromAgnes === 'function') {
+
+    const removeFromAgnes = typeof image.removeFromAgnes === 'function' ? image.removeFromAgnes : null;
+    const jobId = getGeneratedImageJobId(image);
+
+    if (removeFromAgnes && !jobId) {
       if (!window.confirm('确认删除这个 Agnes 作品记录？')) return;
-      image.removeFromAgnes();
+      removeFromAgnes();
+      const nextHistory = removeImageFromHistory(history, image, isSameImage);
+      setHistory(nextHistory);
+      saveHistory(nextHistory);
       setSelectedImage((current) => (current && isSameImage(current, image) ? null : current));
       if (selectedImage && isSameImage(selectedImage, image)) setActiveDialog(null);
       return;
     }
-    if (!window.confirm('确认删除这张图片记录？')) return;
+
+    if (!window.confirm(image?.mediaType === 'video' || image?.source === 'agnes-video' ? '确认删除这个视频记录？' : '确认删除这张图片记录？')) return;
 
     const requestId = image.requestId || image.id;
     if (requestId) deletedRequestIdsRef.current.add(requestId);
@@ -724,11 +951,11 @@ function App() {
     setSelectedImage((current) => (current && isSameImage(current, image) ? null : current));
     if (selectedImage && isSameImage(selectedImage, image)) setActiveDialog(null);
 
-    const jobId = getGeneratedImageJobId(image);
     if (!user || !jobId) return;
 
     try {
       await requestJson(`/api/generated-images/${jobId}`, { method: 'DELETE' });
+      if (removeFromAgnes) removeFromAgnes();
     } catch (deleteError) {
       setImages(previousImages);
       setHistory(previousHistory);
@@ -751,14 +978,34 @@ function App() {
     setOpenSelect('');
   };
 
+  const getRequestStartedAtMs = (item) => {
+    const value = String(item?.requestId || item?.request_id || item?.id || '').trim();
+    const matched = value.match(/^(?:request|agnes-image|agnes-video)-(\d{10,})/);
+    if (!matched) return null;
+    const timestamp = Number(matched[1]);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+    return timestamp > 1e12 ? timestamp : timestamp * 1000;
+  };
+
   const getElapsedSeconds = (item) => {
     if (!item) return null;
-    if (item.durationSeconds !== undefined && item.durationSeconds !== null && item.durationSeconds !== '') return Math.max(0, Math.floor(Number(item.durationSeconds) || 0));
-    if (item.finishedAt && (item.startedAt || item.createdAt)) {
-      return Math.max(0, Math.floor((new Date(item.finishedAt).getTime() - new Date(item.startedAt || item.createdAt).getTime()) / 1000));
+    const explicitDuration = item.durationSeconds ?? item.duration_seconds ?? item.form?.durationSeconds ?? item.form?.duration_seconds;
+    if (explicitDuration !== undefined && explicitDuration !== null && explicitDuration !== '') {
+      const explicitSeconds = Math.floor(Number(explicitDuration));
+      return Number.isFinite(explicitSeconds) && explicitSeconds > 0 ? explicitSeconds : null;
     }
+
+    const startedAt = item.startedAt || item.started_at || item.form?.startedAt || item.form?.started_at || '';
+    const finishedAt = item.finishedAt || item.finished_at || item.completedAt || item.completed_at || item.form?.finishedAt || item.form?.finished_at || '';
+    const startedAtMs = startedAt ? new Date(startedAt).getTime() : getRequestStartedAtMs(item);
+    const finishedAtMs = finishedAt ? new Date(finishedAt).getTime() : new Date(item.createdAt || item.created_at || '').getTime();
+    if (Number.isFinite(startedAtMs) && Number.isFinite(finishedAtMs) && finishedAtMs > startedAtMs) {
+      return Math.max(1, Math.floor((finishedAtMs - startedAtMs) / 1000));
+    }
+
     if (item.status === 'pending' || item.status === 'running') {
-      return Math.max(0, Math.floor((nowTick - new Date(item.startedAt || item.createdAt || Date.now()).getTime()) / 1000));
+      const pendingStartedAtMs = Number.isFinite(startedAtMs) ? startedAtMs : new Date(item.createdAt || Date.now()).getTime();
+      return Number.isFinite(pendingStartedAtMs) ? Math.max(0, Math.floor((nowTick - pendingStartedAtMs) / 1000)) : null;
     }
     return null;
   };
@@ -1071,7 +1318,7 @@ function App() {
           loadWall={loadWall}
           refreshHistory={refreshBoard}
           clearHistory={clearHistory}
-          history={history}
+          history={mainHistoryRecords}
           renderableBoardItems={renderableBoardItems}
           masonryColumnCount={masonryColumnCount}
           masonryColumns={masonryColumns}
@@ -1124,6 +1371,13 @@ function App() {
             setActiveDialog('auth');
           }}
           openDetail={openDetail}
+          deleteImage={deleteImage}
+          persistImageResults={persistAgnesImageResults}
+          persistVideoTask={persistAgnesVideoTask}
+          historyImages={agnesHistoryItems}
+          historyHasMore={agnesHistoryHasMore}
+          loadMoreHistory={loadMoreAgnesGeneratedImages}
+          refreshHistory={refreshAgnesGeneratedImages}
         />
       ) : null}
 

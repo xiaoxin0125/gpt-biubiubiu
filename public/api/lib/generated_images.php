@@ -31,7 +31,72 @@ function normalize_visible_revised_prompt(string $inputPrompt, string $revisedPr
 
 function normalize_job_mode(string $mode): string
 {
-    return $mode === 'edit' ? 'edit' : 'generation';
+    if ($mode === 'edit') return 'edit';
+    if ($mode === 'agnes-image') return 'agnes-image';
+    if ($mode === 'agnes-video') return 'agnes-video';
+    return 'generation';
+}
+
+function normalize_duration_seconds($value): ?int
+{
+    if ($value === null || $value === '') return null;
+    if (!is_numeric($value)) return null;
+    $seconds = (int) floor((float) $value);
+    return $seconds > 0 ? $seconds : null;
+}
+
+function normalize_datetime_text($value): string
+{
+    $value = trim((string) ($value ?? ''));
+    if ($value === '') return '';
+    $timestamp = strtotime($value);
+    return $timestamp ? date(DATE_ATOM, $timestamp) : '';
+}
+
+function first_non_empty_payload_value(array $sources, array $keys)
+{
+    foreach ($sources as $source) {
+        if (!is_array($source)) continue;
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $source)) continue;
+            $value = $source[$key];
+            if ($value !== null && $value !== '') return $value;
+        }
+    }
+    return null;
+}
+
+function duration_between_datetimes(string $startedAt, string $finishedAt): ?int
+{
+    if ($startedAt === '' || $finishedAt === '') return null;
+    $started = strtotime($startedAt);
+    $finished = strtotime($finishedAt);
+    if (!$started || !$finished || $finished <= $started) return null;
+    return (int) max(1, $finished - $started);
+}
+
+function generated_image_timing(array $sources, string $fallbackFinishedAt = ''): array
+{
+    $startedAt = normalize_datetime_text(first_non_empty_payload_value($sources, ['startedAt', 'started_at']));
+    $finishedAt = normalize_datetime_text(first_non_empty_payload_value($sources, ['finishedAt', 'finished_at', 'completedAt', 'completed_at'])) ?: normalize_datetime_text($fallbackFinishedAt);
+    $durationSeconds = normalize_duration_seconds(first_non_empty_payload_value($sources, ['durationSeconds', 'duration_seconds', 'elapsedSeconds', 'elapsed_seconds']));
+    if ($durationSeconds === null) $durationSeconds = duration_between_datetimes($startedAt, $finishedAt);
+
+    return [
+        'durationSeconds' => $durationSeconds,
+        'startedAt' => $startedAt,
+        'finishedAt' => $finishedAt,
+    ];
+}
+
+function generated_images_scope_modes(): array
+{
+    $scope = trim((string) ($_GET['scope'] ?? 'main'));
+    if ($scope === 'agnes') return ['agnes-image'];
+    if ($scope === 'agnes-image') return ['agnes-image'];
+    if ($scope === 'agnes-video') return ['__disabled_agnes_video__'];
+    if ($scope === 'all') return ['generation', 'edit', 'agnes-image'];
+    return ['generation', 'edit'];
 }
 
 function normalize_revised_prompt(array $body, string $inputPrompt = ''): string
@@ -99,6 +164,7 @@ function client_generated_image(array $item): array
     }
 
     $id = (int) ($item['id'] ?? 0);
+    $mode = normalize_job_mode((string) ($item['mode'] ?? 'generation'));
     $firstImage = $result['data'][0] ?? [];
     $directImageUrl = (string) (($item['display_url'] ?? '') ?: (($item['image_url'] ?? '') ?: ''));
     $displayUrl = (string) ($directImageUrl ?: ($firstImage['url'] ?? ($firstImage['image_url'] ?? '')));
@@ -108,6 +174,9 @@ function client_generated_image(array $item): array
     $createdAt = $completedAt ?: (string) (($item['created_at'] ?? '') ?: date(DATE_ATOM));
     $prompt = (string) (($item['prompt'] ?? '') ?: ($imageParams['prompt'] ?? ''));
     $revisedPrompt = normalize_visible_revised_prompt($prompt, (string) (($item['revised_prompt'] ?? '') ?: ($firstImage['revised_prompt'] ?? '')));
+    $videoUrl = $mode === 'agnes-video' ? (string) (($firstImage['videoUrl'] ?? '') ?: ($firstImage['video_url'] ?? ($firstImage['url'] ?? ($displayUrl ?: $originalUrl)))) : '';
+    $videoId = $mode === 'agnes-video' ? (string) (($firstImage['videoId'] ?? '') ?: ($firstImage['video_id'] ?? ($imageParams['videoId'] ?? ''))) : '';
+    $timing = generated_image_timing([$firstImage, $imageParams, $params], $completedAt);
 
     return [
         'id' => 'job-' . $id,
@@ -118,10 +187,13 @@ function client_generated_image(array $item): array
         'status' => (string) (($item['status'] ?? '') ?: 'completed'),
         'url' => $displayUrl,
         'image_url' => $displayUrl,
+        'videoUrl' => $videoUrl,
+        'videoId' => $videoId,
+        'mediaType' => $mode === 'agnes-video' ? 'video' : 'image',
         'downloadUrl' => $originalUrl,
         'originalUrl' => $originalUrl,
         'b64_json' => '',
-        'imageMime' => (string) (($item['image_mime'] ?? '') ?: ($firstImage['imageMime'] ?? 'image/png')),
+        'imageMime' => (string) (($item['image_mime'] ?? '') ?: ($firstImage['imageMime'] ?? ($mode === 'agnes-video' ? 'video/mp4' : 'image/png'))),
         'originalBytes' => isset($item['original_bytes']) ? (int) $item['original_bytes'] : ($firstImage['originalBytes'] ?? null),
         'displayBytes' => isset($item['display_bytes']) ? (int) $item['display_bytes'] : ($firstImage['displayBytes'] ?? null),
         'prompt' => $prompt,
@@ -130,9 +202,12 @@ function client_generated_image(array $item): array
         'apiName' => (string) ($imageParams['apiName'] ?? ($imageParams['api_name'] ?? '')),
         'authorName' => '',
         'createdAt' => $createdAt,
-        'finishedAt' => $completedAt ?: null,
+        'startedAt' => $timing['startedAt'] ?: null,
+        'finishedAt' => $timing['finishedAt'] ?: ($completedAt ?: null),
+        'durationSeconds' => $timing['durationSeconds'],
+        'completedAt' => $completedAt ?: null,
         'isOnWall' => !empty($item['wall_item_id']),
-        'source' => ($item['mode'] ?? '') === 'edit' ? 'edit' : 'generation',
+        'source' => $mode,
     ];
 }
 
@@ -174,14 +249,16 @@ function handle_generated_images(array $user): array
 {
     $limit = generated_images_page_limit();
     $cursor = generated_images_cursor_payload((string) ($_GET['cursor'] ?? ''));
+    $modes = generated_images_scope_modes();
+    $modePlaceholders = implode(', ', array_fill(0, count($modes), '?'));
     $cursorWhere = '';
-    $params = [(int) $user['id'], 'completed'];
+    $params = array_merge([(int) $user['id'], 'completed'], $modes);
     if ($cursor) {
         $cursorWhere = " AND (completed_at < ? OR (completed_at = ? AND (created_at < ? OR (created_at = ? AND id < ?))))";
         array_push($params, $cursor['sortAt'], $cursor['sortAt'], $cursor['createdAt'], $cursor['createdAt'], $cursor['id']);
     }
 
-    $stmt = pdo()->prepare("SELECT id, user_id, request_id, mode, status, prompt, revised_prompt, image_url, original_url, display_url, image_mime, original_bytes, display_bytes, wall_item_id, params_json, created_at, completed_at FROM image_jobs WHERE user_id = ? AND status = ? AND CONCAT(COALESCE(display_url, ''), COALESCE(image_url, ''), COALESCE(original_url, '')) <> ''" . $cursorWhere . " ORDER BY completed_at DESC, created_at DESC, id DESC LIMIT " . ($limit + 1));
+    $stmt = pdo()->prepare("SELECT id, user_id, request_id, mode, status, prompt, revised_prompt, image_url, original_url, display_url, image_mime, original_bytes, display_bytes, wall_item_id, params_json, result_json, created_at, completed_at FROM image_jobs WHERE user_id = ? AND status = ? AND mode IN (" . $modePlaceholders . ") AND CONCAT(COALESCE(display_url, ''), COALESCE(image_url, ''), COALESCE(original_url, '')) <> ''" . $cursorWhere . " ORDER BY completed_at DESC, created_at DESC, id DESC LIMIT " . ($limit + 1));
     $stmt->execute($params);
     $rows = $stmt->fetchAll();
     $hasMore = count($rows) > $limit;
@@ -233,15 +310,18 @@ function handle_delete_generated_image(array $user, int $id): array
 
 function handle_clear_generated_images(array $user): array
 {
-    $stmt = pdo()->prepare('SELECT id, image_url, original_url, display_url, wall_item_id FROM image_jobs WHERE user_id = ? AND status = ?');
-    $stmt->execute([(int) $user['id'], 'completed']);
+    $modes = generated_images_scope_modes();
+    $modePlaceholders = implode(', ', array_fill(0, count($modes), '?'));
+    $params = array_merge([(int) $user['id'], 'completed'], $modes);
+    $stmt = pdo()->prepare('SELECT id, image_url, original_url, display_url, wall_item_id FROM image_jobs WHERE user_id = ? AND status = ? AND mode IN (' . $modePlaceholders . ')');
+    $stmt->execute($params);
     $rows = $stmt->fetchAll();
     foreach ($rows as $row) {
         detach_or_purge_job_files($row);
     }
 
-    $stmt = pdo()->prepare('DELETE FROM image_jobs WHERE user_id = ? AND status = ?');
-    $stmt->execute([(int) $user['id'], 'completed']);
+    $stmt = pdo()->prepare('DELETE FROM image_jobs WHERE user_id = ? AND status = ? AND mode IN (' . $modePlaceholders . ')');
+    $stmt->execute($params);
     return ['ok' => true, 'deleted' => $stmt->rowCount()];
 }
 
@@ -250,11 +330,30 @@ function handle_save_generated_image(array $user, array $body): array
     $image = is_array($body['image'] ?? null) ? $body['image'] : [];
     $form = is_array($body['form'] ?? null) ? $body['form'] : [];
     $params = is_array($body['params'] ?? null) ? $body['params'] : $form;
-    $stored = store_image_files($image);
     $requestId = preg_replace('/[^a-zA-Z0-9_.-]/', '-', (string) ($body['requestId'] ?? ($body['request_id'] ?? ('request-' . time()))));
     $mode = normalize_job_mode((string) ($body['mode'] ?? ($params['source'] ?? 'generation')));
     $prompt = trim((string) ($body['prompt'] ?? ($form['prompt'] ?? ($params['prompt'] ?? ''))));
     $revisedPrompt = normalize_revised_prompt($body, $prompt);
+
+    $timing = generated_image_timing([$body, $form, $params]);
+    if ($timing['durationSeconds'] !== null) {
+        $form['durationSeconds'] = $timing['durationSeconds'];
+        $params['durationSeconds'] = $timing['durationSeconds'];
+    }
+    if ($timing['startedAt'] !== '') {
+        $form['startedAt'] = $timing['startedAt'];
+        $params['startedAt'] = $timing['startedAt'];
+    }
+    if ($timing['finishedAt'] !== '') {
+        $form['finishedAt'] = $timing['finishedAt'];
+        $params['finishedAt'] = $timing['finishedAt'];
+    }
+
+    if ($mode === 'agnes-video') {
+        json_response(['error' => 'Agnes 视频不保存至服务器，请使用本地历史记录。'], 400);
+    }
+
+    $stored = store_image_files($image);
     $resultImage = [
         'url' => $stored['displayUrl'],
         'image_url' => $stored['displayUrl'],
