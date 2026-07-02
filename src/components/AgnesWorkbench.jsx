@@ -17,7 +17,7 @@ import {
 } from '../constants/options';
 import SizeDialog from './SizeDialog';
 import ScrollTopButton from './ScrollTopButton';
-import { apiConfigHasKeyForScope, apiConfigLabelForScope, requestReferenceImageUpload } from '../lib/api';
+import { apiConfigHasKeyForScope, apiConfigLabelForScope, requestReferenceImageDelete, requestReferenceImageUpload } from '../lib/api';
 import { createImageSrc } from '../lib/images';
 import { estimateImageAspectRatio, getImageIdentity, getMasonryColumns } from '../lib/board';
 import { clampNumber, normalizePercent } from '../lib/math';
@@ -91,21 +91,43 @@ const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
-const uploadImageFilesAsValues = async (files) => {
+const toReferenceUploadItem = (item, file, index) => {
+  const url = item.absoluteUrl || item.url || '';
+  return {
+    id: createReferenceId(file || { name: 'reference-image', size: index, lastModified: Date.now() }),
+    name: file?.name || item.name || 'reference-image',
+    url,
+    previewUrl: item.displayUrl || url,
+    deleteUrl: item.deleteUrl || '',
+    isServerStored: Boolean(item.deleteUrl),
+  };
+};
+
+const uploadImageFilesAsReferences = async (files) => {
   const formData = new FormData();
   files.forEach((file) => formData.append('images[]', file, file.name));
 
   try {
     const data = await requestReferenceImageUpload(formData);
     const uploadedItems = Array.isArray(data.items) ? data.items : [];
-    const values = uploadedItems.map((item) => item.absoluteUrl || item.url || '').filter(Boolean);
-    if (values.length) return { values, fallbackToBase64: false };
+    const references = uploadedItems
+      .map((item, index) => toReferenceUploadItem(item, files[index], index))
+      .filter((item) => item.url);
+    if (references.length) return { references, fallbackToBase64: false };
   } catch {
     // 上传代理不可用时回退到 Base64，保证视频接口仍能收到图片输入。
   }
 
   const values = (await Promise.all(files.map(readFileAsDataUrl))).filter(Boolean);
-  return { values, fallbackToBase64: true };
+  const references = values.map((value, index) => ({
+    id: createReferenceId(files[index] || { name: 'reference-image', size: index, lastModified: Date.now() }),
+    name: files[index]?.name || 'reference-image',
+    url: value,
+    previewUrl: value,
+    deleteUrl: '',
+    isServerStored: false,
+  }));
+  return { references, fallbackToBase64: true };
 };
 
 const findAgnesVideoSizeDraft = (width, height) => {
@@ -404,6 +426,7 @@ export default function AgnesWorkbench({
   const [imageSizeDraft, setImageSizeDraft] = useState(defaultSizeDraft);
   const [videoSizeDraft, setVideoSizeDraft] = useState(defaultAgnesVideoSizeDraft);
   const [uploadedImageReferences, setUploadedImageReferences] = useState([]);
+  const [uploadedVideoReferences, setUploadedVideoReferences] = useState([]);
   const [imageLayoutMeta, setImageLayoutMeta] = useState({});
   const refreshedVideoHistoryRef = useRef(new Set());
   const {
@@ -449,6 +472,7 @@ export default function AgnesWorkbench({
   const displayImageSize = activeImageSize || '自动';
   const displayVideoSize = activeVideoSize;
   const uploadedReferenceNames = uploadedImageReferences.map((item, index) => `图${index + 1}:${item.name}`).join('，');
+  const uploadedVideoReferenceNames = uploadedVideoReferences.map((item, index) => `图${index + 1}:${item.name}`).join('，');
   const workbenchClassName = workbenchExpanded ? 'workbench-actions agnes-workbench-actions is-expanded' : 'workbench-actions agnes-workbench-actions';
   const agnesHistoryImages = useMemo(() => historyImages.filter(isAgnesHistoryImage), [historyImages]);
   const agnesHistoryVideos = useMemo(() => historyImages.filter(isAgnesHistoryVideo), [historyImages]);
@@ -667,6 +691,13 @@ export default function AgnesWorkbench({
     setVideoSizeDialogOpen(false);
   };
 
+  const cleanupUploadedReferences = async (references, { silent = false } = {}) => {
+    const serverReferences = references.filter((item) => item.isServerStored && item.deleteUrl);
+    if (!serverReferences.length) return;
+    const results = await Promise.allSettled(serverReferences.map((item) => requestReferenceImageDelete(item.deleteUrl)));
+    if (!silent && results.some((result) => result.status === 'rejected')) setError('参考图已从表单移除，但部分服务器临时文件删除失败。');
+  };
+
   const handleImageReferenceChange = async (event) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
     if (!files.length) return;
@@ -680,13 +711,7 @@ export default function AgnesWorkbench({
 
     try {
       const nextFiles = files.slice(0, remaining);
-      const { values, fallbackToBase64 } = await uploadImageFilesAsValues(nextFiles);
-      const nextReferences = values.map((value, index) => ({
-        id: createReferenceId(nextFiles[index] || { name: 'reference-image', size: index, lastModified: Date.now() }),
-        name: nextFiles[index]?.name || 'reference-image',
-        url: value,
-        previewUrl: value,
-      })).filter((item) => item.url);
+      const { references: nextReferences, fallbackToBase64 } = await uploadImageFilesAsReferences(nextFiles);
       if (!nextReferences.length) throw new Error('参考图上传后没有返回 URL 或 Base64。');
       if (files.length > remaining) setError(`参考图最多支持 ${MAX_REFERENCE_IMAGES} 张，已保留前 ${MAX_REFERENCE_IMAGES} 张。`);
       else if (fallbackToBase64) setError('图片上传接口不可用，已自动转换为 Base64。');
@@ -704,12 +729,15 @@ export default function AgnesWorkbench({
     if (!target) return;
     setUploadedImageReferences((current) => current.filter((item) => item.id !== id));
     updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => line.trim() !== target.url).join('\n'));
+    cleanupUploadedReferences([target]);
   };
 
   const clearUploadedImageReferences = () => {
-    const referenceUrls = new Set(uploadedImageReferences.map((item) => item.url));
+    const removableReferences = [...uploadedImageReferences];
+    const referenceUrls = new Set(removableReferences.map((item) => item.url));
     setUploadedImageReferences([]);
     updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => !referenceUrls.has(line.trim())).join('\n'));
+    cleanupUploadedReferences(removableReferences);
   };
 
   const handleVideoImageUpload = async (event) => {
@@ -717,15 +745,24 @@ export default function AgnesWorkbench({
     if (!files.length) return;
 
     try {
-      const { values, fallbackToBase64 } = await uploadImageFilesAsValues(files);
-      if (!values.length) throw new Error('图片上传后没有返回 URL 或 Base64。');
-      updateVideoForm('imageInputs', (value) => appendLines(value, values));
+      const { references, fallbackToBase64 } = await uploadImageFilesAsReferences(files);
+      if (!references.length) throw new Error('图片上传后没有返回 URL 或 Base64。');
+      setUploadedVideoReferences((current) => [...current, ...references]);
+      updateVideoForm('imageInputs', (value) => appendLines(value, references.map((item) => item.url)));
       if (fallbackToBase64) setError('图片上传接口不可用，已自动转换为 Base64。');
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '视频图片读取失败。');
     } finally {
       event.target.value = '';
     }
+  };
+
+  const clearUploadedVideoReferences = () => {
+    const removableReferences = [...uploadedVideoReferences];
+    const referenceUrls = new Set(removableReferences.map((item) => item.url));
+    setUploadedVideoReferences([]);
+    updateVideoForm('imageInputs', (value) => splitLines(value).filter((line) => !referenceUrls.has(line.trim())).join('\n'));
+    cleanupUploadedReferences(removableReferences);
   };
 
   const refreshActiveResults = () => {
@@ -738,7 +775,22 @@ export default function AgnesWorkbench({
       }
     }
   };
-  const submitActiveForm = activeTab === 'image' ? runImageGeneration : runVideoGeneration;
+  const submitActiveForm = async (event) => {
+    const referencesToCleanup = activeTab === 'image' ? [...uploadedImageReferences] : [...uploadedVideoReferences];
+    const didSubmit = activeTab === 'image' ? await runImageGeneration(event) : await runVideoGeneration(event);
+    if (!didSubmit) return;
+
+    const urlsToCleanup = new Set(referencesToCleanup.map((item) => item.url));
+    if (!urlsToCleanup.size) return;
+    if (activeTab === 'image') {
+      setUploadedImageReferences((current) => current.filter((item) => !urlsToCleanup.has(item.url)));
+      updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => !urlsToCleanup.has(line.trim())).join('\n'));
+    } else {
+      setUploadedVideoReferences((current) => current.filter((item) => !urlsToCleanup.has(item.url)));
+      updateVideoForm('imageInputs', (value) => splitLines(value).filter((line) => !urlsToCleanup.has(line.trim())).join('\n'));
+    }
+    cleanupUploadedReferences(referencesToCleanup, { silent: true });
+  };
 
   return (
     <section className="agnes-page canvas-stage">
@@ -901,7 +953,7 @@ export default function AgnesWorkbench({
                   <textarea value={videoForm.imageInputs} onChange={(event) => updateVideoForm('imageInputs', event.target.value)} rows={2} placeholder="每行一张；留空为文生视频，1 张走 image，多张走 extra_body.image" />
                 </div>
                 <div className="agnes-video-action-column">
-                  <label className="control-field file-control icon-file-control agnes-inline-upload-control agnes-video-upload-control" title="上传视频图片" aria-label="上传视频图片">
+                  <label className={uploadedVideoReferences.length ? 'control-field file-control has-file icon-file-control agnes-inline-upload-control agnes-video-upload-control' : 'control-field file-control icon-file-control agnes-inline-upload-control agnes-video-upload-control'} title={uploadedVideoReferenceNames || '上传视频图片'} aria-label="上传视频图片">
                     <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={handleVideoImageUpload} />
                     <ReferenceUploadIcon count={splitLines(videoForm.imageInputs).filter((line) => line.trim()).length} />
                   </label>
@@ -927,6 +979,21 @@ export default function AgnesWorkbench({
               </div>
               <span>{uploadedReferenceNames}</span>
               <button type="button" className="text-button" onClick={clearUploadedImageReferences}>移除全部</button>
+            </div>
+          ) : null}
+
+          {activeTab === 'video' && uploadedVideoReferences.length ? (
+            <div className="reference-preview agnes-reference-preview">
+              <div className="reference-preview-list">
+                {uploadedVideoReferences.map((image, index) => (
+                  <figure key={image.id}>
+                    <img src={image.previewUrl || image.url} alt={`Agnes 视频图 ${index + 1}`} />
+                    <figcaption>图{index + 1}</figcaption>
+                  </figure>
+                ))}
+              </div>
+              <span>{uploadedVideoReferenceNames}</span>
+              <button type="button" className="text-button" onClick={clearUploadedVideoReferences}>移除上传图</button>
             </div>
           ) : null}
         </div>

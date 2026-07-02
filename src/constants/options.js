@@ -8,6 +8,7 @@ export const BOARD_PAGE_SIZE = 20;
 export const BOARD_LOAD_DELAY_MS = 280;
 export const MASONRY_CARD_TEXT_HEIGHT_RATIO = 0.22;
 export const MASONRY_CARD_GAP_RATIO = 0.08;
+export const MASONRY_CARD_DISPLAY_SCALE = 2 / 3;
 export const MAX_OUTPUT_IMAGES = 10;
 
 export const SHARED_API_CONFIG_ID = 'shared';

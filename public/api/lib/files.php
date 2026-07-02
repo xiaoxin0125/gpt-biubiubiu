@@ -323,12 +323,29 @@ function store_reference_image_file(string $binary, string $mime): array
         'path' => $path,
         'url' => api_route_url($route),
         'absoluteUrl' => api_route_absolute_url($route),
+        'deleteUrl' => '/api' . $route,
         'bytes' => filesize($path) ?: strlen($binary),
     ];
 }
 
+function cleanup_expired_reference_images(): void
+{
+    $storageDir = reference_image_storage_dir();
+    if (!is_dir($storageDir)) return;
+
+    $expiresBefore = time() - REFERENCE_IMAGE_MAX_AGE_SECONDS;
+    foreach (['png', 'jpg', 'jpeg', 'webp', 'gif'] as $extension) {
+        foreach (glob(rtrim($storageDir, '/\\') . '/*.' . $extension) ?: [] as $path) {
+            if (!is_file($path)) continue;
+            $modifiedAt = @filemtime($path) ?: time();
+            if ($modifiedAt < $expiresBefore) @unlink($path);
+        }
+    }
+}
+
 function handle_reference_image_upload(): array
 {
+    cleanup_expired_reference_images();
     $files = array_merge(normalized_uploaded_files('images'), normalized_uploaded_files('images[]'));
     $files = array_values(array_filter($files, function ($file) {
         return (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
@@ -352,6 +369,7 @@ function handle_reference_image_upload(): array
             'url' => $stored['absoluteUrl'],
             'absoluteUrl' => $stored['absoluteUrl'],
             'displayUrl' => $stored['url'],
+            'deleteUrl' => $stored['deleteUrl'],
             'bytes' => $stored['bytes'],
         ];
     }
@@ -359,19 +377,33 @@ function handle_reference_image_upload(): array
     return ['items' => $items];
 }
 
-function handle_reference_image_read(string $filename): array
+function reference_image_path_from_filename(string $filename): string
 {
     $filename = basename($filename);
-    if (!preg_match('/^[a-f0-9]{24}\.(png|jpg|jpeg|webp|gif)$/i', $filename)) json_response(['error' => '参考图不存在'], 404);
+    if (!preg_match('/^[a-f0-9]{24}\.(png|jpg|jpeg|webp|gif)$/i', $filename)) return '';
 
     $storageDir = reference_image_storage_dir();
     $root = realpath($storageDir);
     $path = realpath($storageDir . '/' . $filename);
-    if (!$root || !$path) json_response(['error' => '参考图不存在'], 404);
+    if (!$root || !$path) return '';
 
     $normalizedRoot = rtrim(str_replace('\\', '/', $root), '/') . '/';
     $normalizedPath = str_replace('\\', '/', $path);
-    if (strpos($normalizedPath, $normalizedRoot) !== 0 || !is_file($path)) json_response(['error' => '参考图不存在'], 404);
+    if (strpos($normalizedPath, $normalizedRoot) !== 0 || !is_file($path)) return '';
+    return $path;
+}
+
+function handle_reference_image_delete(string $filename): array
+{
+    $path = reference_image_path_from_filename($filename);
+    if ($path === '') return ['deleted' => false];
+    return ['deleted' => @unlink($path) || !is_file($path)];
+}
+
+function handle_reference_image_read(string $filename): array
+{
+    $path = reference_image_path_from_filename($filename);
+    if ($path === '') json_response(['error' => '参考图不存在'], 404);
 
     $info = @getimagesize($path);
     $mime = is_array($info) && !empty($info['mime']) ? (string) $info['mime'] : 'image/png';

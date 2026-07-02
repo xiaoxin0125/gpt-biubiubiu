@@ -1,4 +1,4 @@
-import { MASONRY_CARD_GAP_RATIO, MASONRY_CARD_TEXT_HEIGHT_RATIO } from '../constants/options';
+import { MASONRY_CARD_DISPLAY_SCALE, MASONRY_CARD_GAP_RATIO, MASONRY_CARD_TEXT_HEIGHT_RATIO } from '../constants/options';
 import { normalizeForm, normalizeVisibleRevisedPrompt } from './form';
 import { createImageSrc, normalizeImageSource } from './images';
 import { clampNumber } from './math';
@@ -101,9 +101,11 @@ export const getMasonryColumns = (items, columnCount, imageMeta) => {
   return columns;
 };
 
+const scaledColumnCount = (baseCount) => Math.max(1, Math.round(baseCount / MASONRY_CARD_DISPLAY_SCALE));
+
 export const getResponsiveMasonryColumnCount = () => {
-  if (typeof window === 'undefined') return 4;
-  if (window.innerWidth <= 640) return 2;
-  if (window.innerWidth <= 1024) return 2;
-  return 4;
+  if (typeof window === 'undefined') return scaledColumnCount(4);
+  if (window.innerWidth <= 640) return scaledColumnCount(2);
+  if (window.innerWidth <= 1024) return scaledColumnCount(2);
+  return scaledColumnCount(4);
 };

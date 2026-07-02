@@ -448,6 +448,16 @@ export const requestReferenceImageUpload = async (formData) => {
   return data;
 };
 
+export const requestReferenceImageDelete = async (url) => {
+  const value = String(url || '').trim();
+  if (!value) return { deleted: false };
+  const routeUrl = value.startsWith('/api/') ? value : `/api/images/reference/${encodeURIComponent(value.split('/').pop() || '')}`;
+  const response = await fetch(toApiUrl(routeUrl), { method: 'DELETE' });
+  const data = await readApiResponse(response);
+  if (!response.ok) throw new Error(data.error || data.message || data.detail || '参考图删除失败');
+  return data;
+};
+
 export const requestSharedAgnesJson = (path, payload) => requestJson('/api/agnes/proxy', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },

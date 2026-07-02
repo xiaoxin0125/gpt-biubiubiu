@@ -150,6 +150,10 @@ function api_pattern_routes(): array
         ['GET', '#^/images/reference/([a-f0-9]{24}\.(?:png|jpg|jpeg|webp|gif))$#i', function (array $body, array $matches): array {
             return handle_reference_image_read((string) $matches[1]);
         }],
+        ['DELETE', '#^/images/reference/([a-f0-9]{24}\.(?:png|jpg|jpeg|webp|gif))$#i', function (array $body, array $matches): array {
+            require_user();
+            return handle_reference_image_delete((string) $matches[1]);
+        }],
         ['DELETE', '#^/generated-images/(\d+)$#', function (array $body, array $matches): array {
             return handle_delete_generated_image(require_user(), (int) $matches[1]);
         }],

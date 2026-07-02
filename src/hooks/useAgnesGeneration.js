@@ -245,11 +245,12 @@ export const useAgnesGeneration = ({
     event.preventDefault();
     if (!imageForm.prompt.trim()) {
       setError('请输入 Agnes 生图提示词。');
-      return;
+      return false;
     }
 
     setImageLoading(true);
     setError('');
+    let submittedToAgnes = false;
     const requestId = `agnes-image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const startedAt = new Date().toISOString();
     setImageResults((items) => [{
@@ -266,6 +267,7 @@ export const useAgnesGeneration = ({
     try {
       const client = await createRequestClient({ config: activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey });
       const payload = buildAgnesImagePayload(imageForm, client.category);
+      submittedToAgnes = true;
       const data = await callAgnesJson({ client, path: '/v1/images/generations', payload });
       const normalized = normalizeDirectImageResponse(data, 'png');
       const completedAt = new Date().toISOString();
@@ -319,10 +321,12 @@ export const useAgnesGeneration = ({
         }
       }
       setImageResults((items) => [...storedImages, ...items.filter((item) => item.id !== requestId)]);
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Agnes 生图失败';
       setError(message);
       setImageResults((items) => items.map((item) => (item.id === requestId ? { ...item, status: 'failed', error: message } : item)));
+      return submittedToAgnes;
     } finally {
       setImageLoading(false);
     }
@@ -389,11 +393,12 @@ export const useAgnesGeneration = ({
     const validationMessage = validateVideoForm(videoForm);
     if (validationMessage) {
       setError(validationMessage);
-      return;
+      return false;
     }
 
     setVideoLoading(true);
     setError('');
+    let submittedToAgnes = false;
     const localId = `agnes-video-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const startedAt = new Date().toISOString();
     const taskForm = {
@@ -426,6 +431,7 @@ export const useAgnesGeneration = ({
     try {
       const client = await createRequestClient({ config: activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey });
       const payload = buildAgnesVideoPayload(videoForm);
+      submittedToAgnes = true;
       const data = await callAgnesJson({ client, path: '/v1/videos', payload });
       const createdResult = normalizeAgnesVideoResult(data);
       const videoId = createdResult.videoId || extractVideoId(data);
@@ -441,10 +447,12 @@ export const useAgnesGeneration = ({
       setVideoTasks((items) => items.map((item) => (item.id === localId ? runningTask : item)));
       if (typeof persistVideoTask === 'function') persistVideoTask(runningTask);
       if (!['completed', 'failed'].includes(runningTask.status)) await pollVideoTask({ client, taskId: localId, videoId });
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Agnes 视频生成失败';
       setError(message);
       setVideoTasks((items) => items.map((item) => (item.id === localId ? { ...item, status: 'failed', error: message } : item)));
+      return submittedToAgnes;
     } finally {
       setVideoLoading(false);
     }
