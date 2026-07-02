@@ -3263,6 +3263,32 @@ select option {
   min-width: 0;
 }
 
+.agnes-video-image-input-control {
+  flex: 1 1 330px;
+  min-width: min(330px, 100%);
+}
+
+.agnes-upload-textarea-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.agnes-upload-textarea-row textarea {
+  min-width: 0;
+}
+
+.agnes-inline-upload-control {
+  align-self: stretch;
+  min-width: 40px;
+}
+
+.agnes-inline-upload-control strong {
+  height: 100%;
+  min-height: 40px;
+}
+
 .agnes-mode-control,
 .agnes-resolution-control {
   flex-basis: 150px;

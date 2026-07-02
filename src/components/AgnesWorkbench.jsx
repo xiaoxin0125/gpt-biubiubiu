@@ -84,6 +84,30 @@ const appendLines = (value, lines) => [
   lines.map((line) => String(line || '').trim()).filter(Boolean).join('\n'),
 ].filter(Boolean).join('\n');
 
+const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ''));
+  reader.onerror = () => reject(new Error('图片读取失败。'));
+  reader.readAsDataURL(file);
+});
+
+const uploadImageFilesAsValues = async (files) => {
+  const formData = new FormData();
+  files.forEach((file) => formData.append('images[]', file, file.name));
+
+  try {
+    const data = await requestReferenceImageUpload(formData);
+    const uploadedItems = Array.isArray(data.items) ? data.items : [];
+    const values = uploadedItems.map((item) => item.absoluteUrl || item.url || '').filter(Boolean);
+    if (values.length) return { values, fallbackToBase64: false };
+  } catch {
+    // 上传代理不可用时回退到 Base64，保证视频接口仍能收到图片输入。
+  }
+
+  const values = (await Promise.all(files.map(readFileAsDataUrl))).filter(Boolean);
+  return { values, fallbackToBase64: true };
+};
+
 const findAgnesVideoSizeDraft = (width, height) => {
   const currentWidth = Number(width) || defaultAgnesVideoForm.width;
   const currentHeight = Number(height) || defaultAgnesVideoForm.height;
@@ -234,7 +258,8 @@ const AgnesResults = ({
       const hasProgress = progress !== '';
       const progressLabel = hasProgress ? `${progress}%` : '未知';
       const statusNotice = String(item.statusNotice || '').trim();
-      const caption = item.error || [statusLabel(item.status), hasProgress ? `进度 ${progressLabel}` : '', item.seconds ? `${item.seconds}s` : '', responseSize].filter(Boolean).join(' · ') || 'Agnes 视频任务';
+      const frameText = `${item.numFrames || defaultAgnesVideoForm.numFrames} 帧 / ${item.frameRate || defaultAgnesVideoForm.frameRate} fps`;
+      const caption = item.error || [responseSize, item.seconds ? `${item.seconds}s` : '', frameText].filter(Boolean).join(' · ') || 'Agnes 视频任务';
       return (
         <ResultShell key={`video-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)} onDelete={() => deleteImage?.(item)}>
           <div className="agnes-video-card-body">
@@ -278,12 +303,6 @@ const AgnesResults = ({
             </div>
             <div className="agnes-task-meta">
               <span>{modeLabel(item.mode)}</span>
-              <span>{responseSize}</span>
-              {hasProgress ? <span>进度 {progressLabel}</span> : null}
-              {item.seconds ? <span>{item.seconds} 秒</span> : null}
-              <span>{item.numFrames || defaultAgnesVideoForm.numFrames} 帧 / {item.frameRate || defaultAgnesVideoForm.frameRate} fps</span>
-              {statusNotice ? <span>{statusNotice}</span> : null}
-              {videoUrl && !isHttpUrl(videoUrl) ? <span>结果字段：{videoUrl}</span> : null}
             </div>
           </div>
         </ResultShell>
@@ -661,18 +680,16 @@ export default function AgnesWorkbench({
 
     try {
       const nextFiles = files.slice(0, remaining);
-      const formData = new FormData();
-      nextFiles.forEach((file) => formData.append('images[]', file, file.name));
-      const data = await requestReferenceImageUpload(formData);
-      const uploadedItems = Array.isArray(data.items) ? data.items : [];
-      const nextReferences = uploadedItems.map((item, index) => ({
-        id: createReferenceId(nextFiles[index] || { name: item.name || 'reference-image', size: index, lastModified: Date.now() }),
-        name: item.name || nextFiles[index]?.name || 'reference-image',
-        url: item.absoluteUrl || item.url || '',
-        previewUrl: item.displayUrl || item.absoluteUrl || item.url || '',
+      const { values, fallbackToBase64 } = await uploadImageFilesAsValues(nextFiles);
+      const nextReferences = values.map((value, index) => ({
+        id: createReferenceId(nextFiles[index] || { name: 'reference-image', size: index, lastModified: Date.now() }),
+        name: nextFiles[index]?.name || 'reference-image',
+        url: value,
+        previewUrl: value,
       })).filter((item) => item.url);
-      if (!nextReferences.length) throw new Error('参考图上传后没有返回 URL。');
+      if (!nextReferences.length) throw new Error('参考图上传后没有返回 URL 或 Base64。');
       if (files.length > remaining) setError(`参考图最多支持 ${MAX_REFERENCE_IMAGES} 张，已保留前 ${MAX_REFERENCE_IMAGES} 张。`);
+      else if (fallbackToBase64) setError('图片上传接口不可用，已自动转换为 Base64。');
       setUploadedImageReferences((current) => [...current, ...nextReferences]);
       updateImageForm('imageInputs', (value) => appendLines(value, nextReferences.map((item) => item.url)));
     } catch (uploadError) {
@@ -693,6 +710,25 @@ export default function AgnesWorkbench({
     const referenceUrls = new Set(uploadedImageReferences.map((item) => item.url));
     setUploadedImageReferences([]);
     updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => !referenceUrls.has(line.trim())).join('\n'));
+  };
+
+  const handleVideoImageUpload = async (event, target) => {
+    const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
+    if (!files.length) return;
+
+    try {
+      const selectedFiles = target === 'primary' ? files.slice(0, 1) : files;
+      const { values, fallbackToBase64 } = await uploadImageFilesAsValues(selectedFiles);
+      if (!values.length) throw new Error('图片上传后没有返回 URL 或 Base64。');
+      if (target === 'primary') updateVideoForm('image', values[0]);
+      else updateVideoForm('extraImages', (value) => appendLines(value, values));
+      if (target === 'primary' && files.length > 1) setError('主图只使用第一张图片。');
+      else if (fallbackToBase64) setError('图片上传接口不可用，已自动转换为 Base64。');
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : '视频图片读取失败。');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const refreshActiveResults = () => {
@@ -859,14 +895,26 @@ export default function AgnesWorkbench({
                   <span>估算</span>
                   <strong>{estimatedVideoSeconds.toFixed(1)} 秒</strong>
                 </div>
-                <label className="control-field workbench-extra-control agnes-wide-control">
+                <div className="control-field workbench-extra-control agnes-wide-control agnes-video-image-input-control">
                   <span>主图 URL / Base64</span>
-                  <textarea value={videoForm.image} onChange={(event) => updateVideoForm('image', event.target.value)} rows={2} placeholder="图生视频、多图视频或关键帧模式使用" />
-                </label>
-                <label className="control-field workbench-extra-control agnes-wide-control">
+                  <div className="agnes-upload-textarea-row">
+                    <textarea value={videoForm.image} onChange={(event) => updateVideoForm('image', event.target.value)} rows={2} placeholder="图生视频、多图视频或关键帧模式使用" />
+                    <label className="control-field file-control icon-file-control agnes-inline-upload-control" title="上传主图" aria-label="上传主图">
+                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" onChange={(event) => handleVideoImageUpload(event, 'primary')} />
+                      <ReferenceUploadIcon count={videoForm.image ? 1 : 0} />
+                    </label>
+                  </div>
+                </div>
+                <div className="control-field workbench-extra-control agnes-wide-control agnes-video-image-input-control">
                   <span>额外图片 URL / Base64</span>
-                  <textarea value={videoForm.extraImages} onChange={(event) => updateVideoForm('extraImages', event.target.value)} rows={2} placeholder="每行一张；多图视频和关键帧使用" />
-                </label>
+                  <div className="agnes-upload-textarea-row">
+                    <textarea value={videoForm.extraImages} onChange={(event) => updateVideoForm('extraImages', event.target.value)} rows={2} placeholder="每行一张；多图视频和关键帧使用" />
+                    <label className="control-field file-control icon-file-control agnes-inline-upload-control" title="上传额外图片" aria-label="上传额外图片">
+                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple onChange={(event) => handleVideoImageUpload(event, 'extra')} />
+                      <ReferenceUploadIcon count={splitLines(videoForm.extraImages).filter((line) => line.trim()).length} />
+                    </label>
+                  </div>
+                </div>
                 <label className="control-field workbench-extra-control agnes-wide-control">
                   <span>负向提示词</span>
                   <textarea value={videoForm.negativePrompt} onChange={(event) => updateVideoForm('negativePrompt', event.target.value)} rows={2} placeholder="可选" />

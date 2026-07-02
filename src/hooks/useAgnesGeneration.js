@@ -11,6 +11,7 @@ import {
   requestSharedAgnesJson,
   requestSharedAgnesResult,
 } from '../lib/api';
+import { isDataImageValue, stripDataImagePrefix } from '../lib/images';
 import { clampNumber, normalizePercent } from '../lib/math';
 
 const pollDelayMs = 10000;
@@ -25,6 +26,19 @@ const splitInputs = (value) => String(value || '')
   .split(/\r?\n/)
   .map((item) => item.trim())
   .filter(Boolean);
+
+const isHttpImageReference = (value) => /^https?:\/\//i.test(String(value || '').trim());
+
+const looksLikeImageBase64 = (value) => {
+  const compactValue = stripDataImagePrefix(value).replace(/\s+/g, '');
+  if (compactValue.length < 80 || compactValue.length % 4 !== 0) return false;
+  return /^[A-Za-z0-9+/]+={0,2}$/.test(compactValue);
+};
+
+const isValidVideoImageInput = (value) => {
+  const currentValue = String(value || '').trim();
+  return isHttpImageReference(currentValue) || isDataImageValue(currentValue) || looksLikeImageBase64(currentValue);
+};
 
 const wait = (ms) => new Promise((resolve) => {
   window.setTimeout(resolve, ms);
@@ -128,8 +142,10 @@ const validateVideoForm = (form) => {
   if (!form.prompt.trim()) return '请输入 Agnes 视频提示词。';
   if (!Number.isFinite(numFrames) || numFrames < 9 || numFrames > 441 || (numFrames - 1) % 8 !== 0) return '视频帧数必须小于等于 441，并符合 8n + 1。';
   if (!Number.isFinite(frameRate) || frameRate < 1 || frameRate > 60) return '帧率必须在 1–60 之间。';
-  const imageCount = [String(form.image || '').trim(), ...splitInputs(form.extraImages)].filter(Boolean).length;
-  if (apiMode === 'keyframes' && imageCount < 2) return '关键帧模式需要至少提供两张图片 URL 或 Base64。';
+  const imageInputs = [String(form.image || '').trim(), ...splitInputs(form.extraImages)].filter(Boolean);
+  const invalidImageInput = imageInputs.find((value) => !isValidVideoImageInput(value));
+  if (invalidImageInput) return '主图和额外图片只能填写 http(s) 链接或图片 Base64。';
+  if (apiMode === 'keyframes' && imageInputs.length < 2) return '关键帧模式需要至少提供两张图片 URL 或 Base64。';
   return '';
 };
 
