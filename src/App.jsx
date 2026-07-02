@@ -869,7 +869,7 @@ function App() {
     const form = {
       ...(task.form || {}),
       prompt: task.prompt || task.form?.prompt || '',
-      size: task.form?.size || task.size || (task.width && task.height ? `${task.width}x${task.height}` : ''),
+      size: task.size || task.form?.size || (task.width && task.height ? `${task.width}x${task.height}` : ''),
       response_format: 'url',
       responseFormat: 'url',
       source,
@@ -891,6 +891,7 @@ function App() {
       mode: task.mode || form.mode || '',
       width: task.width || form.width || '',
       height: task.height || form.height || '',
+      size: task.size || form.size || '',
       frameRate: task.frameRate || form.frameRate || '',
       numFrames: task.numFrames || form.numFrames || '',
       progress: task.progress || '',
@@ -1241,8 +1242,10 @@ function App() {
   const detailIsPending = ['pending', 'running'].includes(selectedImage?.status) && !detailSrc && !detailVideoSrc;
   const detailInputPrompt = selectedImage?.prompt || detailParams.prompt || '';
   const detailRevisedPrompt = normalizeVisibleRevisedPrompt(detailInputPrompt, selectedImage?.revised_prompt);
-  const detailElapsedSeconds = selectedImage ? getElapsedSeconds(selectedImage) : null;
-  const detailElapsed = detailElapsedSeconds === null ? '' : formatDuration(detailElapsedSeconds);
+  const detailElapsedSeconds = selectedImage?.mediaType === 'video' && selectedImage?.seconds !== undefined && selectedImage?.seconds !== null && selectedImage?.seconds !== ''
+    ? Number(selectedImage.seconds)
+    : selectedImage ? getElapsedSeconds(selectedImage) : null;
+  const detailElapsed = Number.isFinite(detailElapsedSeconds) && detailElapsedSeconds > 0 ? formatDuration(detailElapsedSeconds) : '';
   const selectedWallItem = detailSrc ? findWallItem(selectedImage) : null;
   const selectedOnWall = Boolean(selectedWallItem);
   const selectedOwnerId = selectedImage?.userId || selectedImage?.user_id || selectedWallItem?.userId || selectedWallItem?.user_id || null;

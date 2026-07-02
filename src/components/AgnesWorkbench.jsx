@@ -8,8 +8,11 @@ import {
   agnesMediaOptions,
   agnesResponseFormatOptions,
   agnesVideoModeOptions,
-  agnesVideoResolutionOptions,
+  agnesVideoRatioOptions,
+  agnesVideoRatioToSize,
+  agnesVideoResolutionGroups,
   defaultAgnesVideoForm,
+  defaultAgnesVideoSizeDraft,
   defaultSizeDraft,
 } from '../constants/options';
 import SizeDialog from './SizeDialog';
@@ -18,7 +21,7 @@ import { apiConfigHasKeyForScope, apiConfigLabelForScope, requestReferenceImageU
 import { createImageSrc } from '../lib/images';
 import { estimateImageAspectRatio, getImageIdentity, getMasonryColumns } from '../lib/board';
 import { clampNumber } from '../lib/math';
-import { getAvailableRatios, getDraftSize, parseSize } from '../lib/size';
+import { getAgnesVideoDraftSize, getAvailableRatios, getDraftSize, parseSize } from '../lib/size';
 import { useAgnesGeneration } from '../hooks/useAgnesGeneration';
 import { useBoard } from '../hooks/useBoard';
 
@@ -80,6 +83,43 @@ const appendLines = (value, lines) => [
   String(value || '').trim(),
   lines.map((line) => String(line || '').trim()).filter(Boolean).join('\n'),
 ].filter(Boolean).join('\n');
+
+const findAgnesVideoSizeDraft = (width, height) => {
+  const currentWidth = Number(width) || defaultAgnesVideoForm.width;
+  const currentHeight = Number(height) || defaultAgnesVideoForm.height;
+  const currentSize = `${currentWidth}x${currentHeight}`;
+  let closest = defaultAgnesVideoSizeDraft;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  Object.entries(agnesVideoRatioToSize).forEach(([resolution, ratios]) => {
+    Object.entries(ratios).forEach(([ratio, size]) => {
+      if (size === currentSize) {
+        closest = { ...defaultAgnesVideoSizeDraft, resolution, ratio };
+        bestScore = 0;
+        return;
+      }
+
+      const parsed = parseSize(size);
+      const ratioScore = Math.abs(Math.log((currentWidth / currentHeight) / (parsed.width / parsed.height)));
+      const pixelScore = Math.abs(Math.log((currentWidth * currentHeight) / (parsed.width * parsed.height)));
+      const score = ratioScore * 4 + pixelScore;
+      if (score < bestScore) {
+        closest = { ...defaultAgnesVideoSizeDraft, resolution, ratio };
+        bestScore = score;
+      }
+    });
+  });
+
+  return closest;
+};
+
+const getDisplayVideoSize = (task) => (
+  String(task.size || task.form?.size || '').trim()
+  || (task.width && task.height ? `${task.width}x${task.height}` : '')
+  || '自动'
+);
+
+const videoSizeNormalizationNote = '当提交的 width、height 或宽高比与模型支持规格不完全匹配时，系统会自动映射到最接近的标准输出尺寸。';
 
 const EmptyAgnesCanvas = ({ activeTab, configured, openAccount, emptyText }) => (
   <div className="empty-canvas agnes-empty-canvas">
@@ -186,7 +226,8 @@ const AgnesResults = ({
 
     if (isVideo) {
       const videoUrl = String(item.videoUrl || '').trim();
-      const caption = item.error || [statusLabel(item.status), item.progress ? `进度 ${item.progress}` : '', item.seconds ? `${item.seconds}s` : '', item.size || ''].filter(Boolean).join(' · ') || 'Agnes 视频任务';
+      const responseSize = getDisplayVideoSize(item);
+      const caption = item.error || [statusLabel(item.status), item.progress ? `进度 ${item.progress}` : '', item.seconds ? `${item.seconds}s` : '', responseSize].filter(Boolean).join(' · ') || 'Agnes 视频任务';
       return (
         <ResultShell key={`video-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)} onDelete={() => deleteImage?.(item)}>
           <div className="agnes-video-card-body">
@@ -201,6 +242,8 @@ const AgnesResults = ({
             )}
             <div className="agnes-task-meta">
               <span>{modeLabel(item.mode)}</span>
+              <span>{responseSize}</span>
+              {item.seconds ? <span>{item.seconds} 秒</span> : null}
               <span>{item.numFrames || defaultAgnesVideoForm.numFrames} 帧 / {item.frameRate || defaultAgnesVideoForm.frameRate} fps</span>
               {videoUrl && !isHttpUrl(videoUrl) ? <span>结果字段：{videoUrl}</span> : null}
             </div>
@@ -300,7 +343,9 @@ export default function AgnesWorkbench({
   const [agnesBoardSearch, setAgnesBoardSearch] = useState('');
   const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
   const [imageSizeDialogOpen, setImageSizeDialogOpen] = useState(false);
+  const [videoSizeDialogOpen, setVideoSizeDialogOpen] = useState(false);
   const [imageSizeDraft, setImageSizeDraft] = useState(defaultSizeDraft);
+  const [videoSizeDraft, setVideoSizeDraft] = useState(defaultAgnesVideoSizeDraft);
   const [uploadedImageReferences, setUploadedImageReferences] = useState([]);
   const [imageLayoutMeta, setImageLayoutMeta] = useState({});
   const refreshedVideoHistoryRef = useRef(new Set());
@@ -341,8 +386,11 @@ export default function AgnesWorkbench({
   const activeLoading = activeTab === 'image' ? imageLoading : videoLoading;
   const videoResolution = `${videoForm.width}x${videoForm.height}`;
   const imageAvailableRatios = getAvailableRatios(imageSizeDraft.resolution);
+  const videoAvailableRatios = getAvailableRatios(videoSizeDraft.resolution, agnesVideoRatioOptions, agnesVideoRatioToSize);
   const activeImageSize = getDraftSize(imageSizeDraft);
+  const activeVideoSize = getAgnesVideoDraftSize(videoSizeDraft) || videoResolution;
   const displayImageSize = activeImageSize || '自动';
+  const displayVideoSize = activeVideoSize;
   const uploadedReferenceNames = uploadedImageReferences.map((item, index) => `图${index + 1}:${item.name}`).join('，');
   const workbenchClassName = workbenchExpanded ? 'workbench-actions agnes-workbench-actions is-expanded' : 'workbench-actions agnes-workbench-actions';
   const agnesHistoryImages = useMemo(() => historyImages.filter(isAgnesHistoryImage), [historyImages]);
@@ -389,7 +437,7 @@ export default function AgnesWorkbench({
         ...videoForm,
         ...(task.form || {}),
         prompt: task.prompt || videoForm.prompt,
-        size: task.form?.size || task.size || `${task.width || videoForm.width}x${task.height || videoForm.height}`,
+        size: task.size || task.form?.size || `${task.width || videoForm.width}x${task.height || videoForm.height}`,
         response_format: 'url',
         responseFormat: 'url',
         source: 'agnes-video',
@@ -542,6 +590,18 @@ export default function AgnesWorkbench({
   const applyImageSize = () => {
     updateImageForm('size', activeImageSize);
     setImageSizeDialogOpen(false);
+  };
+
+  const openVideoSizeDialog = () => {
+    setVideoSizeDraft(findAgnesVideoSizeDraft(videoForm.width, videoForm.height));
+    setVideoSizeDialogOpen(true);
+  };
+
+  const applyVideoSize = () => {
+    const size = getAgnesVideoDraftSize(videoSizeDraft);
+    const { width, height } = parseSize(size || videoResolution);
+    setVideoResolution(`${width}x${height}`);
+    setVideoSizeDialogOpen(false);
   };
 
   const handleImageReferenceChange = async (event) => {
@@ -729,14 +789,12 @@ export default function AgnesWorkbench({
                   onChange: (value) => updateVideoForm('mode', value),
                   className: 'control-field workbench-extra-control agnes-mode-control',
                 })}
-                {renderSelect({
-                  id: 'agnes-video-resolution',
-                  label: '分辨率',
-                  value: videoResolution,
-                  options: agnesVideoResolutionOptions,
-                  onChange: setVideoResolution,
-                  className: 'control-field workbench-extra-control agnes-resolution-control',
-                })}
+                <div className="control-field size-control workbench-extra-control agnes-resolution-control">
+                  <span>分辨率</span>
+                  <button type="button" className="tool-pill" onClick={openVideoSizeDialog}>
+                    {videoResolution}
+                  </button>
+                </div>
                 <label className="control-field count-field workbench-extra-control">
                   <span>帧数</span>
                   <input type="number" min="9" max="441" step="8" value={videoForm.numFrames} onChange={(event) => updateVideoForm('numFrames', event.target.value)} />
@@ -809,6 +867,36 @@ export default function AgnesWorkbench({
               displaySize={displayImageSize}
               closeDialog={() => setImageSizeDialogOpen(false)}
               applySize={applyImageSize}
+            />
+          </div>
+        </div>
+      ) : null}
+      {videoSizeDialogOpen ? (
+        <div className="modal-layer" role="presentation">
+          <button type="button" className="modal-backdrop" aria-label="关闭弹窗" onClick={() => setVideoSizeDialogOpen(false)} />
+          <div className="modal-frame size-modal-frame">
+            <button type="button" className="close-button modal-close-button" aria-label="关闭弹窗" onClick={() => setVideoSizeDialogOpen(false)}>×</button>
+            <SizeDialog
+              sizeDraft={videoSizeDraft}
+              setSizeDraft={setVideoSizeDraft}
+              availableRatios={videoAvailableRatios}
+              displaySize={displayVideoSize}
+              closeDialog={() => setVideoSizeDialogOpen(false)}
+              applySize={applyVideoSize}
+              title="设置视频分辨率"
+              currentLabel="提交尺寸"
+              summaryLabel="预计提交"
+              resolutionLabel="标准档位"
+              ratioLabel="视频比例"
+              resolutionOptions={agnesVideoResolutionGroups}
+              ratioSizeMap={agnesVideoRatioToSize}
+              getRatiosForResolution={(resolution) => getAvailableRatios(resolution, agnesVideoRatioOptions, agnesVideoRatioToSize)}
+              allowAuto={false}
+              allowCustomSize={false}
+              allowCustomRatio={false}
+              normalizationNote={videoSizeNormalizationNote}
+              ratioGridClassName="video-ratio-list"
+              modalClassName="video-size-modal"
             />
           </div>
         </div>

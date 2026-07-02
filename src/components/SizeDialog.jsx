@@ -22,23 +22,42 @@ export default function SizeDialog({
   displaySize,
   closeDialog,
   applySize,
+  title = '设置图像尺寸',
+  currentLabel = '当前',
+  summaryLabel = '评估图',
+  resolutionLabel = '基准分辨率',
+  ratioLabel = '图像比例',
+  resolutionOptions = resolutionGroups,
+  ratioSizeMap = ratioToSize,
+  getRatiosForResolution = getAvailableRatios,
+  allowAuto = true,
+  allowCustomSize = true,
+  allowCustomRatio = true,
+  normalizationNote = '',
+  ratioGridClassName = '',
+  modalClassName = '',
 }) {
+  const ratioOnly = !allowAuto && !allowCustomSize;
+  const activeMode = ratioOnly ? 'ratio' : sizeDraft.mode;
+
   return (
-    <section className="modal-card size-modal" role="dialog" aria-modal="true" aria-label="设置图像尺寸">
+    <section className={`modal-card size-modal${modalClassName ? ` ${modalClassName}` : ''}`} role="dialog" aria-modal="true" aria-label={title}>
       <div className="modal-head">
         <div>
-          <h2>设置图像尺寸</h2>
-          <p>当前：{displaySize}</p>
+          <h2>{title}</h2>
+          <p>{currentLabel}：{displaySize}</p>
         </div>
       </div>
 
-      <div className="segmented-control">
-        <button type="button" className={sizeDraft.mode === 'auto' ? 'is-active' : ''} onClick={() => setSizeDraft((draft) => ({ ...draft, mode: 'auto' }))}>自动</button>
-        <button type="button" className={sizeDraft.mode === 'ratio' ? 'is-active' : ''} onClick={() => setSizeDraft((draft) => ({ ...draft, mode: 'ratio' }))}>按比例</button>
-        <button type="button" className={sizeDraft.mode === 'custom' ? 'is-active' : ''} onClick={() => setSizeDraft((draft) => ({ ...draft, mode: 'custom' }))}>自定义宽高</button>
-      </div>
+      {ratioOnly ? null : (
+        <div className="segmented-control">
+          {allowAuto ? <button type="button" className={activeMode === 'auto' ? 'is-active' : ''} onClick={() => setSizeDraft((draft) => ({ ...draft, mode: 'auto' }))}>自动</button> : null}
+          <button type="button" className={activeMode === 'ratio' ? 'is-active' : ''} onClick={() => setSizeDraft((draft) => ({ ...draft, mode: 'ratio' }))}>按比例</button>
+          {allowCustomSize ? <button type="button" className={activeMode === 'custom' ? 'is-active' : ''} onClick={() => setSizeDraft((draft) => ({ ...draft, mode: 'custom' }))}>自定义宽高</button> : null}
+        </div>
+      )}
 
-      {sizeDraft.mode === 'auto' ? (
+      {allowAuto && activeMode === 'auto' ? (
         <div className="size-tab-panel auto-size-panel">
           <div className="auto-card">
             <span className="auto-icon" aria-hidden="true">
@@ -56,20 +75,20 @@ export default function SizeDialog({
         </div>
       ) : null}
 
-      {sizeDraft.mode === 'ratio' ? (
+      {activeMode === 'ratio' ? (
         <div className="size-tab-panel ratio-size-panel">
           <div className="modal-section">
-            <span className="section-label">基准分辨率</span>
+            <span className="section-label">{resolutionLabel}</span>
             <div className="resolution-row">
-              {resolutionGroups.map((item) => (
+              {resolutionOptions.map((item) => (
                 <button
                   type="button"
                   className={sizeDraft.resolution === item.value ? 'select-card is-active' : 'select-card'}
                   key={item.value}
                   onClick={() => setSizeDraft((draft) => {
-                    const nextRatios = getAvailableRatios(item.value);
-                    const nextRatio = draft.ratio === 'custom-ratio' || ratioToSize[item.value]?.[draft.ratio] ? draft.ratio : nextRatios[0]?.value || '1:1';
-                    return { ...draft, resolution: item.value, ratio: nextRatio };
+                    const nextRatios = getRatiosForResolution(item.value);
+                    const nextRatio = draft.ratio === 'custom-ratio' || ratioSizeMap[item.value]?.[draft.ratio] ? draft.ratio : nextRatios[0]?.value || '1:1';
+                    return { ...draft, mode: 'ratio', resolution: item.value, ratio: nextRatio };
                   })}
                 >
                   {item.label}
@@ -79,30 +98,34 @@ export default function SizeDialog({
           </div>
 
           <div className="modal-section">
-            <span className="section-label">图像比例</span>
-            <div className="ratio-grid">
+            <span className="section-label">{ratioLabel}</span>
+            <div className={ratioGridClassName ? `ratio-grid ${ratioGridClassName}` : 'ratio-grid'}>
               {availableRatios.filter((item) => item.value !== 'custom-ratio').map((item) => (
                 <button
                   type="button"
-                  className={sizeDraft.ratio === item.value ? 'ratio-card is-active' : 'ratio-card'}
+                  className={`${sizeDraft.ratio === item.value ? 'ratio-card is-active' : 'ratio-card'}${item.scene ? ' has-description' : ''}`}
                   key={item.value}
-                  onClick={() => setSizeDraft((draft) => ({ ...draft, ratio: item.value }))}
+                  onClick={() => setSizeDraft((draft) => ({ ...draft, mode: 'ratio', ratio: item.value }))}
+                  title={item.scene || item.label}
                 >
                   <span className={`ratio-icon ${item.icon}`} style={getRatioIconStyle(item.value)} />
                   <strong>{item.label}</strong>
+                  {item.scene ? <small>{item.scene}</small> : null}
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              className={sizeDraft.ratio === 'custom-ratio' ? 'custom-ratio-button is-active' : 'custom-ratio-button'}
-              onClick={() => setSizeDraft((draft) => ({ ...draft, ratio: 'custom-ratio' }))}
-            >
-              自定义比例
-            </button>
+            {allowCustomRatio ? (
+              <button
+                type="button"
+                className={sizeDraft.ratio === 'custom-ratio' ? 'custom-ratio-button is-active' : 'custom-ratio-button'}
+                onClick={() => setSizeDraft((draft) => ({ ...draft, mode: 'ratio', ratio: 'custom-ratio' }))}
+              >
+                自定义比例
+              </button>
+            ) : null}
           </div>
 
-          {sizeDraft.ratio === 'custom-ratio' ? (
+          {allowCustomRatio && sizeDraft.ratio === 'custom-ratio' ? (
             <div className="custom-ratio-row">
               <label>
                 <span>宽比例</span>
@@ -117,7 +140,7 @@ export default function SizeDialog({
         </div>
       ) : null}
 
-      {sizeDraft.mode === 'custom' ? (
+      {allowCustomSize && activeMode === 'custom' ? (
         <div className="size-tab-panel custom-size-panel">
           <div className="custom-size-row">
             <label>
@@ -145,8 +168,21 @@ export default function SizeDialog({
         </div>
       ) : null}
 
+      {normalizationNote ? (
+        <div className="size-limit-note video-size-note">
+          <span className="auto-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <rect x="4" y="6" width="16" height="12" rx="2" />
+              <path d="m10 10 5 2-5 2v-4Z" />
+            </svg>
+          </span>
+          <strong>Agnes Video V2.0 会对部分视频生成参数进行标准化处理</strong>
+          <span>{normalizationNote}</span>
+        </div>
+      ) : null}
+
       <div className="summary-box">
-        <span>评估图</span>
+        <span>{summaryLabel}</span>
         <strong>{displaySize}</strong>
       </div>
 

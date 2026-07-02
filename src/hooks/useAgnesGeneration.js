@@ -100,8 +100,8 @@ export const normalizeAgnesVideoResult = (data = {}) => {
     videoId,
     videoUrl,
     progress: progressValue === null || progressValue === undefined || progressValue === '' ? '' : String(progressValue),
-    seconds: source.seconds ?? body.seconds ?? resultNode.seconds ?? '',
-    size: source.size ?? body.size ?? resultNode.size ?? '',
+    seconds: source.seconds ?? body.seconds ?? resultNode.seconds ?? outputNode.seconds ?? '',
+    size: source.size ?? body.size ?? resultNode.size ?? outputNode.size ?? '',
     error: firstString(source.error, source.message, body.error?.message, body.error, body.message),
     raw: data,
   };

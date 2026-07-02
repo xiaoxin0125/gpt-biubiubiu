@@ -233,8 +233,8 @@ export const defaultAgnesVideoForm = {
   mode: 'ti2vid',
   image: '',
   extraImages: '',
-  width: 1152,
-  height: 768,
+  width: 1280,
+  height: 720,
   numFrames: 121,
   frameRate: 24,
   numInferenceSteps: '',
@@ -252,13 +252,49 @@ export const agnesVideoModeOptions = [
   { label: '关键帧', value: 'keyframes' },
 ];
 
-export const agnesVideoResolutionOptions = [
-  { label: '横版 1152×768', value: '1152x768' },
-  { label: '竖版 768×1152', value: '768x1152' },
-  { label: '方形 1024×1024', value: '1024x1024' },
-  { label: '16:9 1280×720', value: '1280x720' },
-  { label: '9:16 720×1280', value: '720x1280' },
+export const agnesVideoResolutionGroups = [
+  { label: '480p', value: '480p' },
+  { label: '720p', value: '720p' },
+  { label: '1080p', value: '1080p' },
 ];
+
+export const agnesVideoRatioOptions = [
+  { label: '16:9', value: '16:9', icon: 'wide', scene: '横版视频、产品演示、网站展示、YouTube 风格内容。' },
+  { label: '9:16', value: '9:16', icon: 'tall', scene: '竖版短视频、移动端内容、TikTok / Reels / Shorts 风格内容。' },
+  { label: '1:1', value: '1:1', icon: 'square', scene: '方形视频、社交媒体信息流、角色或产品展示。' },
+  { label: '4:3', value: '4:3', icon: 'landscape', scene: '传统横版格式和通用演示内容。' },
+  { label: '3:4', value: '3:4', icon: 'portrait', scene: '竖版演示、肖像或产品为主的内容。' },
+];
+
+export const agnesVideoRatioToSize = {
+  '480p': {
+    '16:9': '854x480',
+    '9:16': '480x854',
+    '1:1': '480x480',
+    '4:3': '640x480',
+    '3:4': '480x640',
+  },
+  '720p': {
+    '16:9': '1280x720',
+    '9:16': '720x1280',
+    '1:1': '720x720',
+    '4:3': '960x720',
+    '3:4': '720x960',
+  },
+  '1080p': {
+    '16:9': '1920x1080',
+    '9:16': '1080x1920',
+    '1:1': '1080x1080',
+    '4:3': '1440x1080',
+    '3:4': '1080x1440',
+  },
+};
+
+export const defaultAgnesVideoSizeDraft = {
+  mode: 'ratio',
+  resolution: '720p',
+  ratio: '16:9',
+};
 
 export const defaultApiConfigItem = {
   id: 'default-api-config',

@@ -47,7 +47,7 @@ export default function ImageDetailModal({
 
   const isVideo = detailMediaType === 'video';
   const videoStatusLabel = selectedImage.status === 'completed' ? '已完成' : selectedImage.status === 'failed' ? '任务失败' : selectedImage.status === 'running' ? '生成中' : '等待中';
-  const videoSize = detailParams.size || (selectedImage.width && selectedImage.height ? `${selectedImage.width}x${selectedImage.height}` : '自动');
+  const videoSize = selectedImage.size || detailParams.size || (selectedImage.width && selectedImage.height ? `${selectedImage.width}x${selectedImage.height}` : '自动');
   const lightboxSrc = detailDownloadSrc || detailSrc;
   const openLightbox = () => {
     if (detailSrc) setLightboxOpen(true);
@@ -117,6 +117,7 @@ export default function ImageDetailModal({
             <>
               <div><span>状态</span><strong>{videoStatusLabel}</strong></div>
               <div><span>进度</span><strong>{selectedImage.progress || '未知'}</strong></div>
+              {selectedImage.seconds ? <div><span>视频时长</span><strong>{selectedImage.seconds} 秒</strong></div> : null}
               <div><span>帧数</span><strong>{selectedImage.numFrames || detailParams.numFrames || '自动'}</strong></div>
               <div><span>帧率</span><strong>{selectedImage.frameRate || detailParams.frameRate || '自动'}</strong></div>
               <div><span>任务 ID</span><strong>{selectedImage.videoId || selectedImage.id || '无'}</strong></div>

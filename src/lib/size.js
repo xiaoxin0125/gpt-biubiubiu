@@ -1,4 +1,4 @@
-import { ratioOptions, ratioToSize, resolutionMaxEdges, sizeLimits } from '../constants/options';
+import { agnesVideoRatioToSize, ratioOptions, ratioToSize, resolutionMaxEdges, sizeLimits } from '../constants/options';
 import { clampNumber } from './math';
 
 export const parseSize = (size) => {
@@ -6,7 +6,14 @@ export const parseSize = (size) => {
   return { width: width || 1024, height: height || 1024 };
 };
 
-export const getAvailableRatios = (resolution) => ratioOptions.filter((item) => item.value === 'custom-ratio' || Boolean(ratioToSize[resolution]?.[item.value]));
+export const getAvailableRatios = (resolution, options = ratioOptions, sizeMap = ratioToSize) => options.filter((item) => item.value === 'custom-ratio' || Boolean(sizeMap[resolution]?.[item.value]));
+
+export const getMappedDraftSize = (draft, sizeMap) => {
+  if (draft.mode === 'auto') return '';
+  return sizeMap[draft.resolution]?.[draft.ratio] || '';
+};
+
+export const getAgnesVideoDraftSize = (draft) => getMappedDraftSize(draft, agnesVideoRatioToSize);
 
 const ceilToStep = (value) => Math.ceil(value / sizeLimits.step) * sizeLimits.step;
 const floorToStep = (value) => Math.floor(value / sizeLimits.step) * sizeLimits.step;

@@ -1388,6 +1388,12 @@ input::placeholder {
   align-content: start;
 }
 
+.video-size-modal {
+  min-height: 0;
+  max-height: calc(100vh - 36px);
+  gap: 12px;
+}
+
 .compact-modal {
   width: min(100%, 410px);
 }
@@ -1753,6 +1759,112 @@ input::placeholder {
 .ratio-card strong {
   font-size: 0.76rem;
   font-weight: 900;
+}
+
+.ratio-card small {
+  display: block;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.video-size-note {
+  grid-template-columns: 28px minmax(0, 1fr);
+  flex: 0 0 auto;
+  justify-items: start;
+  align-items: center;
+  gap: 5px 10px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.video-size-note .auto-icon {
+  grid-row: 1 / span 2;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+}
+
+.video-size-note .auto-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.video-size-note strong {
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
+.video-size-note span:last-child {
+  max-width: none;
+  font-size: 0.68rem;
+  line-height: 1.32;
+}
+
+.size-modal .ratio-card.has-description {
+  min-height: 112px;
+  align-content: center;
+  padding: 10px 8px;
+}
+
+.size-modal .ratio-card.has-description.is-active small {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.video-size-modal .size-tab-panel {
+  min-height: auto;
+}
+
+.video-size-modal .ratio-size-panel {
+  gap: 12px;
+}
+
+.video-size-modal .modal-section {
+  min-height: 0;
+}
+
+.video-ratio-list {
+  grid-template-columns: 1fr;
+}
+
+.video-ratio-list .ratio-card.has-description {
+  grid-template-columns: 30px 48px minmax(0, 1fr);
+  min-height: 56px;
+  justify-items: start;
+  place-items: center start;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.video-ratio-list .ratio-card small {
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+@media (max-height: 720px) {
+  .video-size-modal {
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .video-size-modal .ratio-size-panel {
+    gap: 10px;
+  }
+
+  .video-ratio-list {
+    gap: 6px;
+  }
+
+  .video-ratio-list .ratio-card.has-description {
+    min-height: 50px;
+    padding: 7px 9px;
+  }
+
+  .video-size-note {
+    padding: 7px 9px;
+  }
 }
 
 .custom-ratio-button {
