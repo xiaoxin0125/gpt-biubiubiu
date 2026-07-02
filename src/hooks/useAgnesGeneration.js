@@ -13,7 +13,7 @@ import {
 } from '../lib/api';
 import { clampNumber, normalizePercent } from '../lib/math';
 
-const pollDelayMs = 6000;
+const pollDelayMs = 10000;
 const maxPollAttempts = 120;
 const pollRateLimitDelayMs = 20000;
 const maxPollDelayMs = 45000;

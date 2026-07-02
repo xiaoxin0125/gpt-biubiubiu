@@ -227,6 +227,9 @@ const AgnesResults = ({
     if (isVideo) {
       const videoUrl = String(item.videoUrl || '').trim();
       const responseSize = getDisplayVideoSize(item);
+      const videoId = getImageIdentity(item);
+      const videoMeta = imageLayoutMeta[videoId] || {};
+      const aspectRatio = estimateImageAspectRatio(item, videoMeta);
       const progress = normalizePercent(item.progress, isFailed ? '' : isPending ? 0 : 100);
       const hasProgress = progress !== '';
       const progressLabel = hasProgress ? `${progress}%` : '未知';
@@ -235,9 +238,25 @@ const AgnesResults = ({
       return (
         <ResultShell key={`video-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)} onDelete={() => deleteImage?.(item)}>
           <div className="agnes-video-card-body">
-            <div className="agnes-video-preview-wrap">
+            <div className="agnes-video-preview-wrap result-image-wrap agnes-result-media" style={{ aspectRatio }}>
               {videoUrl && isHttpUrl(videoUrl) ? (
-                <video src={videoUrl} controls playsInline onClick={(event) => event.stopPropagation()} />
+                <video
+                  src={videoUrl}
+                  controls
+                  playsInline
+                  onClick={(event) => event.stopPropagation()}
+                  onLoadedMetadata={(event) => {
+                    const videoWidth = event.currentTarget.videoWidth || 1;
+                    const videoHeight = event.currentTarget.videoHeight || 1;
+                    setImageLayoutMeta((current) => ({
+                      ...current,
+                      [videoId]: {
+                        loaded: true,
+                        aspectRatio: clampNumber(videoWidth / videoHeight, 0.28, 3.2),
+                      },
+                    }));
+                  }}
+                />
               ) : (
                 <div className="pending-preview agnes-video-pending-preview">
                   <span className="loading-ring" aria-hidden="true" />
@@ -511,6 +530,11 @@ export default function AgnesWorkbench({
     () => getMasonryColumns(visibleAgnesItems, masonryColumnCount, imageLayoutMeta),
     [imageLayoutMeta, masonryColumnCount, visibleAgnesItems],
   );
+  const scrollTopRefreshKey = useMemo(() => visibleAgnesItems.map((item) => {
+    const identity = getImageIdentity(item);
+    const meta = imageLayoutMeta[identity] || {};
+    return [item.id, item.status, item.progress, item.size, item.form?.size, meta.aspectRatio || ''].join(':');
+  }).join('|'), [imageLayoutMeta, visibleAgnesItems]);
   const emptyText = agnesBoardSearch.trim() && activeResultCount ? '没有匹配的 Agnes 作品' : '';
   const showAgnesResults = visibleAgnesItems.length > 0 || hasMoreAgnesItems || boardLoadingMore;
 
@@ -741,7 +765,7 @@ export default function AgnesWorkbench({
       <ScrollTopButton
         targetRef={boardRef}
         className="is-page is-generate-board"
-        refreshKey={`agnes-${agnesItems.length}-${activeTab}-${agnesBoardScope}`}
+        refreshKey={`agnes-${activeTab}-${agnesBoardScope}-${scrollTopRefreshKey}`}
       />
 
       <form className="bottom-workbench agnes-bottom-workbench" onSubmit={submitActiveForm}>

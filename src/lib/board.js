@@ -78,7 +78,9 @@ export const getSourceLabel = (image) => {
 
 export const estimateImageAspectRatio = (image, meta = {}) => {
   if (meta.aspectRatio) return clampNumber(Number(meta.aspectRatio) || 1, 0.28, 3.2);
-  const size = parseSize(image?.form?.size || image?.size || '1024x1024');
+  const isVideo = image?.mediaType === 'video' || image?.source === 'agnes-video';
+  const explicitSize = image?.form?.size || image?.size || (image?.width && image?.height ? `${image.width}x${image.height}` : '');
+  const size = parseSize(explicitSize || (isVideo ? '1280x720' : '1024x1024'));
   return clampNumber(size.width / size.height, 0.28, 3.2);
 };
 
