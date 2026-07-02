@@ -700,7 +700,15 @@ function App() {
   };
 
   const deleteImage = async (image) => {
-    if (!image || !window.confirm('确认删除这张图片记录？')) return;
+    if (!image) return;
+    if (typeof image.removeFromAgnes === 'function') {
+      if (!window.confirm('确认删除这个 Agnes 作品记录？')) return;
+      image.removeFromAgnes();
+      setSelectedImage((current) => (current && isSameImage(current, image) ? null : current));
+      if (selectedImage && isSameImage(selectedImage, image)) setActiveDialog(null);
+      return;
+    }
+    if (!window.confirm('确认删除这张图片记录？')) return;
 
     const requestId = image.requestId || image.id;
     if (requestId) deletedRequestIdsRef.current.add(requestId);
@@ -749,7 +757,7 @@ function App() {
     if (item.finishedAt && (item.startedAt || item.createdAt)) {
       return Math.max(0, Math.floor((new Date(item.finishedAt).getTime() - new Date(item.startedAt || item.createdAt).getTime()) / 1000));
     }
-    if (item.status === 'pending') {
+    if (item.status === 'pending' || item.status === 'running') {
       return Math.max(0, Math.floor((nowTick - new Date(item.startedAt || item.createdAt || Date.now()).getTime()) / 1000));
     }
     return null;
@@ -978,10 +986,12 @@ function App() {
   };
 
   const detailParams = selectedImage?.form || form;
-  const detailSrc = createImageSrc(selectedImage);
-  const detailDownloadSrc = createImageDownloadSrc(selectedImage);
-  const detailIsFailed = selectedImage?.status === 'failed' && !detailSrc;
-  const detailIsPending = selectedImage?.status === 'pending' && !detailSrc;
+  const detailMediaType = selectedImage?.mediaType === 'video' ? 'video' : 'image';
+  const detailSrc = detailMediaType === 'image' ? createImageSrc(selectedImage) : '';
+  const detailVideoSrc = detailMediaType === 'video' ? String(selectedImage?.videoUrl || selectedImage?.url || '').trim() : '';
+  const detailDownloadSrc = detailMediaType === 'video' && /^https?:\/\//i.test(detailVideoSrc) ? detailVideoSrc : detailMediaType === 'image' ? createImageDownloadSrc(selectedImage) : '';
+  const detailIsFailed = selectedImage?.status === 'failed' && !detailSrc && !detailVideoSrc;
+  const detailIsPending = ['pending', 'running'].includes(selectedImage?.status) && !detailSrc && !detailVideoSrc;
   const detailInputPrompt = selectedImage?.prompt || detailParams.prompt || '';
   const detailRevisedPrompt = normalizeVisibleRevisedPrompt(detailInputPrompt, selectedImage?.revised_prompt);
   const detailElapsedSeconds = selectedImage ? getElapsedSeconds(selectedImage) : null;
@@ -1113,6 +1123,7 @@ function App() {
             setAuthTab('settings');
             setActiveDialog('auth');
           }}
+          openDetail={openDetail}
         />
       ) : null}
 
@@ -1153,6 +1164,7 @@ function App() {
               selectedImage={selectedImage}
               view={view}
               detailParams={detailParams}
+              detailMediaType={detailMediaType}
               detailSrc={detailSrc}
               detailDownloadSrc={detailDownloadSrc}
               detailIsFailed={detailIsFailed}

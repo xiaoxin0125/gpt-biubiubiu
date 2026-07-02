@@ -7,6 +7,7 @@ export default function ImageDetailModal({
   selectedImage,
   view,
   detailParams,
+  detailMediaType,
   detailSrc,
   detailDownloadSrc,
   detailIsFailed,
@@ -44,6 +45,9 @@ export default function ImageDetailModal({
 
   if (!selectedImage) return null;
 
+  const isVideo = detailMediaType === 'video';
+  const videoStatusLabel = selectedImage.status === 'completed' ? '已完成' : selectedImage.status === 'failed' ? '任务失败' : selectedImage.status === 'running' ? '生成中' : '等待中';
+  const videoSize = detailParams.size || (selectedImage.width && selectedImage.height ? `${selectedImage.width}x${selectedImage.height}` : '自动');
   const lightboxSrc = detailDownloadSrc || detailSrc;
   const openLightbox = () => {
     if (detailSrc) setLightboxOpen(true);
@@ -51,14 +55,16 @@ export default function ImageDetailModal({
 
   return (
     <>
-    <section className="modal-card image-detail-modal" ref={detailModalRef} role="dialog" aria-modal="true" aria-label="图片详情">
+    <section className="modal-card image-detail-modal" ref={detailModalRef} role="dialog" aria-modal="true" aria-label={isVideo ? '视频详情' : '图片详情'}>
       <div className="detail-preview">
         <div className="detail-badges">
           {detailElapsed ? <span>◷ {detailElapsed}</span> : null}
-          <span>{detailParams.size || '自动'}</span>
-          <span>{detailParams.response_format === 'url' ? detailParams.output_format || 'png' : getResponseFormatLabel(detailParams.response_format)}</span>
+          <span>{isVideo ? videoSize : detailParams.size || '自动'}</span>
+          <span>{isVideo ? videoStatusLabel : detailParams.response_format === 'url' ? detailParams.output_format || 'png' : getResponseFormatLabel(detailParams.response_format)}</span>
         </div>
-        {detailSrc ? (
+        {isVideo && detailDownloadSrc ? (
+          <video className="detail-preview-video" src={detailDownloadSrc} controls playsInline />
+        ) : detailSrc ? (
           <img
             src={detailSrc}
             alt={detailRevisedPrompt || selectedImage.prompt || '图片详情'}
@@ -77,7 +83,7 @@ export default function ImageDetailModal({
         ) : (
           <div className="pending-preview detail-pending-preview">
             <span className="loading-ring" aria-hidden="true" />
-            <strong>{detailIsFailed ? '生成失败' : '生成中...'}</strong>
+            <strong>{detailIsFailed ? (isVideo ? '任务失败' : '生成失败') : isVideo ? videoStatusLabel : '生成中...'}</strong>
             {selectedImage.error ? <p>{selectedImage.error}</p> : null}
           </div>
         )}
@@ -86,8 +92,8 @@ export default function ImageDetailModal({
       <div className="detail-panel" ref={detailPanelRef}>
         <div className="modal-head">
           <div>
-            <h2>{detailIsPending ? '请求详情' : detailIsFailed ? '失败详情' : '图片详情'}</h2>
-            <p>{detailIsPending ? '生成中' : detailIsFailed ? '请求失败' : selectedImage.authorName || (selectedOnWall ? '已上墙' : '本地生成')}</p>
+            <h2>{detailIsPending ? '请求详情' : detailIsFailed ? '失败详情' : isVideo ? '视频详情' : '图片详情'}</h2>
+            <p>{detailIsPending ? videoStatusLabel : detailIsFailed ? '请求失败' : isVideo ? selectedImage.apiName || 'Agnes 视频' : selectedImage.authorName || (selectedOnWall ? '已上墙' : '本地生成')}</p>
           </div>
         </div>
 
@@ -105,21 +111,34 @@ export default function ImageDetailModal({
         </div>
 
         <div className="detail-meta-grid">
-          <div><span>来源</span><strong>{getSourceLabel(selectedImage)}</strong></div>
-          <div><span>尺寸</span><strong>{detailParams.size || '自动'}</strong></div>
-          <div><span>质量</span><strong>{getQualityLabel(detailParams.quality)}</strong></div>
-          <div><span>返回格式</span><strong>{getResponseFormatLabel(detailParams.response_format)}</strong></div>
-          <div><span>格式</span><strong>{detailParams.response_format === 'url' ? detailParams.output_format || 'png' : '禁用'}</strong></div>
-          <div><span>背景</span><strong>{detailParams.background || 'auto'}</strong></div>
-          <div><span>审核</span><strong>{detailParams.moderation || 'auto'}</strong></div>
-          <div><span>数量</span><strong>{detailParams.n || 1}</strong></div>
+          <div><span>来源</span><strong>{isVideo ? 'Agnes 视频' : getSourceLabel(selectedImage)}</strong></div>
+          <div><span>尺寸</span><strong>{isVideo ? videoSize : detailParams.size || '自动'}</strong></div>
+          {isVideo ? (
+            <>
+              <div><span>状态</span><strong>{videoStatusLabel}</strong></div>
+              <div><span>进度</span><strong>{selectedImage.progress || '未知'}</strong></div>
+              <div><span>帧数</span><strong>{selectedImage.numFrames || detailParams.numFrames || '自动'}</strong></div>
+              <div><span>帧率</span><strong>{selectedImage.frameRate || detailParams.frameRate || '自动'}</strong></div>
+              <div><span>任务 ID</span><strong>{selectedImage.videoId || selectedImage.id || '无'}</strong></div>
+              <div><span>结果</span><strong>{detailDownloadSrc ? '可播放' : '等待返回'}</strong></div>
+            </>
+          ) : (
+            <>
+              <div><span>质量</span><strong>{getQualityLabel(detailParams.quality)}</strong></div>
+              <div><span>返回格式</span><strong>{getResponseFormatLabel(detailParams.response_format)}</strong></div>
+              <div><span>格式</span><strong>{detailParams.response_format === 'url' ? detailParams.output_format || 'png' : '禁用'}</strong></div>
+              <div><span>背景</span><strong>{detailParams.background || 'auto'}</strong></div>
+              <div><span>审核</span><strong>{detailParams.moderation || 'auto'}</strong></div>
+              <div><span>数量</span><strong>{detailParams.n || 1}</strong></div>
+            </>
+          )}
         </div>
 
         <p className="created-line">创建于 {formatDate(selectedImage.createdAt)}{detailElapsed ? ` · 耗时 ${detailElapsed}` : ''}</p>
 
         <div className="detail-actions">
-          {detailDownloadSrc ? <a className="secondary-action" href={detailDownloadSrc} download="gpt-biubiubiu.png" target="_blank" rel="noreferrer">下载</a> : null}
-          <button type="button" className="secondary-action" onClick={() => reuseConfig(selectedImage)}>复用配置</button>
+          {detailDownloadSrc ? <a className="secondary-action" href={detailDownloadSrc} download={isVideo ? 'gpt-biubiubiu-agnes-video.mp4' : 'gpt-biubiubiu.png'} target="_blank" rel="noreferrer">下载</a> : null}
+          {!String(selectedImage.source || '').startsWith('agnes-') ? <button type="button" className="secondary-action" onClick={() => reuseConfig(selectedImage)}>复用配置</button> : null}
           {view !== 'wall' && selectedOnWall ? (
             <button type="button" className="secondary-action" onClick={() => checkWallState(selectedImage)} disabled={busySelected}>检测上墙</button>
           ) : null}

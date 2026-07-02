@@ -54,6 +54,8 @@ export const formatDuration = (seconds) => {
 };
 
 export const getSourceLabel = (image) => {
+  if (image?.source === 'agnes-image') return 'Agnes 生图';
+  if (image?.source === 'agnes-video') return 'Agnes 视频';
   if (image?.source === 'edit') return '图生图';
   if (image?.source === 'wall') return '作品墙';
   return '文生图';

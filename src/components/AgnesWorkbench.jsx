@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import {
   API_CONFIG_SCOPE_AGNES,
   MAX_REFERENCE_IMAGES,
+  agnesBoardScopeOptions,
+  agnesMediaOptions,
   agnesResponseFormatOptions,
   agnesVideoModeOptions,
   agnesVideoResolutionOptions,
@@ -64,6 +66,8 @@ const ReferenceUploadIcon = ({ count }) => (
 
 const splitLines = (value) => String(value || '').split(/\r?\n/);
 
+const isHttpUrl = (value) => /^https?:\/\//i.test(String(value || '').trim());
+
 const createReferenceId = (file) => `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`;
 
 const appendLines = (value, lines) => [
@@ -71,7 +75,7 @@ const appendLines = (value, lines) => [
   lines.map((line) => String(line || '').trim()).filter(Boolean).join('\n'),
 ].filter(Boolean).join('\n');
 
-const EmptyAgnesCanvas = ({ activeTab, configured, openAccount }) => (
+const EmptyAgnesCanvas = ({ activeTab, configured, openAccount, emptyText }) => (
   <div className="empty-canvas agnes-empty-canvas">
     <span className="empty-mark" aria-hidden="true">
       <svg viewBox="0 0 48 48">
@@ -91,13 +95,24 @@ const EmptyAgnesCanvas = ({ activeTab, configured, openAccount }) => (
         )}
       </svg>
     </span>
-    <p>{configured ? (activeTab === 'image' ? '填写底部提示词开始 Agnes 生图' : '填写底部提示词创建 Agnes 视频任务') : '请先配置 Agnes API'}</p>
+    <p>{emptyText || (configured ? (activeTab === 'image' ? '填写底部提示词开始 Agnes 生图' : '填写底部提示词创建 Agnes 视频任务') : '请先配置 Agnes API')}</p>
     {!configured ? <button type="button" className="secondary-action" onClick={openAccount}>去配置</button> : null}
   </div>
 );
 
-const ResultShell = ({ children, caption, className = '' }) => (
-  <figure className={`result-card agnes-result-card ${className}`.trim()}>
+const ResultShell = ({ children, caption, className = '', onOpen }) => (
+  <figure
+    className={`result-card agnes-result-card ${className}`.trim()}
+    onClick={onOpen}
+    onKeyDown={(event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onOpen?.();
+      }
+    }}
+    role="button"
+    tabIndex={0}
+  >
     {children}
     <figcaption className="result-caption" title={caption}>
       <span>{caption}</span>
@@ -105,17 +120,47 @@ const ResultShell = ({ children, caption, className = '' }) => (
   </figure>
 );
 
-const AgnesImageResults = ({ results }) => {
-  if (!results.length) return null;
+const AgnesResults = ({ items, openDetail }) => {
+  if (!items.length) return null;
+
+  const hasVideo = items.some((item) => item.mediaType === 'video');
 
   return (
-    <div className="agnes-result-grid agnes-image-grid">
-      {results.map((item) => {
-        const src = createImageSrc(item);
-        const isPending = item.status === 'pending';
+    <div className={hasVideo ? 'agnes-result-grid agnes-video-grid' : 'agnes-result-grid agnes-image-grid'}>
+      {items.map((item) => {
+        const isVideo = item.mediaType === 'video';
         const isFailed = item.status === 'failed';
+        const isPending = item.status === 'pending' || item.status === 'running';
+
+        if (isVideo) {
+          const videoUrl = String(item.videoUrl || '').trim();
+          const caption = item.error || [statusLabel(item.status), item.progress ? `进度 ${item.progress}` : '', item.seconds ? `${item.seconds}s` : '', item.size || ''].filter(Boolean).join(' · ') || 'Agnes 视频任务';
+          return (
+            <ResultShell key={`video-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)}>
+              <div className="agnes-video-card-body">
+                {videoUrl && isHttpUrl(videoUrl) ? (
+                  <video src={videoUrl} controls playsInline onClick={(event) => event.stopPropagation()} />
+                ) : (
+                  <div className="pending-preview">
+                    <span className="loading-ring" aria-hidden="true" />
+                    <strong>{isFailed ? '任务失败' : statusLabel(item.status)}</strong>
+                    <p>{item.error || item.videoId || '等待 Agnes 返回视频结果。'}</p>
+                  </div>
+                )}
+                <div className="agnes-task-meta">
+                  <span>{modeLabel(item.mode)}</span>
+                  <span>{item.numFrames || defaultAgnesVideoForm.numFrames} 帧 / {item.frameRate || defaultAgnesVideoForm.frameRate} fps</span>
+                  {videoUrl && !isHttpUrl(videoUrl) ? <span>结果字段：{videoUrl}</span> : null}
+                </div>
+              </div>
+            </ResultShell>
+          );
+        }
+
+        const src = createImageSrc(item);
+        const caption = item.error || item.apiName || 'Agnes API';
         return (
-          <ResultShell key={item.id} caption={item.error || item.apiName || 'Agnes API'} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`}>
+          <ResultShell key={`image-${item.id}`} caption={caption} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`} onOpen={() => openDetail?.(item)}>
             <div className="result-image-wrap agnes-result-media">
               {src ? <img src={src} alt={item.prompt || 'Agnes 生成图片'} loading="lazy" decoding="async" /> : (
                 <div className="pending-preview">
@@ -124,41 +169,6 @@ const AgnesImageResults = ({ results }) => {
                   {item.error ? <p>{item.error}</p> : null}
                 </div>
               )}
-            </div>
-          </ResultShell>
-        );
-      })}
-    </div>
-  );
-};
-
-const AgnesVideoResults = ({ tasks }) => {
-  if (!tasks.length) return null;
-
-  return (
-    <div className="agnes-result-grid agnes-video-grid">
-      {tasks.map((task) => {
-        const videoUrl = String(task.videoUrl || '').trim();
-        const isFailed = task.status === 'failed';
-        const isPending = task.status === 'pending' || task.status === 'running';
-        const caption = [statusLabel(task.status), task.progress ? `进度 ${task.progress}` : '', task.seconds ? `${task.seconds}s` : '', task.size || ''].filter(Boolean).join(' · ');
-        return (
-          <ResultShell key={task.id} caption={task.error || caption || 'Agnes 视频任务'} className={`${isPending ? 'is-pending' : ''} ${isFailed ? 'is-failed' : ''}`}>
-            <div className="agnes-video-card-body">
-              {videoUrl && /^https?:\/\//i.test(videoUrl) ? (
-                <video src={videoUrl} controls playsInline />
-              ) : (
-                <div className="pending-preview">
-                  <span className="loading-ring" aria-hidden="true" />
-                  <strong>{isFailed ? '任务失败' : statusLabel(task.status)}</strong>
-                  <p>{task.error || task.videoId || '等待 Agnes 返回视频结果。'}</p>
-                </div>
-              )}
-              <div className="agnes-task-meta">
-                <span>{modeLabel(task.mode)}</span>
-                <span>{task.numFrames || defaultAgnesVideoForm.numFrames} 帧 / {task.frameRate || defaultAgnesVideoForm.frameRate} fps</span>
-                {videoUrl && !/^https?:\/\//i.test(videoUrl) ? <span>结果字段：{videoUrl}</span> : null}
-              </div>
             </div>
           </ResultShell>
         );
@@ -176,8 +186,11 @@ export default function AgnesWorkbench({
   renderSelect,
   setError,
   openAccount,
+  openDetail,
 }) {
   const [activeTab, setActiveTab] = useState('image');
+  const [agnesBoardScope, setAgnesBoardScope] = useState('current');
+  const [agnesBoardSearch, setAgnesBoardSearch] = useState('');
   const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
   const [imageSizeDialogOpen, setImageSizeDialogOpen] = useState(false);
   const [imageSizeDraft, setImageSizeDraft] = useState(defaultSizeDraft);
@@ -195,8 +208,9 @@ export default function AgnesWorkbench({
     setVideoResolution,
     runImageGeneration,
     runVideoGeneration,
-    clearImageResults,
-    clearVideoTasks,
+    removeImageResult,
+    removeVideoTask,
+    refreshVideoTasks,
   } = useAgnesGeneration({ activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey, setError });
 
   const configured = Boolean(user) && apiConfigHasKeyForScope(activeAgnesApiConfig, API_CONFIG_SCOPE_AGNES);
@@ -206,22 +220,68 @@ export default function AgnesWorkbench({
   );
   const activePrompt = activeTab === 'image' ? imageForm.prompt : videoForm.prompt;
   const activeLoading = activeTab === 'image' ? imageLoading : videoLoading;
-  const activeResultCount = activeTab === 'image' ? imageResults.length : videoTasks.length;
   const videoResolution = `${videoForm.width}x${videoForm.height}`;
   const imageAvailableRatios = getAvailableRatios(imageSizeDraft.resolution);
   const activeImageSize = getDraftSize(imageSizeDraft);
   const displayImageSize = activeImageSize || '自动';
   const uploadedReferenceNames = uploadedImageReferences.map((item, index) => `图${index + 1}:${item.name}`).join('，');
   const workbenchClassName = workbenchExpanded ? 'workbench-actions agnes-workbench-actions is-expanded' : 'workbench-actions agnes-workbench-actions';
+  const agnesItems = useMemo(() => {
+    const imageItems = imageResults.map((item) => ({
+      ...item,
+      source: 'agnes-image',
+      mediaType: 'image',
+      apiName: item.apiName || apiName,
+      form: {
+        ...imageForm,
+        ...(item.form || {}),
+        prompt: item.prompt || imageForm.prompt,
+        response_format: item.form?.response_format || item.form?.responseFormat || imageForm.responseFormat,
+        responseFormat: item.form?.responseFormat || item.form?.response_format || imageForm.responseFormat,
+        size: item.form?.size || item.size || imageForm.size || '',
+        source: 'agnes-image',
+      },
+      removeFromAgnes: () => removeImageResult(item.id),
+    }));
+    const videoItems = videoTasks.map((task) => ({
+      ...task,
+      source: 'agnes-video',
+      mediaType: 'video',
+      apiName: task.apiName || apiName,
+      form: {
+        ...videoForm,
+        ...(task.form || {}),
+        prompt: task.prompt || videoForm.prompt,
+        size: task.form?.size || task.size || `${task.width || videoForm.width}x${task.height || videoForm.height}`,
+        response_format: 'url',
+        responseFormat: 'url',
+        source: 'agnes-video',
+      },
+      removeFromAgnes: () => removeVideoTask(task.id),
+    }));
+    const sourceItems = agnesBoardScope === 'all'
+      ? [...imageItems, ...videoItems].sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime())
+      : activeTab === 'image' ? imageItems : videoItems;
+    const keyword = agnesBoardSearch.trim().toLowerCase();
+    if (!keyword) return sourceItems;
+    return sourceItems.filter((item) => [
+      item.prompt,
+      item.apiName,
+      item.status,
+      item.rawStatus,
+      item.error,
+      item.videoId,
+      item.videoUrl,
+      item.mode,
+      item.form?.size,
+    ].filter(Boolean).join(' ').toLowerCase().includes(keyword));
+  }, [activeTab, agnesBoardScope, agnesBoardSearch, apiName, imageForm, imageResults, removeImageResult, removeVideoTask, videoForm, videoTasks]);
+  const activeResultCount = agnesBoardScope === 'all' ? imageResults.length + videoTasks.length : activeTab === 'image' ? imageResults.length : videoTasks.length;
+  const emptyText = agnesBoardSearch.trim() && activeResultCount ? '没有匹配的 Agnes 作品' : '';
 
   const updateActivePrompt = (value) => {
     if (activeTab === 'image') updateImageForm('prompt', value);
     else updateVideoForm('prompt', value);
-  };
-
-  const clearActiveResults = () => {
-    if (activeTab === 'image') clearImageResults();
-    else clearVideoTasks();
   };
 
   const openImageSizeDialog = () => {
@@ -293,26 +353,52 @@ export default function AgnesWorkbench({
     updateImageForm('imageInputs', (value) => splitLines(value).filter((line) => !referenceUrls.has(line.trim())).join('\n'));
   };
 
+  const refreshActiveResults = () => {
+    if (activeTab === 'video' || agnesBoardScope === 'all') refreshVideoTasks();
+  };
   const submitActiveForm = activeTab === 'image' ? runImageGeneration : runVideoGeneration;
 
   return (
     <section className="agnes-page canvas-stage">
       <div className="canvas-toolbar agnes-toolbar">
-        <div className="segmented-control two-tabs agnes-toolbar-tabs">
-          <button type="button" className={activeTab === 'image' ? 'is-active' : ''} onClick={() => setActiveTab('image')}>生图</button>
-          <button type="button" className={activeTab === 'video' ? 'is-active' : ''} onClick={() => setActiveTab('video')}>视频</button>
-        </div>
-        <span className={configured ? 'status-pill is-ready agnes-status-pill' : 'status-pill is-warning agnes-status-pill'}>{configured ? apiName : '未配置 Agnes API'}</span>
-        <span className="status-pill is-warning agnes-stream-pill">暂不支持流式</span>
-        {!configured ? <button type="button" className="toolbar-text-button" onClick={openAccount}>去配置</button> : null}
-        <button type="button" className="toolbar-text-button" onClick={clearActiveResults} disabled={!activeResultCount}>清空</button>
+        <button type="button" className="toolbar-icon-button" onClick={refreshActiveResults} aria-label="刷新 Agnes 作品" disabled={(activeTab === 'video' || agnesBoardScope === 'all') && videoLoading}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 0-2.34 5.66" />
+            <path d="M20 5v6h-6" />
+          </svg>
+        </button>
+        {renderSelect({
+          id: 'agnes-media',
+          label: '',
+          value: activeTab,
+          options: agnesMediaOptions,
+          onChange: setActiveTab,
+          className: 'toolbar-scope agnes-media-select',
+          menuDirection: 'down',
+        })}
+        {renderSelect({
+          id: 'agnes-board-scope',
+          label: '',
+          value: agnesBoardScope,
+          options: agnesBoardScopeOptions,
+          onChange: setAgnesBoardScope,
+          className: 'toolbar-filter agnes-scope-select',
+          menuDirection: 'down',
+        })}
+        <label className="toolbar-search" aria-label="搜索 Agnes 作品">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m21 21-4.3-4.3" />
+            <circle cx="11" cy="11" r="7" />
+          </svg>
+          <input value={agnesBoardSearch} onChange={(event) => setAgnesBoardSearch(event.target.value)} placeholder="搜索提示词、任务、参数..." />
+        </label>
       </div>
 
-      <div className={activeResultCount ? 'image-board agnes-board has-images' : 'image-board agnes-board'}>
-        {activeResultCount ? (
-          activeTab === 'image' ? <AgnesImageResults results={imageResults} /> : <AgnesVideoResults tasks={videoTasks} />
+      <div className={agnesItems.length ? 'image-board agnes-board has-images' : 'image-board agnes-board'}>
+        {agnesItems.length ? (
+          <AgnesResults items={agnesItems} openDetail={openDetail} />
         ) : (
-          <EmptyAgnesCanvas activeTab={activeTab} configured={configured} openAccount={openAccount} />
+          <EmptyAgnesCanvas activeTab={activeTab} configured={configured} openAccount={openAccount} emptyText={emptyText} />
         )}
       </div>
 

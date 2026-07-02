@@ -64,6 +64,16 @@ export const boardScopeOptions = [
   { label: '历史记录', value: 'history' },
 ];
 
+export const agnesMediaOptions = [
+  { label: '生图', value: 'image' },
+  { label: '视频', value: 'video' },
+];
+
+export const agnesBoardScopeOptions = [
+  { label: '本次生成', value: 'current' },
+  { label: '全部作品', value: 'all' },
+];
+
 export const boardFilterOptions = [
   { label: '全部状态', value: 'all' },
   { label: '已上墙', value: 'on-wall' },

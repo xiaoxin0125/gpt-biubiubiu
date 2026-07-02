@@ -190,8 +190,8 @@ export const useAgnesGeneration = ({
     ...current,
     [key]: typeof value === 'function' ? value(current[key], current) : value,
   }));
-  const clearImageResults = () => setImageResults([]);
-  const clearVideoTasks = () => setVideoTasks([]);
+  const removeImageResult = (id) => setImageResults((items) => items.filter((item) => item.id !== id));
+  const removeVideoTask = (id) => setVideoTasks((items) => items.filter((item) => item.id !== id));
 
   const setVideoResolution = (value) => {
     const [width, height] = String(value || '').split('x').map((item) => Number(item));
@@ -210,7 +210,16 @@ export const useAgnesGeneration = ({
     setError('');
     const requestId = `agnes-image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const startedAt = new Date().toISOString();
-    setImageResults((items) => [{ id: requestId, status: 'pending', prompt: imageForm.prompt, createdAt: startedAt }, ...items]);
+    setImageResults((items) => [{
+      id: requestId,
+      status: 'pending',
+      prompt: imageForm.prompt,
+      form: { ...imageForm, response_format: imageForm.responseFormat, source: 'agnes-image' },
+      source: 'agnes-image',
+      mediaType: 'image',
+      createdAt: startedAt,
+      startedAt,
+    }, ...items]);
 
     try {
       const client = await createRequestClient({ config: activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey });
@@ -218,13 +227,27 @@ export const useAgnesGeneration = ({
       const data = await callAgnesJson({ client, path: '/v1/images/generations', payload });
       const normalized = normalizeDirectImageResponse(data, 'png');
       const completedAt = new Date().toISOString();
+      const resultForm = {
+        ...imageForm,
+        model: payload.model,
+        prompt: imageForm.prompt,
+        response_format: imageForm.responseFormat,
+        responseFormat: imageForm.responseFormat,
+        size: imageForm.size || '',
+        source: 'agnes-image',
+      };
       const nextImages = normalized.data.map((image, index) => ({
         ...image,
         id: `${requestId}-${index}`,
         status: 'completed',
         prompt: imageForm.prompt,
+        form: resultForm,
+        source: 'agnes-image',
+        mediaType: 'image',
         apiName: client.category.apiName || defaultAgnesApiCategory.apiName,
         createdAt: completedAt,
+        startedAt,
+        finishedAt: completedAt,
         raw: data,
       }));
       if (!nextImages.length) throw new Error('Agnes 未返回可展示图片。');
@@ -245,11 +268,17 @@ export const useAgnesGeneration = ({
       const data = await callAgnesResult({ client, videoId: latestVideoId });
       const normalized = normalizeAgnesVideoResult(data);
       latestVideoId = normalized.videoId || latestVideoId;
-      setVideoTasks((items) => items.map((item) => (
-        item.id === taskId
-          ? { ...item, ...normalized, videoId: latestVideoId, updatedAt: new Date().toISOString() }
-          : item
-      )));
+      setVideoTasks((items) => items.map((item) => {
+        if (item.id !== taskId) return item;
+        const updatedAt = new Date().toISOString();
+        return {
+          ...item,
+          ...normalized,
+          videoId: latestVideoId,
+          updatedAt,
+          ...(['completed', 'failed'].includes(normalized.status) ? { finishedAt: updatedAt } : {}),
+        };
+      }));
       if (normalized.status === 'completed' || normalized.status === 'failed') return;
       await wait(pollDelayMs);
     }
@@ -270,17 +299,29 @@ export const useAgnesGeneration = ({
     setError('');
     const localId = `agnes-video-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const startedAt = new Date().toISOString();
+    const taskForm = {
+      ...videoForm,
+      prompt: videoForm.prompt,
+      size: `${Number(videoForm.width)}x${Number(videoForm.height)}`,
+      response_format: 'url',
+      responseFormat: 'url',
+      source: 'agnes-video',
+    };
     setVideoTasks((items) => [{
       id: localId,
       status: 'pending',
       rawStatus: 'pending',
       prompt: videoForm.prompt,
+      form: taskForm,
+      source: 'agnes-video',
+      mediaType: 'video',
       mode: videoForm.mode,
       width: Number(videoForm.width),
       height: Number(videoForm.height),
       frameRate: Number(videoForm.frameRate),
       numFrames: Number(videoForm.numFrames),
       createdAt: startedAt,
+      startedAt,
     }, ...items]);
 
     try {
@@ -291,7 +332,14 @@ export const useAgnesGeneration = ({
       if (!videoId) throw new Error('Agnes 未返回 video_id 或 task_id。');
       setVideoTasks((items) => items.map((item) => (
         item.id === localId
-          ? { ...item, status: 'running', rawStatus: 'created', videoId, apiName: client.category.apiName || defaultAgnesApiCategory.apiName, rawCreate: data }
+          ? {
+              ...item,
+              status: 'running',
+              rawStatus: 'created',
+              videoId,
+              apiName: client.category.apiName || defaultAgnesApiCategory.apiName,
+              rawCreate: data,
+            }
           : item
       )));
       await pollVideoTask({ client, taskId: localId, videoId });
@@ -303,6 +351,37 @@ export const useAgnesGeneration = ({
       setVideoLoading(false);
     }
   }, [activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, pollVideoTask, setError, syncDirectApiKey, videoForm]);
+
+  const refreshVideoTasks = useCallback(async () => {
+    const targets = videoTasks.filter((task) => task.videoId && !['completed', 'failed'].includes(task.status));
+    if (!targets.length) return;
+
+    setVideoLoading(true);
+    setError('');
+    try {
+      const client = await createRequestClient({ config: activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, syncDirectApiKey });
+      const updates = await Promise.all(targets.map(async (task) => {
+        const data = await callAgnesResult({ client, videoId: task.videoId });
+        return { id: task.id, normalized: normalizeAgnesVideoResult(data) };
+      }));
+      const updatedAt = new Date().toISOString();
+      setVideoTasks((items) => items.map((item) => {
+        const update = updates.find((entry) => entry.id === item.id);
+        if (!update) return item;
+        return {
+          ...item,
+          ...update.normalized,
+          videoId: update.normalized.videoId || item.videoId,
+          updatedAt,
+          ...(['completed', 'failed'].includes(update.normalized.status) ? { finishedAt: updatedAt } : {}),
+        };
+      }));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '刷新 Agnes 视频任务失败');
+    } finally {
+      setVideoLoading(false);
+    }
+  }, [activeAgnesApiConfig, apiConfigForm, apiKeyVaultRef, setError, syncDirectApiKey, videoTasks]);
 
   return {
     imageForm,
@@ -317,7 +396,8 @@ export const useAgnesGeneration = ({
     setVideoResolution,
     runImageGeneration,
     runVideoGeneration,
-    clearImageResults,
-    clearVideoTasks,
+    removeImageResult,
+    removeVideoTask,
+    refreshVideoTasks,
   };
 };
